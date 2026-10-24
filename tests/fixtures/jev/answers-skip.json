@@ -1,0 +1,13 @@
+{
+  "model": "typesafe/jev-1.13",
+  "answers": {
+    "fit": { "type": "noul", "noul": 0.21 },
+    "verdict": { "type": "choice", "choice": "skip", "confidence": 0.93, "probabilities": { "apply": 0.02, "maybe": 0.05, "skip": 0.93 } },
+    "seniority_match": { "type": "choice", "choice": "below", "confidence": 0.9 },
+    "location_ok": { "type": "choice", "choice": "no", "confidence": 0.85 },
+    "language_blocker": { "type": "choice", "choice": "none", "confidence": 0.8 },
+    "team_type": { "type": "choice", "choice": "product", "confidence": 0.6 },
+    "stack_fit": { "type": "choice", "choice": "stack_agnostic", "confidence": 0.5 }
+  },
+  "usage": { "input_tokens": 900, "output_tokens": 20, "cost": 0.0001 }
+}
