@@ -37,6 +37,7 @@
  *   node scan.mjs --help                       # print this usage block and exit
  */
 
+import { createHash } from 'node:crypto';
 import {
   closeSync,
   existsSync,
@@ -3792,13 +3793,48 @@ export function orderTargetsForSequentialProviders(targets, random = Math.random
  * @param {{ dataRoot: string, today?: string }} opts
  * @returns {{ written: number, failures: {company: string, url: string, error: string}[] }}
  */
+/**
+ * The JD-store object (plan contract C6) for an offer whose provider returned a
+ * description, or null when there is nothing to store.
+ *
+ * @param {object} offer
+ * @returns {object|null}
+ */
+export function jdFromDescribedOffer(offer) {
+  const description = typeof offer?.description === 'string' ? offer.description.trim() : '';
+  const url = typeof offer?.url === 'string' ? offer.url : '';
+  if (!description || !url) return null;
+  const source = String(offer.source ?? 'scan').replace(/[^A-Za-z0-9._-]+/g, '-') || 'scan';
+  const externalId = offer.externalId != null && String(offer.externalId).trim()
+    ? String(offer.externalId).trim()
+    : createHash('sha1').update(url).digest('hex').slice(0, 16);
+  return {
+    url,
+    title: String(offer.title ?? ''),
+    company: String(offer.company ?? ''),
+    location: typeof offer.location === 'string' ? offer.location : '',
+    workplace: '',
+    seniority: '',
+    description,
+    posted_date: typeof offer.postedAt === 'number' && Number.isFinite(offer.postedAt) ? new Date(offer.postedAt).toISOString().slice(0, 10) : '',
+    source,
+    source_id: externalId.replace(/[^A-Za-z0-9._-]+/g, '-'),
+  };
+}
+
 export function storeOfferJds(offers, { dataRoot, today } = {}) {
   let written = 0;
   const failures = [];
   for (const offer of offers) {
-    if (!offer || typeof offer.jd !== 'object' || offer.jd === null) continue;
+    if (!offer) continue;
+    // A provider that returns the posting text (Personio, Greenhouse, Ashby,
+    // Lever, the fork's LinkedIn provider) gives jev-rank.mjs its description
+    // through the JD store; one that returns only a title and a link does not,
+    // and jev-rank then tries the ATS API itself.
+    const jd = (typeof offer.jd === 'object' && offer.jd !== null) ? offer.jd : jdFromDescribedOffer(offer);
+    if (!jd) continue;
     try {
-      writeJd(offer.jd, { dataRoot, today });
+      writeJd(jd, { dataRoot, today });
       written++;
     } catch (err) {
       failures.push({ company: String(offer.company ?? ''), url: String(offer.url ?? ''), error: err.message });
