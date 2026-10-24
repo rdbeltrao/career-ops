@@ -101,3 +101,29 @@ test('contacto.md applies the outreach rules from _writing.md', () => {
   const text = read('modes/contacto.md');
   assert.ok(text.includes('Outreach and comment rules'), 'contacto.md does not point at the outreach rules');
 });
+
+// ── C3: application field classes and ATS notes ─────────────────────────────
+
+test('apply.md classifies form fields and reads the ATS notes', () => {
+  const apply = read('modes/apply.md');
+  assert.ok(apply.includes('knockout-prone'), 'apply.md has no knockout-prone field class');
+  assert.ok(apply.includes('data-static/ats-notes.md'), 'apply.md does not read data-static/ats-notes.md');
+  const step6 = apply.split('## Step 6 — Analyze form questions')[1].split('\n## ')[0];
+  for (const cls of ['Identity and contact', 'Knockout-prone', 'Personal and sensitive', 'Experience facts', 'Free text', 'Uploads', 'Consent and legal']) {
+    assert.ok(step6.includes(cls), `Step 6 has no "${cls}" field class`);
+  }
+  for (const item of ['notice period', 'earliest start', 'on-site days', 'relocation', 'years of experience', 'language level', 'driving licence']) {
+    assert.ok(step6.toLowerCase().includes(item), `Step 6 confirmation list does not name "${item}"`);
+  }
+  assert.ok(apply.includes('modes/_context.md'), 'apply.md does not name modes/_context.md for the why-this-role answers');
+});
+
+test('data-static/ats-notes.md has a quick-reference row per documented ATS', () => {
+  const notes = read('data-static/ats-notes.md');
+  for (const ats of ['Greenhouse', 'Workday', 'Personio', 'Lever', 'Ashby', 'SmartRecruiters', 'JOIN', 'softgarden', 'Recruitee', 'Teamtailor', 'SAP SuccessFactors']) {
+    assert.ok(new RegExp(`^\\| ${ats} \\|`, 'm').test(notes), `no quick-reference row for ${ats}`);
+    assert.ok(new RegExp(`^### ${ats}.*\\(checked \\d{4}-\\d{2}-\\d{2}\\)`, 'm').test(notes), `no dated source section for ${ats}`);
+  }
+  assert.ok(!/notion\.(so|com)/i.test(notes), 'the notes carry a Notion link');
+  assert.ok(!notes.includes('@') && !notes.includes('+49'), 'the notes carry an email address or phone number');
+});

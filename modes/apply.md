@@ -155,6 +155,8 @@ Before drafting answers, read the matched report's Block G fixed-term finding an
 - Or paste the form questions as text
 - Or say the company and the role so we can search `reports/` under the roots from `node apply-scope.mjs root`
 
+**Name the ATS.** From the URL and the page, identify the ATS (`greenhouse.io` or `gh_jid=`, `myworkdayjobs.com`, `jobs.personio.de`, `jobs.lever.co`, `jobs.ashbyhq.com`, `smartrecruiters.com`, `join.com`, `softgarden`, `recruitee.com`, `teamtailor.com`, `successfactors`), confirm it on the application page itself (career sites embed an ATS under their own domain, so the link is a guess), and read its row in `data-static/ats-notes.md`: the documented file types and size limit, which fields it pre-fills from the CV, and whether the vendor documents automatic rejection. Tell the candidate in one line what the notes say for this ATS and name its auto-reject behaviour where one is documented (Ashby and JOIN reject on application-question answers, never on free text or uploads), so Step 5b and the knockout-prone class in Step 6 are read with that in mind. An ATS the notes do not list gets the generic rules and a note that nothing vendor-documented is known; the notes never override what the live form shows.
+
 ## Step 2 — Identify and search for context
 
 1. Extract company name and role title from the page
@@ -244,6 +246,7 @@ tailoring that made the application relevant.
 | Education, certifications | The tailored CV; `config/profile.yml` for credentials the CV omits |
 | Skills, summary, profile headline | The tailored CV |
 | A section the tailored CV omits entirely — a role it does not list, an education entry it drops | `cv.md` — the fallback, never the default |
+| "Why this role", "what are you looking for" and other motivation free text | The candidate's own words in this conversation and the report's Section H; the framing from `config/profile.yml` → `interests` and `modes/_context.md`, as targeting only, never evidence (`modes/_writing.md` → **Interests in candidate-facing text**, staleness rule included). Facts inside the answer still follow the rows above |
 
 Where the tailored CV and `cv.md` disagree, the tailored CV wins: it is the
 document the reviewer is holding. `cv.md` supplies whole sections the tailored CV
@@ -276,14 +279,26 @@ Classify each question:
 - **Already answered in Section H or `## Application Answers`** → adapt the existing response
 - **New question** → generate response from the report plus the Step 4b sources, at the Step 4b precedence: the tailored CV for anything it covers, `cv.md` only for a whole section it omits
 
+Then place every field in one class. The class decides where its answer comes from and whether the candidate confirms it before anything is typed:
+
+| Class | Examples | Rule |
+|---|---|---|
+| **Identity and contact** | name, email, phone, address, LinkedIn | From `config/profile.yml`. When the profile holds two values for one field (two emails, two phones), ask which one; never pick. |
+| **Knockout-prone** | work permit, visa sponsorship, location or relocation, on-site days, years of experience, salary expectation, notice period, earliest start date, driving licence, language level | **Ask the candidate every time.** These answers can reject the application without a human (documented for Ashby and JOIN in `data-static/ats-notes.md`). Never infer one, never reuse one from another application; `config/profile.yml` supplies a value only where it states that exact answer. |
+| **Personal and sensitive** | date of birth, nationality, gender, diversity or EEO questions, disability, photo | Ask. Offer "prefer not to say" where the form has it. Never infer. Step 5c covers the fields the candidate's jurisdiction prohibits. |
+| **Experience facts** | job titles, employers, dates, education, skills, certifications | Copy from the tailored CV at the Step 4b precedence, exactly as written there: no changed titles, no raised proficiency, no estimated numbers. |
+| **Free text** | "Why us?", "Tell us about yourself", behavioural questions, cover-letter box | Draft in Step 7 from the report and the Step 4b sources. The "why this role" and "what are you looking for" framing comes from `modes/_context.md` and `config/profile.yml` → `interests` through `modes/_writing.md` → **Interests in candidate-facing text** (targeting only; when `confirmed_on` is older than 90 days, say so and ask first). |
+| **Uploads** | CV, cover letter, portfolio | The tailored CV PDF from Step 4b. A cover letter only when the candidate has one for this role (`cover` mode); never a generated placeholder. |
+| **Consent and legal** | privacy policy, talent-pool consent, terms | Show the candidate the wording; they decide. Never tick a consent box for them. |
+
 For each field, preserve the application form contract:
 - `field_type`: `text`, `textarea`, `select`, `radio`, `checkbox`, `number`, `file`, or `unknown`
 - `required`: `yes`, `no`, or `unknown`
 - `limit`: confirmed character/word limit from the live control or visible instructions; otherwise `unknown`
 - `options`: visible options for select/radio/checkbox fields
-- `needs_candidate_confirmation`: `yes` for legal, demographic, work authorization, visa, relocation, salary, disability, veteran, sponsorship, background-check, or self-identification questions unless the answer is explicitly present in `config/profile.yml`
+- `needs_candidate_confirmation`: `yes` for legal, demographic, work authorization, visa, relocation, salary, disability, veteran, sponsorship, background-check, or self-identification questions, and for the other knockout-prone fields — notice period, earliest start date, on-site days, years of experience, language level, driving licence — unless the answer is explicitly present in `config/profile.yml`
 
-Never invent answers for legal, demographic, work-authorization, visa/sponsorship, salary, disability, veteran, background-check, relocation, or self-identification fields. If the answer is not present in `config/profile.yml` or visible context, mark it as needing candidate confirmation and provide the safest question to ask the candidate.
+Never invent answers for legal, demographic, work-authorization, visa/sponsorship, salary, disability, veteran, background-check, relocation, or self-identification fields, nor for notice period, earliest start date, on-site days, years of experience, language level or driving licence. If the answer is not present in `config/profile.yml` or visible context, mark it as needing candidate confirmation and provide the safest question to ask the candidate, with the exact options the form offers. Years of experience come from confirmed dates, never added across overlapping roles; when the form asks per skill and the CV gives no number, ask.
 
 For every free-text field, inspect the **rendered form control** before drafting: read its `maxlength` attribute/property and any visible word or character counter/help text. ATS question APIs may identify a field as `input_text` without exposing the actual HTML limit. Match each limit to its exact question and record its unit and source; a limit on another control is not evidence. If the candidate supplied only a screenshot or pasted questions and the limit is not shown, record `unknown` and ask for the live field constraint when possible. Do not infer a limit from the field type or a generic ATS default.
 
