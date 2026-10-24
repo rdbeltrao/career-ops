@@ -1,0 +1,16 @@
+{
+  "id": "gen-test-fallback",
+  "model": "anthropic/claude-haiku-5.5",
+  "object": "chat.completion",
+  "choices": [
+    {
+      "index": 0,
+      "finish_reason": "stop",
+      "message": {
+        "role": "assistant",
+        "content": "{\"fit\": 78, \"fit_confidence\": 0.8, \"reasoning\": \"Role at the target level, remote in an accepted country, English working language, product team, no required stack named.\", \"verdict\": \"apply\", \"verdict_confidence\": 0.85, \"seniority_match\": \"match\", \"seniority_match_confidence\": 0.9, \"location_ok\": \"yes\", \"location_ok_confidence\": 0.95, \"language_blocker\": \"none\", \"language_blocker_confidence\": 0.9, \"team_type\": \"product\", \"team_type_confidence\": 0.8, \"stack_fit\": \"stack_agnostic\", \"stack_fit_confidence\": 0.7}"
+      }
+    }
+  ],
+  "usage": { "prompt_tokens": 1500, "completion_tokens": 90, "total_tokens": 1590 }
+}
