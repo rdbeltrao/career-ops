@@ -62,6 +62,8 @@ All scripts live in the project root as `.mjs` modules. Most are exposed via
 | `npm run filter-audit` | `filter-audit.mjs` | Show which `title_filter.positive` keywords never match, add nothing, or bring mostly low-scored offers, replayed over scan history (read-only) |
 | `node coverage-check.mjs <url> --company <name> --title <title>` | `coverage-check.mjs` | Explain why the scanners missed a posting you found by hand, and propose the `portals.yml` change that would have caught it (read-only, zero-network) |
 | `node rank-pipeline.mjs` | `rank-pipeline.mjs` | Opt-in LLM relevance re-ranker — annotates pending pipeline rows with a score + reason (off by default) |
+| `node jev-score.mjs --job <file.json \| ->` | `jev-score.mjs` | Calibrated typed pre-screen of one posting through OpenRouter's Jev (fit 0-100, verdict, five reasons; `--format json\|markdown\|segment`; chat-completions fallback; exit 2 without a key; see [JEV.md](JEV.md)) |
+| `node jev-rank.mjs [--limit N] [--dry-run] [--no-fetch]` | `jev-rank.mjs` | Zero-token Jev pass over pending pipeline rows — appends a `jev:` segment after `rank:`, never filters; rows without a JD are left unchanged and counted (see [JEV.md](JEV.md)) |
 | `npm run gemini:eval` | `gemini-eval.mjs` | Evaluate a JD with Google Gemini (free-tier alternative) |
 | `npm run ollama:eval` | `ollama-eval.mjs` | Evaluate a JD with a local Ollama model |
 | `npm run openai:eval` | `openai-eval.mjs` | Evaluate a JD via any OpenAI-compatible endpoint |
@@ -1397,6 +1399,41 @@ node rank-pipeline.mjs --dry-run        # print annotations, write nothing
 Writes go through `pipeline-lock.mjs`, the same lock `scan.mjs` and
 `scan-ats-full.mjs` use, and the file is re-read inside the lock — so a
 concurrent scan cannot lose rows to this script.
+
+---
+
+## jev-score / jev-rank
+
+The calibrated pre-screen: a typed decision model (OpenRouter's
+`typesafe/jev-1.13`) answers seven fixed questions about one posting against
+the candidate context (`modes/_context.md`, or `cv.md` + `config/profile.yml`
+when that file is absent). It costs no agent tokens and runs **before** the LLM
+evaluation; its `fit` 0-100, verdict and reasons are shown next to the Global
+score and never averaged with it. Full reference: [JEV.md](JEV.md).
+
+```bash
+node jev-score.mjs --job job.json                   # { model, fit, score, verdict, reasons, ... }
+node jev-score.mjs --job - --format markdown < job.json   # the "Calibrated pre-screen (Jev)" block
+node jev-score.mjs --job job.json --format segment  # jev: 79 apply — seniority match, ...
+node jev-rank.mjs --limit 20                        # annotate pending pipeline rows
+node jev-rank.mjs --dry-run --no-fetch              # stored JDs only, print, write nothing
+```
+
+`jev-score.mjs` exits 0 when scored, 2 without an OpenRouter key
+(`OPENROUTER_API_KEY_JOB_SEARCH` or `OPENROUTER_API_KEY` in the environment,
+`.env`, or the macOS Keychain), 1 on an API or parse failure. When the account
+cannot reach the typesafe provider (HTTP 404 "No allowed providers") it falls
+back to chat completions with a strict JSON schema and marks the result
+`fallback: true`.
+
+`jev-rank.mjs` **annotates, it does not filter**: each pending row without a
+`| jev: ` segment gains `| jev: {fit} {verdict} — {reasons}` after `rank:`
+when the JD is in the feeder store (`data/jd-index.tsv`) or readable from the
+posting's ATS API; a row with no JD, a failed call or no usable fit is left
+exactly as it was and counted in the summary line
+(`jev-rank: N scored, N without JD, N failed, N already annotated`). Writes
+go through `pipeline-lock.mjs`. `node calibrate.mjs --jev` compares the Jev
+score bands and verdicts with your recorded outcomes.
 
 ---
 
