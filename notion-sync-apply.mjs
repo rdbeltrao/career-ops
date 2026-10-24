@@ -46,7 +46,7 @@ import { flagValue, hasFlag, validateFlags } from './lib/cli-flags.mjs';
 import { isMainModule } from './lib/is-main-module.mjs';
 import { loadYaml } from './lib/yaml-document.mjs';
 import { validateProfile as validateCareerProfile } from './lib/career-profile.mjs';
-import { getCareerOpsRoot } from './path-resolver.mjs';
+import { getCareerOpsRoot, getProfilePath } from './path-resolver.mjs';
 
 const PROFILE_BLOCKS = ['preferences', 'interests'];
 const CV_FACT_LISTS = ['allow_metrics', 'allow_facts', 'forbidden_phrases'];
@@ -282,50 +282,55 @@ const withNewline = (text) => (text.endsWith('\n') ? text : `${text}\n`);
 /**
  * What `--apply` would write, one entry per target the proposal names.
  *
+ * The profile is resolved like every reader resolves it: an explicit
+ * `dataRoot` names the workspace (`getProfilePath(dataRoot)`); without one,
+ * `getProfilePath()` honours CAREER_OPS_PROFILE, so the file this writes is
+ * the file the evaluators read (#5026).
+ *
  * @param {object} proposal
- * @param {{dataRoot?: string}} [opts]
- * @returns {Array<{path: string, before: string|null, after: string, changed: boolean}>}
+ * @param {{dataRoot?: string, profilePath?: string}} [opts]
+ * @returns {Array<{path: string, file: string, before: string|null, after: string, changed: boolean}>}
+ *   `path` is the data-contract name shown in the diff; `file` is where it is written.
  */
-export function planWrites(proposal, { dataRoot = getCareerOpsRoot() } = {}) {
+export function planWrites(proposal, { dataRoot, profilePath } = {}) {
+  const root = dataRoot ?? getCareerOpsRoot();
+  const profile = profilePath ?? (dataRoot ? getProfilePath(dataRoot) : getProfilePath());
   const p = proposal && typeof proposal === 'object' ? proposal : {};
   const plan = [];
-  const add = (path, after) => {
-    const before = readText(join(dataRoot, ...path.split('/')));
-    plan.push({ path, before, after, changed: before !== after });
+  const add = (path, file, after) => {
+    const before = readText(file);
+    plan.push({ path, file, before, after, changed: before !== after });
   };
 
-  if (typeof p.context_md === 'string') add('modes/_context.md', withNewline(p.context_md));
+  if (typeof p.context_md === 'string') add('modes/_context.md', join(root, 'modes', '_context.md'), withNewline(p.context_md));
 
   if (PROFILE_BLOCKS.some((key) => p[key] !== undefined)) {
-    const before = readText(join(dataRoot, 'config', 'profile.yml'));
-    const after = mergeProfileBlocks(before ?? '', { preferences: p.preferences, interests: p.interests });
-    plan.push({ path: 'config/profile.yml', before, after, changed: before !== after });
+    const before = readText(profile);
+    add('config/profile.yml', profile, mergeProfileBlocks(before ?? '', { preferences: p.preferences, interests: p.interests }));
   }
 
-  if (typeof p.article_digest_md === 'string') add('article-digest.md', withNewline(p.article_digest_md));
+  if (typeof p.article_digest_md === 'string') add('article-digest.md', join(root, 'article-digest.md'), withNewline(p.article_digest_md));
 
   if (p.cv_facts && typeof p.cv_facts === 'object') {
-    const path = join(dataRoot, 'config', 'cv-facts.json');
-    const before = readText(path);
+    const file = join(root, 'config', 'cv-facts.json');
+    const before = readText(file);
     let existing = null;
     if (before !== null) {
       try { existing = JSON.parse(before); } catch (err) { throw new Error(`config/cv-facts.json is not valid JSON: ${err.message}`); }
     }
-    const after = `${JSON.stringify(mergeCvFacts(existing, p.cv_facts), null, 2)}\n`;
-    plan.push({ path: 'config/cv-facts.json', before, after, changed: before !== after });
+    add('config/cv-facts.json', file, `${JSON.stringify(mergeCvFacts(existing, p.cv_facts), null, 2)}\n`);
   }
 
   if (Array.isArray(p.career_profile_facts)) {
-    const path = join(dataRoot, 'data', 'career-profile.yml');
-    const before = readText(path);
+    const file = join(root, 'data', 'career-profile.yml');
+    const before = readText(file);
     const existing = before === null ? null : loadYaml(before);
     if (before !== null) {
       const errors = validateCareerProfile(existing);
       if (errors.length) throw new Error(`data/career-profile.yml is invalid before the merge; fix it first:\n- ${errors.join('\n- ')}`);
     }
     const merged = mergeCareerProfile(existing, p.career_profile_facts);
-    const after = yaml.dump(merged, { noRefs: true, lineWidth: 100 });
-    plan.push({ path: 'data/career-profile.yml', before, after, changed: before !== after });
+    add('data/career-profile.yml', file, yaml.dump(merged, { noRefs: true, lineWidth: 100 }));
   }
 
   return plan;
@@ -335,12 +340,12 @@ export function planWrites(proposal, { dataRoot = getCareerOpsRoot() } = {}) {
  * Write every changed entry of a plan atomically (temp file, then rename).
  * @returns {{written: string[], unchanged: string[]}}
  */
-export function applyWrites(plan, { dataRoot = getCareerOpsRoot() } = {}) {
+export function applyWrites(plan) {
   const written = [];
   const unchanged = [];
   for (const entry of plan) {
     if (!entry.changed) { unchanged.push(entry.path); continue; }
-    const target = join(dataRoot, ...entry.path.split('/'));
+    const target = entry.file;
     mkdirSync(dirname(target), { recursive: true });
     const tmp = `${target}.${process.pid}.tmp`;
     writeFileSync(tmp, entry.after, 'utf-8');
@@ -396,11 +401,13 @@ if (isMainModule(import.meta.url)) {
   for (const key of Object.keys(proposal)) {
     if (!known.includes(key)) console.error(`Warning: unknown proposal key "${key}" is ignored (known: ${known.join(', ')})`);
   }
-  const dataRoot = flagValue(args, '--data-root') ?? getCareerOpsRoot();
+  const explicitRoot = flagValue(args, '--data-root');
+  const dataRoot = explicitRoot ?? getCareerOpsRoot();
+  const profilePath = explicitRoot ? getProfilePath(explicitRoot) : getProfilePath();
 
   let plan;
   try {
-    plan = planWrites(proposal, { dataRoot });
+    plan = planWrites(proposal, { dataRoot, profilePath });
   } catch (err) {
     console.error(`Error: ${err.message}`);
     process.exit(1);
@@ -410,7 +417,9 @@ if (isMainModule(import.meta.url)) {
     process.exit(0);
   }
 
-  console.log(`Data root: ${dataRoot}\n`);
+  console.log(`Data root: ${dataRoot}`);
+  if (profilePath !== getProfilePath(dataRoot)) console.log(`Profile: ${profilePath} (CAREER_OPS_PROFILE)`);
+  console.log('');
   for (const entry of plan) {
     const state = entry.before === null ? 'new' : entry.changed ? 'modified' : 'unchanged';
     console.log(`=== ${entry.path} (${state})`);
@@ -422,7 +431,7 @@ if (isMainModule(import.meta.url)) {
     console.log(`dry run: nothing written. ${plan.filter((e) => e.changed).length} of ${plan.length} target(s) would change; rerun with --apply after reviewing the diff.`);
     process.exit(0);
   }
-  const { written, unchanged } = applyWrites(plan, { dataRoot });
+  const { written, unchanged } = applyWrites(plan);
   console.log(`written: ${written.length ? written.join(', ') : 'none'}`);
   console.log(`unchanged: ${unchanged.length ? unchanged.join(', ') : 'none'}`);
 }
