@@ -55,7 +55,7 @@ Run these in order. Each step is safe to repeat; nothing here spends agent token
    grep '| jev: ' ~/Projects/job-hunt-private/data/pipeline.md | grep ' apply ' 
    ```
 
-5. Evaluate what looks worth it. Either in chat (open `claude` in `~/Projects/career-ops`, then `/career-ops pipeline`, or paste one URL or JD), or headless for one posting:
+5. Evaluate every row Jev marked `apply` or `maybe`; only `skip` rows stay unevaluated (a maybe is not a no). Either in chat (open `claude` in `~/Projects/career-ops`, then `/career-ops pipeline`, or paste one URL or JD), or headless for one posting:
 
    ```bash
    cd ~/Projects/career-ops && node openrouter-runner.mjs evaluate "<posting url>"
