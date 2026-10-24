@@ -22,6 +22,10 @@ cd ~/Projects/career-ops && node doctor.mjs
 
 Expected: all checks pass; the only warning is the optional web UI dependencies.
 
+## Cost rule
+
+OpenRouter is for the Jev pre-screen only (cents per posting). Full evaluations, CVs, letters and answers run through the Claude subscription: `/career-ops pipeline` in a `claude` session, or `bash batch/batch-runner.sh` headless. `node openrouter-runner.mjs evaluate` refuses a paid pinned model unless `CAREER_OPS_ALLOW_PAID_OPENROUTER=1` is set for that shell; never set it. On 2026-10-24 about 83 dollars of credit went into 240 OpenRouter evaluations before this rule existed.
+
 ## Daily: find and rank postings
 
 Run these in order. Each step is safe to repeat; nothing here spends agent tokens except the optional chat step at the end.
@@ -69,13 +73,13 @@ Run these in order. Each step is safe to repeat; nothing here spends agent token
    grep '| jev: ' ~/Projects/job-hunt-private/data/pipeline.md | grep ' apply ' 
    ```
 
-5. Evaluate every row Jev marked `apply` or `maybe`; only `skip` rows stay unevaluated (a maybe is not a no). Either in chat (open `claude` in `~/Projects/career-ops`, then `/career-ops pipeline`, or paste one URL or JD), or headless for one posting:
+5. Evaluate every row Jev marked `apply` or `maybe`; only `skip` rows stay unevaluated (a maybe is not a no). In chat (open `claude` in `~/Projects/career-ops`, then `/career-ops pipeline`, or paste one URL or JD), or headless through the subscription:
 
    ```bash
-   cd ~/Projects/career-ops && node openrouter-runner.mjs evaluate "<posting url>"
+   cd ~/Projects/career-ops && node sync-batch-input.mjs && bash batch/batch-runner.sh --skip-jev-verdict skip
    ```
 
-   Pasted text works too: `node openrouter-runner.mjs evaluate < jd.txt`, with no blank line inside the text (the paste ends at the first empty line). The report lands in `reports/NNN-company-date.md` with `**Score:**` (LLM, 1-5) and `**Jev:**` side by side; a tracker TSV is written and merged with:
+   The report lands in `reports/NNN-company-date.md` with `**Score:**` (LLM, 1-5) and `**Jev:**` side by side; a tracker TSV is written and merged with:
 
    ```bash
    cd ~/Projects/career-ops && node merge-tracker.mjs && node tracker.mjs sync
