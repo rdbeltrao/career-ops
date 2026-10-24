@@ -59,7 +59,7 @@ import { loadYaml } from './lib/yaml-document.mjs';
 
 import { makeHttpCtx } from './providers/_http.mjs';
 import { buildTrustValidator } from './providers/_trust-validator.mjs';
-import { loadProviders, resolveProvider } from './providers/_registry.mjs';
+import { loadLocalProviders, loadProviders, resolveProvider } from './providers/_registry.mjs';
 import { mergeProviderPlugins } from './plugins/_engine.mjs';
 import { classifyFetchError } from './verify-portals.mjs';
 import { fingerprintText, findCrossListings } from './fingerprint-core.mjs';
@@ -78,6 +78,7 @@ import { isMainModule } from './lib/is-main-module.mjs';
 import { SCAN_HISTORY_COLUMNS, parseScanHistoryLine } from './lib/scan-history-columns.mjs';
 import { escapeFormulaCell } from './lib/tsv-formula-escape.mjs';
 import { sectionKind } from './lib/pipeline-sections.mjs';
+import { writeJd } from './lib/jd-store.mjs';
 import { promoteKnownFragmentIdentity, LANGUAGE_PARAMS, languageSubtag } from './url-key.mjs';
 import { getCareerOpsRoot, getProfilePath, hasProfileOverride } from './path-resolver.mjs';
 import { checkLivenessViaApi } from './liveness-api.mjs';
@@ -121,6 +122,9 @@ export const PIPELINE_PATH = process.env.CAREER_OPS_PIPELINE || path.join(DATA_R
 
 export const APPLICATIONS_PATH = resolveTrackerPath(DATA_ROOT);
 const PROVIDERS_DIR = path.resolve(CODE_ROOT, 'providers');
+// Fork-local providers (providers.local/, see providers/_registry.mjs): optional
+// modules upstream does not ship, merged after the shipped set.
+const LOCAL_PROVIDERS_DIR = path.resolve(CODE_ROOT, 'providers.local');
 
 // No directory creation at import time (#3159). Every writer below creates its
 // own parent before its first write — scan-history (appendToScanHistory),
@@ -3747,6 +3751,62 @@ export function emptyTargetStatus(observation) {
 
 // ── Parallel fetch with concurrency limit ───────────────────────────
 
+/**
+ * Targets of a `sequential` provider go last, in random order; everything
+ * else keeps its portals.yml order.
+ *
+ * Fork-local. The LinkedIn browser provider walks one logged-in profile one
+ * search at a time, at a person's pace, so its fetches serialise on a lock
+ * inside the provider. Started in portals.yml order they would hold scan
+ * worker slots while they wait, starving the HTTP providers; started last,
+ * the HTTP boards finish first and the browser gets the tail of the run to
+ * itself. The shuffle is the provider's "searches in random order" rule,
+ * applied here because each fetch sees one entry.
+ *
+ * @param {object[]} targets - Resolved targets, each with `_provider`.
+ * @param {() => number} [random] - Injected for tests.
+ * @returns {object[]} A new array.
+ */
+export function orderTargetsForSequentialProviders(targets, random = Math.random) {
+  const parallel = targets.filter((t) => t._provider?.sequential !== true);
+  const sequential = targets.filter((t) => t._provider?.sequential === true);
+  for (let i = sequential.length - 1; i > 0; i--) {
+    const j = Math.floor(random() * (i + 1));
+    [sequential[i], sequential[j]] = [sequential[j], sequential[i]];
+  }
+  return [...parallel, ...sequential];
+}
+
+/**
+ * Store the JD of every offer that carries one (contract C6, lib/jd-store.mjs).
+ *
+ * Fork-local. A browser provider reads the description while the posting is
+ * open and attaches it as `offer.jd`, the job object jev-score.mjs reads plus
+ * `source`, `source_id` and `search_name`; writing it under
+ * `{DATA_ROOT}/jds/feeder/` lets jev-rank.mjs score the pipeline row without
+ * opening the posting again. Never fatal: a failed write is returned for the
+ * run summary and the row is still appended, jev-rank then falls back to
+ * fetching the URL.
+ *
+ * @param {object[]} offers - Admitted offers; those without `jd` are ignored.
+ * @param {{ dataRoot: string, today?: string }} opts
+ * @returns {{ written: number, failures: {company: string, url: string, error: string}[] }}
+ */
+export function storeOfferJds(offers, { dataRoot, today } = {}) {
+  let written = 0;
+  const failures = [];
+  for (const offer of offers) {
+    if (!offer || typeof offer.jd !== 'object' || offer.jd === null) continue;
+    try {
+      writeJd(offer.jd, { dataRoot, today });
+      written++;
+    } catch (err) {
+      failures.push({ company: String(offer.company ?? ''), url: String(offer.url ?? ''), error: err.message });
+    }
+  }
+  return { written, failures };
+}
+
 async function parallelFetch(tasks, limit, onDone = () => {}) {
   const results = [];
   let i = 0;
@@ -4068,6 +4128,7 @@ async function main() {
 
   // 1. Load providers
   const providers = await loadProviders(PROVIDERS_DIR);
+  await loadLocalProviders(LOCAL_PROVIDERS_DIR, providers);
   // Opt-in: merge enabled keyed/auth-gated provider plugins. Returns immediately
   // (no discovery, no dotenv, no process.env mutation) when config/plugins.yml is
   // absent — so a plain scan with no plugins configured stays byte-identical.
@@ -4121,8 +4182,9 @@ async function main() {
   const visaEnabled = Boolean(config.visa_filter) && config.visa_filter.enabled !== false;
 
   // 3. Resolve a provider for each enabled company / board
-  const targets = [];
+  let targets = [];
   let skippedCount = 0;
+  const warnedSkips = new Set();
   let boardCount = 0;
   const resolveErrors = [];
   const agentHandoff = [];
@@ -4156,6 +4218,17 @@ async function main() {
         continue;
       }
 
+      if (resolved.skipped) {
+        // A fork-local provider whose module is not installed: the feature is
+        // off, said once per provider, and its entries count as skipped.
+        if (!warnedSkips.has(resolved.skipped)) {
+          warnedSkips.add(resolved.skipped);
+          console.error(`⚠️  ${resolved.skipped} — skipping its entries`);
+        }
+        skippedCount++;
+        continue;
+      }
+
       if (resolved.error) {
         resolveErrors.push({ company: entry.name, error: resolved.error });
         continue;
@@ -4168,6 +4241,7 @@ async function main() {
 
   resolveEntries(companies);
   resolveEntries(boards, { isBoard: true });
+  targets = orderTargetsForSequentialProviders(targets);
 
   // #3438. Startup checks for field_filters / filter_on, before any network
   // call. scan.mjs does not run validatePortalsConfig, so every rule that
@@ -4367,6 +4441,10 @@ async function main() {
       }),
       sinceMs: earlyStopSinceMs,
       includeUndated: true,
+      // A provider with side effects of its own (the fork-local LinkedIn
+      // browser's seen-id store) must not consume postings a dry run never
+      // writes to the pipeline.
+      dryRun,
       locationHints: config.location_filter,
       // A provider that serves extra language versions of a posting at extra
       // cost fetches them only when the scan will keep them.
@@ -4380,7 +4458,9 @@ async function main() {
       // leaves the title out, since then no title is dropped.
       ...(normalizeFilterOn(company.filter_on).includes('title') ? { titleWanted: (title) => titleFilter(title) } : {}),
     };
-    let sourceName = provider.id === 'local-parser' ? 'local-parser' : `${provider.id}-api`;
+    // A provider that is not an API names its own source label (`sourceName`);
+    // the fork-local browser provider does, local-parser always did.
+    let sourceName = provider.id === 'local-parser' ? 'local-parser' : (provider.sourceName || `${provider.id}-api`);
     try {
       let jobs;
       try {
@@ -4698,6 +4778,12 @@ async function main() {
 
   // 6. Write results
   if (!dryRun && verifiedOffers.length > 0) {
+    // Fork-local: the JD a browser provider read while the posting was open is
+    // stored before the row is written, so jev-rank.mjs finds the description.
+    const jdStore = storeOfferJds(verifiedOffers, { dataRoot: DATA_ROOT, today: date });
+    for (const failure of jdStore.failures) {
+      errors.push({ company: failure.company, error: `jd store: ${failure.error}` });
+    }
     await appendToPipeline(verifiedOffers);
     await appendToScanHistory(verifiedOffers, date);
   }
