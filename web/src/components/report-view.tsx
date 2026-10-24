@@ -206,7 +206,6 @@ export function ReportView({
                     n={id}
                     url={applyUrl}
                     company={companyName}
-                    pdfReady={pdfReady}
                     quiet={quietApply}
                   />
                 </div>
