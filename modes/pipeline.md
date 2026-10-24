@@ -115,8 +115,22 @@ are defined:
   row can go unranked because the CLI call failed, returned malformed JSON, or
   gave no usable reason — all of which still spent tokens.)
 
+- `| jev: {fit} {verdict} — {reasons}` — an **opt-in** calibrated pre-screen
+  written only by `node jev-rank.mjs` (one call to `node jev-score.mjs` per row,
+  zero agent tokens), never by a scan. `{fit}` is 0–100, `{verdict}` is `apply`,
+  `maybe` or `skip`, and `{reasons}` is `seniority {v}, location {v}, language {v},
+  {team_type}, stack {v}` with underscores turned into spaces, capped at 140
+  characters (e.g. `… | jev: 79 apply — seniority match, location yes, language
+  none, product, stack agnostic`). It is advisory: the ranker never removes,
+  reorders or hides a row, and a row without the segment simply was not scored
+  (no JD anywhere, the scorer failed, or the row already carried `| jev: `) —
+  never a bad score. `modes/triage.md` reads it as a strong signal, and a `skip`
+  with a blocking reason (`seniority below`/`above`, `location no`, `language
+  missing`, `stack required mismatch`) is the Jev hard stop `modes/_shared.md` →
+  **Calibrated pre-screen (Jev)** describes.
+
 When more than one is present the order is `posted:` → `trust:` → `note:` →
-`rank:`. Treat them as hints when triaging; none changes how you process the URL.
+`rank:` → `jev:`. Treat them as hints when triaging; none changes how you process the URL.
 
 ## Intelligent JD detection from URL
 

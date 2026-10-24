@@ -50,6 +50,7 @@ If the declared markets remain genuinely ambiguous after reviewing the JD, the b
 | Profile customizations | `modes/_profile.md` if it exists | Always; user-specific archetypes, role-shape rules, location policy, comp targets |
 | Profile config | `config/profile.yml` if it exists | Always; identity, output language, comp range, target roles |
 | House rules | `modes/_custom.md` if it exists | Always; the user's standing procedural and style rules, applied to every block and the PDF. It never adds factual claims about the candidate |
+| Candidate context | `modes/_context.md` if it exists | Always; targeting only — the fit profile (target role, location and language, preferences, deal-breakers, technical tiers, match signals). It steers scores and framing and is never evidence: a number that exists only there is not a fact for the CV. The orchestrator pastes it in as `## Runtime personalization: modes/_context.md`; when it is absent, evaluate on `cv.md` and `config/profile.yml` as before |
 | Portfolio digest | `article-digest.md` if it exists | **Deferred to Block B pass 2**, same reason; proof points and metrics |
 | llms.txt | `llms.txt` if it exists | Always |
 | CV template | `templates/cv-template.html` | For PDF |
@@ -465,6 +466,8 @@ Provide a score table:
 
 Decide the Global Score once as the holistic judgment across these dimensions, applying the user's scoring rules from `modes/_profile.md` and `modes/_custom.md`. Do not average report blocks A–H. Copy the same value into the report header, Machine Summary `score`, and tracker addition; do not recalculate it at each write.
 
+When the orchestrator appended a `## Runtime pre-screen: jev` block to this prompt (the `## Calibrated pre-screen (Jev)` block from `node jev-score.mjs`), it informs CV match and North Star alignment as `modes/_shared.md` → **Calibrated pre-screen (Jev)** states: its `fit` and reasons are evidence to weigh in those two rows, never a value that sets them. Report its `jev_score` beside the Global Score (`**Jev:** {jev_score}/5 (fit {fit}, {verdict})` under `**Score:**` in the header) and never averaged into it. Never recompute or estimate the pre-screen: a run with no such block writes `**Jev:** not run` and `jev: null`. The orchestrator's `--skip-jev-verdict` / `--min-jev` flags are the batch form of the hard stop, applied before you were started; a `skip` verdict that still reached you is evaluated as normal and named in the Verdict.
+
 #### Score Evidence
 
 The Machine Summary `confidence` is confidence in the **evidence behind this Global Score**, never a hiring probability. It does not change the score and is separate from Block G posting legitimacy and historical `/calibrate` conversion rates. After Risk Summary in the saved report, include `## Score Evidence`: one row each for CV match, North Star alignment, Compensation, Cultural signals, and Red flags, with status (`supported`, `partial`, `unknown`), a concrete source or observation, and an unresolved question. `supported` needs current JD text, primary candidate files, or a verifiable current source; `partial` means some direct evidence exists but a decision-relevant detail is incomplete or inferred; `unknown` means decision-relevant evidence is missing, contradictory, or stale. An unchecked dimension is not `supported`.
@@ -480,6 +483,18 @@ company: "{company}"
 role: "{role}"
 job_facts_cache: null # optional metadata; see Local job-facts cache below
 score: {X.X}
+jev:
+  model: "{model id from the pre-screen block, e.g. typesafe/jev-1.13}"
+  fit: {0-100 integer, or null when the block says n/a}
+  score: {jev_score 1-5 with one decimal, or null}
+  verdict: "{apply | maybe | skip}"
+  blocking: []
+  reasons:
+    seniority_match: "{below | match | above}"
+    location_ok: "{yes | no | unclear}"
+    language_blocker: "{none | missing | partial}"
+    team_type: "{product | platform_infra | unclear}"
+    stack_fit: "{required_match | desired_match | stack_agnostic | required_mismatch}"
 legitimacy_tier: "{High Confidence | Proceed with Caution | Suspicious}"
 archetype: "{detected}"
 final_decision: "{Apply | Consider | Research first | Skip}"
@@ -533,6 +548,7 @@ Rules:
 - Use `[]` for `hard_stops`, `soft_gaps`, `top_strengths`, `discard_reasons`, `requirement_importance`, or `confidence_gaps` when empty.
 - `discard_reasons` items are canonical ids from `templates/discard-reasons.yml`: `salary_too_low`, `hybrid_required`, `tech_stack_mismatch`, `seniority_mismatch`, `geo_restriction`, `size_mismatch`, `company_culture`. Read that file for when each applies. When no id fits, write a short free-text reason instead of forcing the nearest id: `analyze-patterns.mjs` lists it as `other`, apart from the canonical shares, and a reason that keeps recurring there is how the vocabulary grows.
 - `score` is numeric only, without `/5`.
+- `jev` mirrors the `## Runtime pre-screen: jev` block field by field — `model`, `fit`, `score` (the block's `jev_score`), `verdict`, `blocking` (the `"{key}={label}"` strings from its `blocking:` line, `[]` for `none`) and the five `reasons` labels without their confidences. Write `jev: null` when no such block was appended to this prompt. Never recompute, estimate or "correct" it; it is the one Machine Summary value you copy rather than decide, and `calibrate.mjs --jev` compares it with outcomes separately from `score`.
 - `final_decision` must reflect the full evaluation, not only the CV match.
 - `advertised_comp` is the JD's **own** figure, verbatim; `null` when the JD states nothing — never estimate it and never substitute researched market data (Block D research stays in Block D). Batch workers never write `data/salary-observations.tsv` — the report itself is the advertised observation (`salary-gap.mjs` reads it).
 - `reports_to` is the reporting line the JD itself states, in the JD's own wording; `null` when the JD names none — never infer it from the title, the team size, or company research. It records the seat's altitude, which the title alone does not: an IC seat reporting to a Head of Marketing and one reporting to the CEO are different roles.
@@ -618,6 +634,7 @@ company: "{empresa}"
 role: "{rol}"
 job_facts_cache: null # optional metadata; see Local job-facts cache below
 score: {X.X}
+jev: null # or the jev: block from the schema above, copied from the appended pre-screen
 legitimacy_tier: "{High Confidence | Proceed with Caution | Suspicious}"
 archetype: "{detectado}"
 final_decision: "{Apply | Consider | Research first | Skip}"

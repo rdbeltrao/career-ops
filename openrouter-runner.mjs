@@ -16,11 +16,23 @@
  *   1. copy .env.example .env
  *   2. Add OPENROUTER_API_KEY=sk-or-v1-... to .env
  *   3. Free API key: https://openrouter.ai
+ *
+ * Environment:
+ *   CAREER_OPS_MODEL            Pin one model instead of the free rotation.
+ *   CAREER_OPS_MODEL_TIMEOUT_MS Abort a single model call after this many
+ *                               milliseconds (positive integer; default 15000).
+ *                               A pinned model running a full evaluation needs
+ *                               more than the default, e.g. 180000.
+ *
+ * Context: cv.md, config/profile.yml, modes/_profile.md and, when present,
+ * modes/_context.md (the fit profile — targeting only, never evidence). The Jev
+ * pre-screen (`node jev-score.mjs`) runs before each evaluation when that script
+ * is installed and a key is available; otherwise the evaluation runs as before.
  */
 
 import fs from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import readline from 'node:readline';
 import { loadYaml } from './lib/yaml-document.mjs';
 import { outputLanguageInstruction, parseOutputLanguage } from './profile-language.mjs';
@@ -71,7 +83,27 @@ const OPENROUTER_API_URL    = 'https://openrouter.ai/api/v1/chat/completions';
 const OPENROUTER_MODELS_URL = 'https://openrouter.ai/api/v1/models';
 const MAX_TOKENS            = 8192;
 const RATE_LIMIT_DELAY_MS   = 2500;  // pause between requests on free tier
-const MODEL_TIMEOUT_MS      = 15_000; // abort a single model call after 15 s
+const DEFAULT_MODEL_TIMEOUT_MS = 15_000; // abort a single model call after 15 s unless overridden
+
+/**
+ * CAREER_OPS_MODEL_TIMEOUT_MS as a positive safe integer, else the default.
+ * 15 s fits the free rotation (a slow free model is skipped for the next one),
+ * but a pinned model writing a full A-H report needs minutes. Resolved after
+ * loadEnvFile() so the value can live in .env like the key does.
+ *
+ * @param {NodeJS.ProcessEnv} [env]
+ * @returns {number}
+ */
+export function resolveModelTimeoutMs(env = process.env) {
+  const raw = env.CAREER_OPS_MODEL_TIMEOUT_MS;
+  if (raw === undefined) return DEFAULT_MODEL_TIMEOUT_MS;
+  const text = String(raw).trim();
+  if (!/^\d+$/.test(text)) return DEFAULT_MODEL_TIMEOUT_MS;
+  const parsed = Number(text);
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : DEFAULT_MODEL_TIMEOUT_MS;
+}
+
+let MODEL_TIMEOUT_MS = DEFAULT_MODEL_TIMEOUT_MS;
 
 // Provider priority order — models are sorted by provider prefix, not hardcoded names.
 // Add, remove, or reorder providers here; model names are resolved at runtime from the API.
@@ -404,16 +436,29 @@ export { callOpenRouter, rateLimitCounts, blacklistedModels };
 // Context loading
 // ---------------------------------------------------------------------------
 function loadContext() {
+  // modes/_context.md is the candidate's fit profile: a targeting source that
+  // steers scores and framing and is never evidence (modes/_shared.md →
+  // Sources of Truth). Optional: an install without it evaluates on cv.md and
+  // profile.yml exactly as before, with one line saying so.
+  const context = readFile('modes/_context.md');
+  if (context === null) console.log('ℹ️  modes/_context.md not found — evaluating on cv.md and profile.yml only');
   return {
     cv:          readFile('cv.md')               ?? 'CV not found.',
     profile:     readProfile()                   ?? '',
     shared:      readSystemFile('modes/_shared.md') ?? '',
     profileMode: readFile('modes/_profile.md')   ?? '',
+    context:     context                         ?? '',
   };
 }
 
 export function buildSystemPrompt(modeContent, ctx) {
   const languageInstruction = outputLanguageInstruction(parseOutputLanguage(ctx.profile));
+  // The context block is conditional as a whole: with no context file the
+  // prompt is byte-identical to the one built before the block existed, so
+  // prompt caching and the recorded prompts of older runs are undisturbed.
+  const contextBlock = ctx.context
+    ? ['---', 'CANDIDATE CONTEXT (targeting only, never evidence):', ctx.context]
+    : [];
   return [
     ctx.shared,
     ctx.profileMode,
@@ -424,10 +469,97 @@ export function buildSystemPrompt(modeContent, ctx) {
     '---',
     'CV (Markdown):',
     ctx.cv,
+    ...contextBlock,
     '---',
     'OUTPUT LANGUAGE:',
     languageInstruction,
   ].filter(Boolean).join('\n\n');
+}
+
+// ---------------------------------------------------------------------------
+// Jev pre-screen (modes/_shared.md → Calibrated pre-screen (Jev))
+// ---------------------------------------------------------------------------
+// jev-score.mjs is an optional sibling script. Everything here degrades to a
+// "not run" block (or to no block at all when the script is not installed), so
+// an evaluation never fails because the pre-screen could not run.
+const JEV_HEADING = '## Calibrated pre-screen (Jev)';
+const notRunBlock = (reason) => `${JEV_HEADING}\n\nnot run: ${reason}`;
+
+/**
+ * Import an optional sibling module, or null when it is not installed or does
+ * not load. Resolved from this file's own URL, never from the data root.
+ * @param {string} rel
+ * @returns {Promise<object|null>}
+ */
+async function loadOptionalModule(rel) {
+  const target = fileURLToPath(new URL(rel, import.meta.url));
+  if (!fs.existsSync(target)) return null;
+  try { return await import(pathToFileURL(target).href); } catch { return null; }
+}
+
+/**
+ * The jev-score.mjs module, or null when it is not installed.
+ * @param {{jevPath?: string}} [opts] - `jevPath` overrides the sibling path (tests).
+ * @returns {Promise<object|null>}
+ */
+export async function loadJevModule({ jevPath } = {}) {
+  if (jevPath === undefined) return loadOptionalModule('./jev-score.mjs');
+  if (!fs.existsSync(jevPath)) return null;
+  try { return await import(pathToFileURL(jevPath).href); } catch { return null; }
+}
+
+/**
+ * Run the Jev pre-screen for one job and format it for the evaluation request.
+ *
+ * @param {object} job - The job object jev-score takes (url, title, company, location, workplace, seniority, description).
+ * @param {object} [opts]
+ * @param {object|null} [opts.jev] - The jev-score.mjs module; null means not installed.
+ * @param {NodeJS.ProcessEnv} [opts.env] - Where the OpenRouter key is looked up.
+ * @param {string} [opts.dataRoot] - The data root (modes/_context.md, config/jev-criteria.yml).
+ * @param {(args: {dataRoot: string, codeRoot: string}) => any} [opts.loadCriteria] - Criteria loader; lib/jev-criteria.mjs by default.
+ * @returns {Promise<{block: string|null, result: object|null, notice: string}>}
+ *   `block` is the markdown block to append to the request (null when the
+ *   script is not installed), `result` the parsed score when it ran.
+ */
+export async function jevPrescreen(job, { jev, env = process.env, dataRoot = DATA_ROOT, loadCriteria } = {}) {
+  if (!jev) {
+    return { block: null, result: null, notice: 'ℹ️  Jev pre-screen not run: jev-score.mjs is not installed' };
+  }
+  const codeRoot = fileURLToPath(new URL('.', import.meta.url));
+  try {
+    let apiKey = null;
+    const keyModule = await loadOptionalModule('./lib/openrouter-key.mjs');
+    if (typeof keyModule?.resolveOpenRouterKey === 'function') {
+      apiKey = keyModule.resolveOpenRouterKey({ env, codeRoot, dataRoot }).key;
+    } else {
+      apiKey = env.OPENROUTER_API_KEY_JOB_SEARCH || env.OPENROUTER_API_KEY || null;
+    }
+    if (!apiKey) {
+      const reason = 'no OpenRouter key (OPENROUTER_API_KEY)';
+      return { block: notRunBlock(reason), result: null, notice: `ℹ️  Jev pre-screen not run: ${reason}` };
+    }
+    let criteria;
+    if (typeof loadCriteria === 'function') {
+      criteria = loadCriteria({ dataRoot, codeRoot });
+    } else {
+      const criteriaModule = await loadOptionalModule('./lib/jev-criteria.mjs');
+      if (typeof criteriaModule?.loadCriteria !== 'function') throw new Error('lib/jev-criteria.mjs is not installed');
+      criteria = criteriaModule.loadCriteria({ dataRoot, codeRoot });
+    }
+    const context = jev.loadContextText({ dataRoot });
+    const result = await jev.scoreJob({ profileText: context.text, job, criteria, apiKey });
+    if (result?.error) {
+      return { block: notRunBlock(result.error), result: null, notice: `ℹ️  Jev pre-screen not run: ${result.error}` };
+    }
+    const fit = result.fit === null || result.fit === undefined ? 'n/a' : result.fit;
+    return {
+      block: jev.formatPrescreenMarkdown(result),
+      result,
+      notice: `ℹ️  Jev pre-screen: fit ${fit}, ${result.verdict ?? 'n/a'} (context: ${context.source})`,
+    };
+  } catch (e) {
+    return { block: notRunBlock(e.message), result: null, notice: `ℹ️  Jev pre-screen not run: ${e.message}` };
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -710,12 +842,25 @@ async function cmdEvaluate(input, ctx) {
     }
   }
 
+  // Jev pre-screen: zero agent tokens, appended to the request so the model
+  // reports it (`**Jev:**`, Machine Summary `jev:`) and never recomputes it.
+  // With jev-score.mjs absent the request is exactly what it was before.
+  const prescreen = await jevPrescreen({
+    url: typeof input === 'string' && input.startsWith('http') ? input : '',
+    title: '', company: '', location: '', workplace: '', seniority: '',
+    description: archiveText ?? '',
+  }, { jev: await loadJevModule() });
+  console.log(prescreen.notice);
+  const userMessage = prescreen.block
+    ? `Evaluate this job listing:\n\n${jdText}\n\n${prescreen.block}`
+    : `Evaluate this job listing:\n\n${jdText}`;
+
   console.log('\nEvaluating...');
   const systemPrompt = buildSystemPrompt(modeContent, ctx);
 
   let resultObj;
   try {
-    resultObj = await callOpenRouter(systemPrompt, `Evaluate this job listing:\n\n${jdText}`);
+    resultObj = await callOpenRouter(systemPrompt, userMessage);
   } catch (e) {
     console.error(`OpenRouter error: ${e.message}`);
     return null;
@@ -899,6 +1044,7 @@ async function cmdApply(ref, ctx) {
 const invokedDirectly = isMainModule(import.meta.url);
 const [,, command, ...args] = invokedDirectly ? process.argv : [];
 if (invokedDirectly) loadEnvFile();
+if (invokedDirectly) MODEL_TIMEOUT_MS = resolveModelTimeoutMs();
 const ctx = invokedDirectly ? loadContext() : null;
 
 // Load free models list before running any AI command (skip when a model is pinned)

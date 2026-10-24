@@ -1,0 +1,57 @@
+# Notion page map for the `notion-sync` mode (modes/notion-sync.md).
+#
+# Copy this file to config/notion-map.yml in the data root and replace every
+# URL with your own pages. The mode fetches these pages through the session's
+# Notion connector, proposes local files from them and writes nothing to
+# Notion. Page titles change; when a URL fails, the mode searches Notion for
+# the title before giving up. Keep the keys: the mode refers to them by name.
+#
+# Every URL below is a placeholder. Never commit the real file (it is user
+# layer and gitignored).
+
+root: "https://www.notion.so/your-workspace/Job-Applications-00000000000000000000000000000000"
+
+# The career records, in the order the mode reads them.
+pages:
+  profile:
+    title: "Profile, Skills & Credentials"
+    url: "https://www.notion.so/your-workspace/Profile-Skills-Credentials-00000000000000000000000000000001"
+  career_history:
+    title: "Career History"
+    url: "https://www.notion.so/your-workspace/Career-History-00000000000000000000000000000002"
+  claims_to_confirm:
+    # Open contacts, titles, dates, headcounts and metrics. An open item is used
+    # only through its "Use now" wording, or omitted.
+    title: "Claims to Confirm"
+    url: "https://www.notion.so/your-workspace/Claims-to-Confirm-00000000000000000000000000000003"
+  interests:
+    # Preferences recorded on a date in the past: the mode records that date as
+    # `interests.recorded_on` and asks for `confirmed_on` before relying on them.
+    title: "Professional and Personal Interests"
+    url: "https://www.notion.so/your-workspace/Professional-and-Personal-Interests-00000000000000000000000000000004"
+  professional_examples:
+    title: "Professional Examples"
+    url: "https://www.notion.so/your-workspace/Professional-Examples-00000000000000000000000000000005"
+  ats_notes:
+    # Optional: live ATS notes. Read-only here; data-static/ats-notes.md ships
+    # the vendor-sourced reference.
+    title: "ATS Notes"
+    url: "https://www.notion.so/your-workspace/ATS-Notes-00000000000000000000000000000006"
+
+# Employer pages (children of Career History). Page titles are not confirmed
+# job titles: Claims to Confirm governs titles and dates.
+employers:
+  - name: "Example Employer"
+    url: "https://www.notion.so/your-workspace/Example-Employer-Engineering-Manager-00000000000000000000000000000010"
+  - name: "Earlier Employer"
+    url: "https://www.notion.so/your-workspace/Earlier-Employer-Head-of-Technology-00000000000000000000000000000011"
+
+# Source-grounded stories on the Professional Examples page, one id per story.
+# They become article-digest.md entries with the page as provenance.
+examples:
+  - id: "EX-01"
+    title: "Product rollout and scaling"
+  - id: "EX-02"
+    title: "Engineering organization and hiring"
+  - id: "EX-03"
+    title: "Hybrid delivery and resourcing"

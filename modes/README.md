@@ -55,6 +55,7 @@ table in `AGENTS.md` (mirrored in `CLAUDE.md`).
 | `agent-inbox.md` | `agent-inbox` (alias `inbox`) | Queue requests for the next session |
 | `retro.md` | `retro` | Turn this session's corrections into proposed rules for `_custom.md` / `_profile.md` |
 | `update.md` | `update` | Interactive system update |
+| `notion-sync.md` | `notion-sync` | Propose the context layer (`_context.md`, `preferences`/`interests`, digest, cv-facts, career-profile facts) from your Notion career records; diff first, writes only after yes, never writes Notion |
 
 ## Shared context and user customization
 
@@ -64,9 +65,10 @@ table in `AGENTS.md` (mirrored in `CLAUDE.md`).
 | `_profile.template.md` | Seed for your `modes/_profile.md` (archetypes, narrative, negotiation scripts) |
 | `_custom.template.md` | Seed for your `modes/_custom.md` (house rules, procedural preferences) |
 | `_brief.template.md` | Seed for your `modes/_brief.md` (compact context for `triage`) |
+| `_context.template.md` | Seed for your `modes/_context.md` (the fit profile every evaluation and draft reads as a targeting source, never evidence) |
 | `_writing.md` | Shared writing guidance (Voice DNA, writing style, ATS rules) loaded by modes that write candidate-facing prose |
 
-Your copies (`_profile.md`, `_custom.md`, `_brief.md`) are user-layer files: gitignored
+Your copies (`_profile.md`, `_custom.md`, `_brief.md`, `_context.md`) are user-layer files: gitignored
 and never touched by `update-system.mjs` (see
 [DATA_CONTRACT.md](../DATA_CONTRACT.md)).
 

@@ -50,6 +50,10 @@ On a hit, **stop before Step 1** and surface the candidate's own recorded decisi
 
 Apply `modes/oferta.md` → **Dealbreaker gate** before Step 1. On a hit, stop before Step 1 and write no report or PDF unless the candidate answers yes. With the candidate present, ask. In a headless run, write the gate's SKIP tracker row and end on its `needs_confirmation` line, unless the posting is agency-mediated, in which case the agency handoff below comes first and nothing is written.
 
+## Step 0.8 — Jev pre-screen gate
+
+Apply `modes/oferta.md` → **Jev pre-screen gate** before Step 1: write the Step 0 JD to a temporary JSON file and run `node jev-score.mjs --job <tmp json> --format markdown`, keeping the block for the report. A `skip` verdict with a blocking answer stops before Step 1 and writes no report or PDF unless the candidate answers yes. With the candidate present, ask ("Jev marks this as {blocking}. Evaluate it anyway?"). In a headless run, follow the gate's headless path and end on its `needs_confirmation: jev` line, unless the posting is agency-mediated, in which case the agency handoff below comes first and nothing is written. When the script is missing or has no key, note `not run` and continue: the pre-screen never blocks an evaluation by its absence.
+
 ## Step 1 — A-G Evaluation
 
 Execute the same as the `oferta` mode (read `modes/oferta.md` for all A-F blocks + Block G Posting Legitimacy). Read `modes/_custom.md` → Evaluation Rules, if it exists, and apply its override here. Default (if absent or silent): standard A-G evaluation.

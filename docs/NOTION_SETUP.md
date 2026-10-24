@@ -96,3 +96,33 @@ node plugins.mjs run notion search "<query>"
 - Once rows exist in the database, Notion's native views (Board grouped by Status,
   Calendar, filters/sorts) work for free on top — those are just views over whatever
   properties exist, independent of what the plugin writes.
+
+## Career records sync (fork)
+
+The plugin above mirrors the tracker *into* Notion. The `notion-sync` mode goes the
+other way: it reads the career records you keep in Notion (profile, career history and
+employer pages, claims to confirm, interests, professional examples) and proposes the
+local files the evaluation and draft modes read from them. It runs inside an agent
+session through the session's Notion connector, not through this plugin's integration
+token, and it never writes to Notion.
+
+1. Copy `config/notion-map.example.yml` to `config/notion-map.yml` in the data root and
+   replace every placeholder URL with your own pages. The file is user layer and
+   gitignored; keep the keys, the mode refers to them by name.
+2. Run `/career-ops notion-sync` (or ask for "sync my Notion records"). The mode fetches
+   the mapped pages, applies the factual rules in `modes/notion-sync.md` (an open
+   "Claims to Confirm" item is used only through its "Use now" wording; interests keep
+   the date they were recorded and ask for a `confirmed_on`; study notes and role
+   expectations never become claims), and saves one proposal JSON under
+   `output/notion-sync/`.
+3. It then runs `node notion-sync-apply.mjs --proposal <file> --dry-run` and shows the
+   diff per target: `modes/_context.md`, the `preferences` and `interests` blocks of
+   `config/profile.yml` (every other byte of that file is kept), `article-digest.md`,
+   `config/cv-facts.json` (sorted unions) and `data/career-profile.yml` (facts appended
+   as `needs_review`, to verify in `master-profile`).
+4. Only after your explicit yes does it run the same command with `--apply`. Applying the
+   same proposal twice changes nothing.
+
+No `NOTION_ACCESS_TOKEN` is needed for this sync; the connector's own authorization is
+what reads the pages. If the session has no Notion connector, the mode stops and says so
+before reading or writing anything.

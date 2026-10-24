@@ -1152,6 +1152,24 @@ function checkProfileShape(root) {
   };
 }
 
+// modes/_context.md is optional: evaluations run without it, on cv.md and
+// config/profile.yml alone. It is still worth one line, because every loader
+// (the router, batch-runner.sh, openrouter-runner.mjs, the *-eval.mjs scripts)
+// reads it as the targeting source and the Jev pre-screen falls back to
+// cv.md + profile.yml when it is absent. A warning, never a failure.
+function checkContextFile(root) {
+  const contextPath = join(root, 'modes', '_context.md');
+  if (existsSync(contextPath)) return { pass: true, label: 'modes/_context.md found (targeting context)' };
+  return {
+    warn: true,
+    label: 'context file missing: evaluations use cv.md and profile.yml only',
+    fix: [
+      `Copy modes/_context.template.md to ${contextPath} and fill in the sections`,
+      'Or run the notion-sync mode, which proposes it from your Notion career records',
+    ],
+  };
+}
+
 async function main() {
   console.log('\ncareer-ops doctor');
   console.log('================\n');
@@ -1174,6 +1192,7 @@ async function main() {
     ...USER_LAYER_PREREQS.map(checkPrereq),
     checkFonts(),
     checkPersonalization(projectRoot),
+    checkContextFile(projectRoot),
     checkProfileShape(projectRoot),
     checkTitleFilterConflicts(projectRoot),
     checkCvShape(projectRoot),

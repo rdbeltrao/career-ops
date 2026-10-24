@@ -61,6 +61,17 @@ TRIAGE: SKIP | {Company} | {Role or "Unknown"} | 0/5 | Posting inaccessible or e
 Scan JD text for the Hard DQ Criteria listed in `_brief.md`. If any hit, you
 already know the score is ≤ 2.5. Note the DQ reason and skip step 3.
 
+### 2b. Jev segment (when the pipeline row carries one)
+A `| jev: {fit} {verdict} — {reasons}` segment on the row (`modes/pipeline.md`,
+written by `node jev-rank.mjs` from the same deal-breakers `_brief.md` lists) is a
+strong signal, not a verdict: weigh `fit` and the reasons in step 3 and name them
+in the reason field. One case is decided for you: a `skip` verdict whose reasons
+include a blocking answer — `seniority below` or `above`, `location no`,
+`language missing`, `stack required mismatch` — is **FAIL** (score ≤ 2.5, skip
+step 3) unless the company is on the Priority Override List in `_brief.md`, which
+returns PASS as always. A row without the segment carries no information about
+Jev; score it as usual.
+
 ### 3. Quick score
 Assess five dimensions. 1–2 sentences per dimension — no prose, no headers.
 (Weights below are defaults; if `_brief.md` defines its own dimension weights,

@@ -59,6 +59,11 @@ How to score the "location" dimension. Adjust to your own policy.
 - High travel (>25%) → **deduct 0.5–1.0**
 
 ## Hard DQ Criteria — instant FAIL (< 3.0)
+<!-- Generate this list with `node render-context.mjs --section dq`: it prints
+     one bullet per `dealbreakers` and `preferences.hard_rules` entry of
+     config/profile.yml, so triage, the Dealbreaker gate and the Jev pre-screen
+     all stop on the same blockers. Paste its bullets here and keep them in
+     step when you change the profile. -->
 Score ≤ 2.5 immediately and skip detailed analysis if ANY apply. These are the
 hard gaps you cannot bridge — be specific so triage can pattern-match them.
 - {e.g. Active license/clearance you do not hold}
