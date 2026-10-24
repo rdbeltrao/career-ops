@@ -240,14 +240,16 @@ const sharedContext = readFile(PATHS.shared, 'modes/_shared.md');
 const ofertaLogic   = readFile(PATHS.oferta, 'modes/oferta.md');
 const cvContent     = readFile(PATHS.cv,     'cv.md');
 const profileContent = readFile(PATHS.profile, 'modes/_profile.md');
-// modes/_context.md is the candidate's fit profile: a targeting source that
-// steers scores and framing, never evidence (modes/_shared.md → Sources of
-// Truth). Folded into the _profile.md section so the token budget treats the
-// two as one personalization block; absent, the prompt is exactly as before.
+// modes/_context.md is the candidate's fit profile, the context tier of the
+// Source-of-Truth Boundary (AGENTS.md): its qualitative facts are evidence for
+// the evaluation, its numbers are targeting only, and it is never a source for
+// candidate-facing text. Folded into the _profile.md section so the token
+// budget treats the two as one personalization block; absent, the prompt is
+// exactly as before.
 const contextContent = existsSync(PATHS.context) ? readFileSync(PATHS.context, 'utf-8').trim() : '';
 if (!contextContent) console.log('ℹ️   modes/_context.md not found — evaluating on cv.md and profile.yml only');
 const profileWithContext = contextContent
-  ? `${profileContent}\n\n--- CANDIDATE CONTEXT (modes/_context.md — targeting only, never evidence) ---\n${contextContent}`
+  ? `${profileContent}\n\n--- CANDIDATE CONTEXT (modes/_context.md — context tier: qualitative facts are evidence for the evaluation, cite them as _context.md:; a number that appears below but not in cv.md or article-digest.md is written nowhere in the report, not even as an approximate team size or scope; never a source for the CV, a letter or a form answer) ---\n${contextContent}`
   : profileContent;
 const profileYml    = readFile(PATHS.profileYml, 'config/profile.yml');
 const languageInstruction = outputLanguageInstruction(parseOutputLanguage(profileYml));

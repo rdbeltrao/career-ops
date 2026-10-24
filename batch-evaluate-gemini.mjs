@@ -55,6 +55,12 @@ export const PATHS = {
   //
   // gemini-eval.mjs:89 and ollama-eval.mjs:56 both already use DATA_ROOT here.
   profile:     join(DATA_ROOT, 'modes', '_profile.md'),
+  // modes/_context.md is the candidate's fit profile, the context tier of the
+  // Source-of-Truth Boundary (AGENTS.md): its qualitative facts are evidence
+  // for the evaluation, its numbers are targeting only, and it is never a
+  // source for candidate-facing text. Optional: without it the prompt is
+  // exactly as before.
+  context:     join(DATA_ROOT, 'modes', '_context.md'),
   profileYml:  getProfilePath(),
   reports:     join(DATA_ROOT, 'reports'),
   // DATA_ROOT, matching gemini-eval.mjs:93. These TSVs are the batch's OUTPUT —
@@ -136,6 +142,16 @@ function loadContext() {
   const cvContent      = readFile(PATHS.cv, 'cv.md');
   const profileContent = readFile(PATHS.profile, '_profile.md');
   const profileYml     = readFile(PATHS.profileYml, 'profile.yml');
+  const contextContent = existsSync(PATHS.context) ? readFileSync(PATHS.context, 'utf-8').trim() : '';
+  if (!contextContent) console.log('ℹ️  modes/_context.md not found — evaluating on cv.md and profile.yml only');
+  const contextSection = contextContent
+    ? `
+═══════════════════════════════════════════════════════
+CANDIDATE CONTEXT (modes/_context.md — context tier: qualitative facts are evidence for the evaluation, cite them as _context.md:; a number that appears below but not in cv.md or article-digest.md is written nowhere in the report, not even as an approximate team size or scope; never a source for the CV, a letter or a form answer)
+═══════════════════════════════════════════════════════
+${contextContent}
+`
+    : '';
 
   systemPromptTemplate = `You are career-ops, an AI-powered job search assistant.
 You evaluate job offers against the user's CV using a structured A-G scoring system.
@@ -164,7 +180,7 @@ ${profileYml}
 USER ARCHETYPES & NARRATIVE (_profile.md)
 ═══════════════════════════════════════════════════════
 ${profileContent}
-
+${contextSection}
 ═══════════════════════════════════════════════════════
 IMPORTANT OPERATING RULES FOR THIS CLI SESSION
 ═══════════════════════════════════════════════════════

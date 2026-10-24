@@ -1567,8 +1567,9 @@ process_offer() {
   # The resolved prompt is gitignored runtime state, so user profile data stays
   # out of the system layer while batch scoring matches interactive scoring.
   # modes/_context.md rides between the profile and the house rules, the order
-  # the router loads them in: it is the candidate's fit profile, a targeting
-  # source that steers scores and framing and never evidence.
+  # the router loads them in: it is the candidate's fit profile, the context
+  # tier of the Source-of-Truth Boundary (qualitative facts are evidence for
+  # the evaluation, numbers are targeting only, never a source for the CV).
   for context_file in "$DATA_ROOT/modes/_profile.md" "$PROFILE_FILE" "$DATA_ROOT/modes/_context.md" "$DATA_ROOT/modes/_custom.md"; do
     if [[ -f "$context_file" ]]; then
       {

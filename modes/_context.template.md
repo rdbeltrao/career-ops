@@ -5,12 +5,16 @@
      and replace every section with your own facts. It is USER LAYER —
      never auto-updated by `node update-system.mjs`.
 
-     PURPOSE: the candidate context every evaluation reads as a TARGETING
-     SOURCE, NEVER EVIDENCE. It steers scores and framing (what you want,
-     what you avoid, where you are strong, what a good match says) and is
-     never a fact source for a CV, a cover letter or a form answer: a number
-     that exists only here still fails the fact gate. Facts live in cv.md
-     and article-digest.md; this file says how to weigh them.
+     PURPOSE: the candidate context every evaluation reads as the CONTEXT
+     TIER (AGENTS.md, Source-of-Truth Boundary). Its qualitative facts
+     (roles, employers, domains, responsibilities, skills, practices,
+     languages, talks, publications) are evidence for the evaluation and
+     are cited as `_context.md:` next to `cv.md:` lines. Its numbers are
+     targeting only: they steer a score, but a figure counts as evidence
+     only when cv.md or article-digest.md carries it. It is never a fact
+     source for a CV, a cover letter or a form answer: a number that exists
+     only here still fails the fact gate. The CV is what you send; this
+     file is what you have done. Keep them as two documents.
 
      Readers: the Jev pre-screen (`node jev-score.mjs`, whole file as the
      profile text), modes/oferta.md and batch/batch-prompt.md, the OpenRouter

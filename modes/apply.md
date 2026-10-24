@@ -246,7 +246,7 @@ tailoring that made the application relevant.
 | Education, certifications | The tailored CV; `config/profile.yml` for credentials the CV omits |
 | Skills, summary, profile headline | The tailored CV |
 | A section the tailored CV omits entirely — a role it does not list, an education entry it drops | `cv.md` — the fallback, never the default |
-| "Why this role", "what are you looking for" and other motivation free text | The candidate's own words in this conversation and the report's Section H; the framing from `config/profile.yml` → `interests` and `modes/_context.md`, as targeting only, never evidence (`modes/_writing.md` → **Interests in candidate-facing text**, staleness rule included). Facts inside the answer still follow the rows above |
+| "Why this role", "what are you looking for" and other motivation free text | The candidate's own words in this conversation and the report's Section H; the framing from `config/profile.yml` → `interests` and `modes/_context.md`, as targeting only for the answer: the evaluation may cite the context file's qualitative facts, a form answer takes no fact or number from it (`modes/_writing.md` → **Interests in candidate-facing text**, staleness rule included). Facts inside the answer still follow the rows above |
 
 Where the tailored CV and `cv.md` disagree, the tailored CV wins: it is the
 document the reviewer is holding. `cv.md` supplies whole sections the tailored CV

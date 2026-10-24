@@ -32,8 +32,9 @@
  *               ignored) or `-` for stdin.
  *   --context   the candidate context. Default {DATA_ROOT}/modes/_context.md;
  *               when absent, cv.md followed by config/profile.yml with a
- *               one-line notice on stderr. It is a targeting source, never
- *               evidence for a draft (AGENTS.md, Source-of-Truth Boundary).
+ *               one-line notice on stderr. It is the context tier of the
+ *               Source-of-Truth Boundary (AGENTS.md): never a fact source
+ *               for a draft, read whole here as the profile.
  *   --criteria  the question set. Default {DATA_ROOT}/config/jev-criteria.yml,
  *               else config/jev-criteria.example.yml in the checkout.
  *

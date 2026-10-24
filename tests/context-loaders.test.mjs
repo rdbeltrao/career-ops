@@ -2,8 +2,9 @@
 // path, and the Jev pre-screen is wired in without being required.
 //
 // Two files and one block travel together:
-//   - modes/_context.md, the candidate's fit profile, is a TARGETING source.
-//     Every loader (the prompts, the OpenRouter runner, the batch runner) reads
+//   - modes/_context.md, the candidate's fit profile, is the CONTEXT tier of the
+//     Source-of-Truth Boundary (tests/context-evidence-tier.test.mjs covers the
+//     wording of that tier). Every loader (the prompts, the OpenRouter runner, the batch runner) reads
 //     it when present and runs exactly as before when it is absent.
 //   - the Jev pre-screen block (modes/_shared.md → Calibrated pre-screen (Jev))
 //     arrives from `node jev-score.mjs`; when that script is not installed every
@@ -22,11 +23,11 @@ const read = (rel) => readFileSync(join(ROOT, rel), 'utf-8').replace(/\r\n/g, '\
 
 // ── B3: the prompts ────────────────────────────────────────────────────────
 
-test('modes/_shared.md lists _context.md as a targeting-only source and states the Jev rules once', () => {
+test('modes/_shared.md lists _context.md as the context tier and states the Jev rules once', () => {
   const shared = read('modes/_shared.md');
   const sourcesTable = shared.match(/^## Sources of Truth[\s\S]*?(?=^## )/m)?.[0] ?? '';
-  assert.match(sourcesTable, /^\| _context\.md \| `\{DATA_ROOT\}\/modes\/_context\.md` \(if exists\) \| ALWAYS, targeting only/m,
-    'the sources table has no _context.md row marked "ALWAYS, targeting only"');
+  assert.match(sourcesTable, /^\| _context\.md \| `\{DATA_ROOT\}\/modes\/_context\.md` \(if exists\) \| ALWAYS, context tier/m,
+    'the sources table has no _context.md row marked "ALWAYS, context tier"');
   assert.match(shared, /^## Calibrated pre-screen \(Jev\)$/m);
   // The section names its own heading in prose, so cut at heading LINES, not at
   // the first occurrence of the text.
@@ -69,7 +70,7 @@ test('modes/auto-pipeline.md runs the Jev gate as Step 0.8', () => {
 
 test('batch/batch-prompt.md loads _context.md, carries jev: in the schema and never recomputes the pre-screen', () => {
   const prompt = read('batch/batch-prompt.md');
-  assert.match(prompt, /^\| Candidate context \| `modes\/_context\.md` if it exists \| Always; targeting only/m,
+  assert.match(prompt, /^\| Candidate context \| `modes\/_context\.md` if it exists \| Always; context tier/m,
     'the sources table has no modes/_context.md row');
   const fence = prompt.match(/#### Machine Summary[\s\S]*?```yaml\n([\s\S]*?)\n```/)?.[1] ?? '';
   assert.ok(fence, 'no Machine Summary fence');
@@ -113,7 +114,7 @@ test('SKILL.md loads modes/_context.md after _profile.md and before _custom.md, 
     assert.ok(contextAt !== -1, `${label}: modes/_context.md is not loaded`);
     assert.ok(profileAt !== -1 && profileAt < contextAt && contextAt < customAt, `${label}: _context.md is not between _profile.md and _custom.md`);
   }
-  assert.match(loading, /targeting/i, 'the router does not say the context file is targeting only');
+  assert.match(loading, /context tier/i, 'the router does not name the context tier');
   const rule = skill.split('\n').find((l) => l.startsWith('Resolve every path in this router')) ?? '';
   assert.ok(rule.includes('`modes/_context.md`'), 'the router does not resolve modes/_context.md against DATA_ROOT');
 });
@@ -125,7 +126,8 @@ test('buildSystemPrompt appends the context after the CV and is byte-identical w
   assert.equal(or.buildSystemPrompt('MODE', { ...ctx, context: undefined }), before, 'an undefined context changed the prompt');
   assert.ok(!before.includes('CANDIDATE CONTEXT'), 'the label leaks into a prompt with no context');
   const withContext = or.buildSystemPrompt('MODE', { ...ctx, context: 'CTX_SENTINEL_TARGETING' });
-  assert.ok(withContext.includes('CANDIDATE CONTEXT (targeting only, never evidence):'), 'the context block has no label');
+  assert.ok(withContext.includes('CANDIDATE CONTEXT (context tier:'), 'the context block has no label');
+  assert.ok(withContext.includes('is written nowhere in the report'), 'the context label drops the quantified-claims caveat');
   assert.ok(withContext.indexOf('CV TEXT') < withContext.indexOf('CTX_SENTINEL_TARGETING'), 'the context must follow the CV');
   assert.ok(withContext.indexOf('CTX_SENTINEL_TARGETING') < withContext.indexOf('OUTPUT LANGUAGE'), 'the context must precede the language instruction');
 });
@@ -211,17 +213,19 @@ test('readMachineSummary returns the jev block, or null when it is null or absen
   assert.equal(readMachineSummary(REPORT('final_decision: "Apply"')).jev, null, 'older reports have no jev key');
 });
 
-test('the eval scripts and the web evaluate prompt load modes/_context.md as targeting only', () => {
-  for (const file of ['openai-eval.mjs', 'gemini-eval.mjs', 'ollama-eval.mjs']) {
+test('the eval scripts and the web evaluate prompt load modes/_context.md as the context tier', () => {
+  for (const file of ['openai-eval.mjs', 'gemini-eval.mjs', 'ollama-eval.mjs', 'batch-evaluate-gemini.mjs']) {
     const src = read(file);
     assert.ok(src.includes("'_context.md'"), `${file} does not read modes/_context.md`);
-    assert.match(src, /targeting only, never evidence/, `${file} does not label the context as targeting only`);
+    assert.match(src, /CANDIDATE CONTEXT \(modes\/_context\.md — context tier:/, `${file} does not label the context as the context tier`);
+    assert.match(src, /is written nowhere in the report/, `${file} drops the quantified-claims caveat`);
     assert.match(src, /_context\.md not found/, `${file} has no one-line notice for the absent file`);
   }
   if (!existsSync(WEB_LIB)) return;
   const prompts = read('web/src/lib/run-prompts.mjs');
   assert.match(prompts, /modes\/_context\.md/, 'run-prompts.mjs does not name modes/_context.md');
-  assert.match(prompts, /targeting only/, 'run-prompts.mjs does not label it targeting only');
+  assert.match(prompts, /context tier/, 'run-prompts.mjs does not name the context tier');
+  assert.match(prompts, /numbers are targeting only/, 'run-prompts.mjs drops the quantified-claims caveat');
 });
 
 // ── batch-runner.sh: the flags, the context file and the degraded paths ────

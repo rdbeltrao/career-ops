@@ -178,14 +178,14 @@ When gated in, scan the JD body (case-insensitive) for a statement, within one s
 
 ## Block B — Match with CV
 
-One table, one row per significant JD requirement, mapped to exact evidence in the primary files (`cv.md` first, then `article-digest.md`, `config/profile.yml`, `modes/_profile.md`). Block B **is** the requirement→evidence mapping for the whole report: never emit a second matrix that re-enumerates the same requirements, because nothing keeps two lists in sync and the first disagreement between them contradicts the report in a way no test can catch.
+One table, one row per significant JD requirement, mapped to exact evidence in the primary files (`cv.md` first, then `article-digest.md`, `config/profile.yml`, `modes/_profile.md`) or, for a qualitative fact, in the context tier (`modes/_context.md`; see **Match column — source-of-truth boundary** below). Block B **is** the requirement→evidence mapping for the whole report: never emit a second matrix that re-enumerates the same requirements, because nothing keeps two lists in sync and the first disagreement between them contradicts the report in a way no test can catch.
 
 Any flag lines from Block A's geo-mismatch and work-authorization checks sit above the table, unchanged.
 
 ### Two-pass rule (generation order is the mechanism)
 
 1. **Pass 1 — JD only.** Fill `Requirement`, `JD signal` and `Importance` from the JD text alone, **before reading `cv.md`**.
-2. **Pass 2 — CV.** Then read `cv.md` (and the other primary files) and fill `Match` and `Evidence / gap`. **Importance is never revised in pass 2.**
+2. **Pass 2 — CV and context.** Then read `cv.md` (and the other primary files), then `modes/_context.md` for qualitative facts the CV does not carry, and fill `Match` and `Evidence / gap`. **Importance is never revised in pass 2.** Before writing `⚠️ Partial` or `❌ Missing` in any row, check `modes/_context.md` for that requirement (its domains, responsibilities, practices, skills, talks and publications); when it carries a qualitative fact, the row cites it as `_context.md:` and the mark is `✅ Strong (context)` or `⚠️ Partial (context)`. A `❌ Missing` row means neither the primary files nor `_context.md` carry the fact. `modes/_context.md` is loaded with the other personalization files before Block A, because its preferences and deal-breakers feed the gates; pass 1 still writes `Importance` from the JD text alone, and a requirement the context file happens to cover is not more important for that.
 
 `_shared.md`'s Sources of Truth table marks the primary files `ALWAYS`, which declares **scope** — what may ever back a claim — not read order. Pass 1 is the one point in the evaluation where read order carries meaning, so it is stated here rather than left to that table.
 
@@ -200,9 +200,9 @@ Column order is deliberate: what is asked, how much it weighs, whether the candi
 
 - **Requirement** — one JD requirement per row. Include requirements the candidate **meets**, not only gaps: that is what makes Importance readable as "significance in this posting" rather than "list of my problems".
 - **Importance** — the band plus its evidence tier in parentheses: `critical (stated)`, `high (structural)`, `meaningful (inferred)`.
-- **Match** — ✅ Strong / ⚠️ Partial / ❌ Missing / ➖ N/A. Use `➖ N/A` only where the requirement is not a claim about the candidate's skills at all and the answer is still worth showing — a work-authorization or language gate the candidate already satisfies, for instance. A requirement that simply does not apply is omitted rather than displayed as a shrug.
+- **Match** — ✅ Strong / ⚠️ Partial / ❌ Missing / ➖ N/A. A requirement that only `modes/_context.md` meets, with a qualitative fact, is `✅ Strong (context)` or `⚠️ Partial (context)`, never `❌ Missing`; the suffix tells the reader the CV they will send does not show it yet, and the Machine Summary keeps plain `strong` / `partial`. Use `➖ N/A` only where the requirement is not a claim about the candidate's skills at all and the answer is still worth showing — a work-authorization or language gate the candidate already satisfies, for instance. A requirement that simply does not apply is omitted rather than displayed as a shrug.
 - **JD signal** — the wording the importance rests on: a **verbatim** JD quote for `stated`, a section/structure reference for `structural`, `—` for `inferred` (which is `jd_signal: null` in the Machine Summary).
-- **Evidence / gap** — the exact line backing a ✅, quoted from whichever primary file carries it (`cv.md`, `article-digest.md`, `config/profile.yml`, `modes/_profile.md`) and naming that file when it is not `cv.md`; otherwise what is missing.
+- **Evidence / gap** — the exact line backing a ✅, quoted from whichever primary file carries it (`cv.md`, `article-digest.md`, `config/profile.yml`, `modes/_profile.md`) and naming that file when it is not `cv.md`; a qualitative fact from the context tier is quoted with the prefix `_context.md:` and with any figure in that line left out; otherwise what is missing.
 
 **Row budget:** at most **12 rows**. A 30-bullet JD otherwise emits 30 rows on every evaluation, batch and economy tiers included, for a table nobody reads to the end. When the JD yields more, keep the highest-importance rows and, within the band that straddles the cut, unmet before met — then note the count dropped (`+7 lower-importance requirements not listed`).
 
@@ -253,7 +253,13 @@ The asymmetry is deliberate and runs one way. Inflated importance on a requireme
 
 ### Match column — source-of-truth boundary
 
-`Match` is a claim about the candidate, so it comes from **primary** files only: `cv.md`, `article-digest.md`, `config/profile.yml`, `modes/_profile.md`. A `✅ Strong` may **not** rest on an `interview-prep/story-bank.md` figure that is marked, or defaults to, `derived-unverified` or `user-cannot-confirm` — such a row is `⚠️ Partial`.
+`Match` is a claim about the candidate, so it comes from the **primary** files (`cv.md`, `article-digest.md`, `config/profile.yml`, `modes/_profile.md`) and from the **context tier** (`modes/_context.md`), under the rule in `AGENTS.md` → Source-of-Truth Boundary → Context tier:
+
+- A **qualitative** fact in `modes/_context.md` — a role held, an employer, a domain, a responsibility, a skill, a practice, a language, a talk, a publication — backs a `✅ Strong (context)` or `⚠️ Partial (context)` row, cited as `_context.md:`. Marking such a requirement `❌ Missing` because `cv.md` is silent is wrong: the CV is the document the candidate sends, not the record of what they have done.
+- A **quantified** claim in `modes/_context.md` — a number, percentage, amount, team size, duration or ratio — is targeting only. It is never quoted in `Evidence / gap`, and a `✅ Strong` never rests on it; a row that needs the figure to be strong is `⚠️ Partial (context)` with the qualitative fact cited and the figure left out. A figure is evidence only when `cv.md` or `article-digest.md` carries it.
+- Nothing from `modes/_context.md` reaches the tailored CV, a letter or a form answer because a row cited it; `verify-cv-facts.mjs` does not read the file. When Block E wants a context fact in the CV, it goes through the user's confirmation in the conversation, never through an edit to `cv.md` made to make a row pass.
+
+A `✅ Strong` may **not** rest on an `interview-prep/story-bank.md` figure that is marked, or defaults to, `derived-unverified` or `user-cannot-confirm` — such a row is `⚠️ Partial`.
 
 A compact match table is exactly the surface where an unverified number gets laundered into an established fact: it is scannable, it looks authoritative, and users paste it into interview prep. See the Source-of-Truth Boundary in `AGENTS.md`, which names this drift path.
 
@@ -269,7 +275,7 @@ The Importance column does **not** affect the 1-5 global score — it is a prior
 
 **Gaps** section with a mitigation strategy for each. For each gap:
 1. Is it a hard blocker or a nice-to-have?
-2. Can the candidate demonstrate adjacent experience?
+2. Can the candidate demonstrate adjacent experience? Look in `cv.md`, `article-digest.md` and the qualitative facts of `modes/_context.md`; name the file the experience comes from.
 3. Is there a portfolio project that covers this gap?
 4. Concrete mitigation plan (phrase for cover letter, quick project, etc.)
 
@@ -278,7 +284,7 @@ The Importance column does **not** affect the 1-5 global score — it is a prior
 ## Block C — Level and Strategy
 
 1. **Level detected** in the JD vs **candidate's natural level for that archetype**
-2. **"Sell senior without lying" plan**: specific phrases adapted to the archetype, concrete achievements to highlight, how to position founder experience as an advantage
+2. **"Sell senior without lying" plan**: specific phrases adapted to the archetype, concrete achievements to highlight, how to position founder experience as an advantage. The level call may rest on roles, scope and responsibilities recorded in `modes/_context.md` (cite `_context.md:`); the figures it names come from `cv.md` or `article-digest.md` only, so a team size or head count that exists only in `_context.md` is described in words ("a group of several teams"), never as a number
 3. **"If they downlevel me" plan**: accept if compensation is fair, negotiate 6-month review, clear promotion criteria
 
 ## Block D — Comp and Demand
@@ -371,7 +377,7 @@ Top 5 changes to CV + Top 5 changes to LinkedIn to maximize match.
 
 ## Block F — Interview Plan
 
-6-10 STAR+R stories mapped to JD requirements (STAR + **Reflection**):
+6-10 STAR+R stories mapped to JD requirements (STAR + **Reflection**). A story may be framed on a qualitative fact from `modes/_context.md` (the role, the domain, the practice, the talk), named as `_context.md:` in the table; every number inside a story comes from `cv.md` or `article-digest.md`, and a story whose result is only a `_context.md` figure states the result without the figure.
 
 | # | JD Requirement | STAR+R Story | S | T | A | R | Reflection |
 |---|-----------------|-----------------|---|---|---|---|------------|

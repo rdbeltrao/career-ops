@@ -44,8 +44,10 @@ Global score.
 ## The candidate context
 
 Jev reads `modes/_context.md` from the data root whole, as `state.profile`.
-That file is a **targeting source, never evidence**: it steers scores and
-framing, and a number that exists only there still fails the CV fact gate.
+That file is the **context tier** of the Source-of-Truth Boundary in
+`AGENTS.md`: the A-H evaluation may cite its qualitative facts as evidence,
+its numbers only steer scores and framing, and a number that exists only
+there still fails the CV fact gate. Jev itself reads it whole as the profile.
 When the file is absent the scripts fall back to `cv.md` followed by the
 `config/profile.yml` text and print one line on stderr:
 
