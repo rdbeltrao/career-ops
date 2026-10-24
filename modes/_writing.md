@@ -120,3 +120,33 @@ _If `voice-dna.md` exists, its §3 Banned List is the canonical, fuller version 
 - "Cut p95 latency from 2.1s to 380ms" beats "improved performance"
 - "Postgres + pgvector for retrieval over 12k docs" beats "designed scalable RAG architecture"
 - Name tools, projects, and customers when allowed
+
+---
+
+## Outreach and comment rules
+
+These rules bind every short text the candidate pastes into LinkedIn or a chat box: connection notes, outreach messages, networking messages, post comments and reposts (`contacto`, the referral variant of `email`, `engage`). They sit on top of the Voice DNA guardrail and the Professional Writing rules above; where a mode names a tighter limit, the tighter one wins.
+
+- **Length.** 90 to 140 words per message. A connection note stays under 300 characters, and under the account tier's limit when the mode names a lower one (`contacto`: 200 characters on a free account).
+- **One number at most, and only a confirmed one.** Confirmed means it is in `cv.md` or `article-digest.md`, or the candidate stated it in this conversation. A figure that exists only in `modes/_context.md`, `modes/_profile.md` or a story-bank entry without provenance is not confirmed and stays out.
+- **Honest reason before facts.** The first thing the reader learns is why the candidate writes to them; the facts about the candidate come after, in prose. No "I hope this finds you well", no "I am passionate about", no CV bullets, no lists of tools.
+- **Never ask for a job.** Ask for a conversation, a referral, the name of the right person, or a look at an application. One ask per message, phrased as a question.
+- **Never write for the candidate to a colleague at their current employer about leaving.** Peers at the current employer are out of scope for outreach and for the networking plan.
+- **Never claim the candidate read, used or admired something unless they said so.** When nothing is known about the person, the "why you" paragraph is about the company or the product instead, from the posting or the company's own pages.
+- **A referral message names the specific opening and its title.** "Any role" asks the reader to run the candidate's search for them.
+- **Comments** add one thing in 40 to 90 words: an experience, a counterpoint, a concrete example, or a question that moves the thread. Kind in every line; recruiters read them. No "Great post", no restating the post, no hashtags, no links to the candidate's own material. Never criticise recruiters, interview processes or companies by name. Nothing internal about the current employer: no customers, incidents or people.
+- **Structures** live in `templates/outreach.md` (messages and notes) and `templates/posts.md` (comments, reposts, posts). They are paragraph roles in a fixed order, never text to copy.
+- **Drafts only.** The candidate sends, connects, posts, comments and follows. No mode does, and no mode records who accepted or ignored.
+
+---
+
+## Interests in candidate-facing text
+
+The "why this role", "why this company" and "what are you looking for" material in a cover letter, an outreach message, a form answer or an interview answer comes from two user-layer sources when they exist, plus whatever the candidate says in this conversation:
+
+- `modes/_context.md`: the candidate's fit profile (target role, location and language, preferences, deal-breakers, what a strong and a weak match look like). It is a **targeting source, never evidence**: it steers what to emphasise and never supplies a fact, a number or a claim for a draft. The fact gate stays `cv.md` and `article-digest.md`; a number that lives only in `modes/_context.md` does not pass it.
+- `config/profile.yml` → `interests` (`role_balance`, `team_size`, `team_type`, `domains`, `ways_of_working`, `learning`), dated by `recorded_on` and `confirmed_on`, and `preferences` with its own `confirmed_on`.
+
+**Staleness rule.** When `confirmed_on` is more than 90 days before today, say so in one line and ask the candidate to confirm before an interest decides a paragraph; a confirmation in this conversation counts for the rest of it. `node render-context.mjs --section interests` prints the block with its `STALE` marker; without the script, compare the date by hand. In an unattended run (`modes/_shared.md` → **Unattended runs**) do not build on a stale interest: leave that paragraph to the candidate's own answer and name the staleness in the closing line.
+
+A missing `modes/_context.md` or `interests` block is not an error. Note it once and continue from `modes/_profile.md` and the candidate's answers. The candidate's own words always win over both files.
