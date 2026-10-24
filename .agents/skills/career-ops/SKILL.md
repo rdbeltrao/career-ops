@@ -8,7 +8,7 @@ description: >-
 arguments: mode
 user_invocable: true
 user-invocable: true
-argument-hint: "[scan | discover | deep | pdf | ats | text | latex | latex-tex | cover | email | add | expand | eu-swe | oferta | ofertas | apply | triage | batch | tracker | agent-inbox | pipeline | contacto | training | project | interview-prep | interview | master-profile | intake | retro | interview/plan | interview/practice | interview/debrief | interview-redflag | patterns | calibrate | offer-prep | titles | upskill | followup | reply-watch | outcome | update]"
+argument-hint: "[scan | discover | deep | pdf | ats | text | latex | latex-tex | cover | email | add | expand | eu-swe | oferta | ofertas | apply | triage | batch | tracker | agent-inbox | pipeline | contacto | training | project | interview-prep | interview | master-profile | intake | retro | interview/plan | interview/practice | interview/debrief | interview-redflag | patterns | calibrate | offer-prep | titles | upskill | followup | reply-watch | outcome | update | notion-sync]"
 license: MIT
 ---
 
@@ -92,6 +92,14 @@ Determine the mode from `$mode`:
 | `interview-redflag` | `interview-redflag` |
 | `update` | `update` |
 | `cover` | `cover` |
+| `notion-sync` | `notion-sync` |
+
+<!-- TRACK C (orchestrator merge step M1): once modes/network.md and modes/engage.md
+     exist, add these two rows to the table above, directly after `notion-sync`:
+       | `network` | `network` |
+       | `engage` | `engage` |
+     and `network | engage` to the argument-hint, the discovery menu and the
+     standalone Context Loading list (second placeholder below). -->
 
 **Auto-pipeline detection:** If `$mode` is not a known sub-command AND contains JD text (keywords: "responsibilities", "requirements", "qualifications", "about the role", "we're looking for", company name + role) or a URL to a JD, execute `auto-pipeline`.
 
@@ -190,10 +198,15 @@ Available commands:
   /career-ops followup  → Follow-up cadence tracker: flag overdue, generate drafts
   /career-ops outcome   → Record application outcome & archive artifacts
   /career-ops update    → Update career-ops system files with diff preview + compat check
+  /career-ops notion-sync → Sync your Notion career records into the data root (diff first, writes only after yes; never writes Notion)
 
 Inbox: add URLs to data/pipeline.md → /career-ops pipeline
 Or paste a JD directly to run the full pipeline.
 ```
+
+<!-- TRACK C (orchestrator merge step M1): add to the menu above, after notion-sync:
+       /career-ops network   → Weekly LinkedIn connection plan from the tracker and pipeline (node network-plan.mjs; never connects)
+       /career-ops engage    → Draft comments for today's LinkedIn posts (never posts) -->
 
 ---
 
@@ -217,7 +230,11 @@ Applies to: `auto-pipeline`, `oferta`, `ofertas`, `pdf`, `text`, `contacto`, `ap
 
 Read `modes/_profile.md` (if exists) + `modes/_context.md` (if exists; targeting only, never evidence) + `modes/_custom.md` (if exists) + `modes/{mode}.md`
 
-Applies to: `tracker`, `agent-inbox`, `deep`, `interview-prep`, `interview`, `master-profile`, `regional/eu-swe`, `interview/plan`, `interview/practice`, `interview/debrief`, `latex`, `latex-tex`, `training`, `project`, `patterns`, `titles`, `upskill`, `followup`, `reply-watch`, `outcome`, `cover`, `email`, `add`, `offer-prep`, `discover`, `intake`, `ats`, `calibrate`, `retro`, `expand`, `interview-redflag`, `update`
+Applies to: `tracker`, `agent-inbox`, `deep`, `interview-prep`, `interview`, `master-profile`, `regional/eu-swe`, `interview/plan`, `interview/practice`, `interview/debrief`, `latex`, `latex-tex`, `training`, `project`, `patterns`, `titles`, `upskill`, `followup`, `reply-watch`, `outcome`, `cover`, `email`, `add`, `offer-prep`, `discover`, `intake`, `ats`, `calibrate`, `retro`, `expand`, `interview-redflag`, `update`, `notion-sync`
+
+<!-- TRACK C (orchestrator merge step M1): append `network`, `engage` to the
+     "Applies to" list directly above (standalone context: _profile.md, _context.md,
+     _custom.md and the mode file; never subagent-delegated). -->
 
 ### Modes that load only their mode file
 

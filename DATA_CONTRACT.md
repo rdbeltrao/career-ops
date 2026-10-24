@@ -139,6 +139,7 @@ These files contain system logic, scripts, templates, and instructions that impr
 | `modes/agent-inbox.md` | Agent inbox (queued requests) instructions |
 | `modes/reply-watch.md` | Employer reply classification instructions |
 | `modes/retro.md` | Session review instructions: propose rules for `learn.mjs` to check |
+| `modes/notion-sync.md` | Notion career-records sync instructions: fetch the mapped pages, propose the context layer files, diff first through `notion-sync-apply.mjs`, write only after an explicit yes, never write Notion |
 | `modes/update.md` | System update instructions |
 | `modes/ar/*` | Arabic language modes |
 | `modes/da/*` | Danish language modes |
@@ -173,6 +174,7 @@ These files contain system logic, scripts, templates, and instructions that impr
 | `plugin-install.mjs` / `plugin-audit.mjs` / `validate-plugin-registry.mjs` | Plugin install/audit/registry-validation utilities |
 | `config/plugins.example.yml` | Plugin activation template (seed for `config/plugins.yml`) |
 | `config/jev-criteria.example.yml` | Jev pre-screen criteria template (seed for `config/jev-criteria.yml`; the default `node jev-score.mjs` reads when the user file is absent) |
+| `config/notion-map.example.yml` | Notion page map template for the `notion-sync` mode (seed for `config/notion-map.yml`; placeholder URLs only) |
 | `opencode.example.json` | OpenCode project config template (seed for `opencode.json`; ships Playwright MCP registration) |
 | `batch/batch-prompt.md` | Batch worker prompt |
 | `batch/batch-runner.sh` | Batch orchestrator |
