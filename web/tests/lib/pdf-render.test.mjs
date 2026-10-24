@@ -64,14 +64,14 @@ test("spawnGeneratePdf: clean exit -> ok:true, invokes generate-pdf.mjs with --a
   const spawnFn = (execPath, args, opts) => { calls.push({ execPath, args, opts }); return fakeChild({ exitCode: 0 }); };
 
   // When spawning the render
-  const result = await spawnGeneratePdf({ spawnFn, execPath: "node", root: "/root", html: "/root/x.html", finalPdf: "/root/output/x.pdf", format: "letter", reportNum: "018" });
+  const result = await spawnGeneratePdf({ spawnFn, execPath: "node", root: "/data", codeRoot: "/root", html: "/root/x.html", finalPdf: "/root/output/x.pdf", format: "letter", reportNum: "018" });
 
   // Then it reports ok:true and invoked generate-pdf.mjs with the expected args
   assert.deepEqual(result, { ok: true, stderr: "" });
   assert.equal(calls.length, 1);
   assert.match(calls[0].args[0], /generate-pdf\.mjs$/);
   assert.deepEqual(calls[0].args.slice(1), ["/root/x.html", "/root/output/x.pdf", "--format=letter", "--report=018", "--allow-reorder"]);
-  assert.equal(calls[0].opts.cwd, "/root");
+  assert.equal(calls[0].opts.cwd, "/root", "the script runs from the checkout, not the data root");
 });
 
 test("spawnGeneratePdf: non-zero exit -> ok:false, stderr surfaced", async () => {

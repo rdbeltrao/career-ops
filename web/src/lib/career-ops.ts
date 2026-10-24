@@ -77,6 +77,11 @@ export function careerOpsRoot(): string {
  * (Explore discovery, doctor, portals verify, followups, run) report the
  * checkout as missing. CAREER_OPS_CODE_ROOT selects the checkout explicitly.
  */
+/** The engine checkout (scripts, modes, templates): distinct from careerOpsRoot(), the data root. */
+export function careerOpsCodeRoot(): string {
+  return resolveCodeRoot(process.cwd(), process.env);
+}
+
 export function rootScript(nameNoExt: string): string {
   // resolveRootScript() already returns the absolute `<checkout>/<name>.mjs`, and
   // its path.join carries the Turbopack ignore: the core checkout is selected at

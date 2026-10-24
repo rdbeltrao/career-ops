@@ -15,6 +15,7 @@
  */
 import fs from "node:fs";
 import path from "node:path";
+import { resolveCodeRoot } from "./core/code-root.mjs";
 
 /**
  * @typedef {Object} PdfRunSignals
@@ -93,7 +94,7 @@ export function writeCvHtml({ pdfPaths, html }) {
  * @param {{spawnFn: Function, execPath: string, root: string, html: string, finalPdf: string, format: "letter"|"a4", reportNum: string}} args
  * @returns {Promise<{ok: boolean, stderr: string}>}
  */
-export function spawnGeneratePdf({ spawnFn, execPath, root, html, finalPdf, format, reportNum }) {
+export function spawnGeneratePdf({ spawnFn, execPath, root, html, finalPdf, format, reportNum, codeRoot = resolveCodeRoot(process.cwd()) }) {
   return new Promise((resolve) => {
     const child = spawnFn(
       execPath,
@@ -101,8 +102,8 @@ export function spawnGeneratePdf({ spawnFn, execPath, root, html, finalPdf, form
       // from the template's fixed markup order, so this guard would otherwise
       // hard-fail every web-triggered render — same bypass a human already
       // applies manually via the CLI when this diverges.
-      [path.join(root, "generate-pdf.mjs"), html, finalPdf, `--format=${format}`, `--report=${reportNum}`, "--allow-reorder"],
-      { cwd: root },
+      [path.join(codeRoot, "generate-pdf.mjs"), html, finalPdf, `--format=${format}`, `--report=${reportNum}`, "--allow-reorder"],
+      { cwd: codeRoot },
     );
     let stderr = "";
     child.stderr.on("data", (d) => { stderr += d.toString(); });
@@ -120,9 +121,9 @@ export function spawnGeneratePdf({ spawnFn, execPath, root, html, finalPdf, form
  * @param {{spawnFn: Function, execPath: string, root: string, reportNum: string}} args
  * @returns {Promise<{ok: boolean, code: number | null, data: {error?: string} | null, stderr: string}>}
  */
-export function markTrackerReady({ spawnFn, execPath, root, reportNum }) {
+export function markTrackerReady({ spawnFn, execPath, root, reportNum, codeRoot = resolveCodeRoot(process.cwd()) }) {
   return new Promise((resolve) => {
-    const child = spawnFn(execPath, [path.join(root, "mark-pdf-ready.mjs"), reportNum, "--json"], { cwd: root });
+    const child = spawnFn(execPath, [path.join(codeRoot, "mark-pdf-ready.mjs"), reportNum, "--json"], { cwd: codeRoot });
     let stdout = "";
     let stderr = "";
     child.stdout.on("data", (d) => { stdout += d.toString(); });

@@ -9,7 +9,7 @@ import { cliSubstitutionNotice, cliUnavailableError, resolveCliOrFallback } from
 import { localISODate } from "@/lib/followups";
 import { accumulateTokens, createAgentTextJoiner, isFatalGenericStderr, killMsForKind, timeoutMessage } from "@/lib/run-cli-support.mjs";
 import { spawnHeadlessCli } from "@/lib/spawn-cli.mjs";
-import { careerOpsRoot, readMemory, findReportFile, readInbox, readScanDates, readLanguageConfig } from "@/lib/career-ops";
+import { careerOpsRoot, readMemory, findReportFile, readInbox, readScanDates, readLanguageConfig, careerOpsCodeRoot } from "@/lib/career-ops";
 import { resolveCodeRoot } from "@/lib/core/code-root.mjs";
 import { resolvePdfPaths, type PdfPaths } from "@/lib/pdf-paths.mjs";
 import { renderAndMarkPdf, writeCvHtml, pdfRunOutcome } from "@/lib/pdf-render.mjs";
@@ -148,7 +148,7 @@ export async function POST(req: Request) {
   // (#4034). Only pdf fills a template, so nothing else pays for the lookup.
   // The root is passed, not re-derived: a relative CAREER_OPS_PROFILE resolves
   // against it, and `process.cwd()` here is `<core>/web` (see cv-template.mjs).
-  const cvTemplate = kind === "pdf" ? await resolveCvTemplate(careerOpsRoot()) : undefined;
+  const cvTemplate = kind === "pdf" ? await resolveCvTemplate(careerOpsCodeRoot()) : undefined;
   const prompt = buildPrompt({
     kind,
     input,

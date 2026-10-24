@@ -1,6 +1,6 @@
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { careerOpsRoot } from "@/lib/career-ops";
+import { careerOpsRoot, careerOpsCodeRoot } from "@/lib/career-ops";
 import { normalizeTextKey as fallbackKey } from "./normalize-text-key.mjs";
 
 /**
@@ -36,7 +36,7 @@ let warned = false;
 
 /** Resolve the core's normalizeTextKey for the current root, or the fallback. */
 export async function getNormalizeTextKey(): Promise<NormalizeTextKey> {
-  const file = path.join(careerOpsRoot(), "tracker-parse.mjs");
+  const file = path.join(careerOpsCodeRoot(), "tracker-parse.mjs");
   const hit = modCache.get(file);
   if (hit) return hit;
   try {
