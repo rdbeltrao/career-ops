@@ -1,6 +1,6 @@
 # local-paths.txt — files this fork owns that upstream career-ops does not ship.
 # One repo-relative path per line; a trailing slash covers a directory.
-docs/superpowers/
+fork/
 jev-score.mjs
 jev-rank.mjs
 render-context.mjs

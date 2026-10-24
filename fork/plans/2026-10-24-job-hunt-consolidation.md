@@ -8,7 +8,7 @@
 
 **Tech Stack:** Node 22 (built-in `fetch`, `node:test`), existing deps only (`js-yaml`, `playwright`, `undici`, `dotenv`); Python 3.12 + `uv` + `pytest` in job-hunt; OpenRouter decisions API (`typesafe/jev-1.13`) with chat-completions fallback.
 
-**Spec:** `docs/superpowers/specs/2026-10-24-job-hunt-consolidation-design.md`
+**Spec:** `fork/specs/2026-10-24-job-hunt-consolidation-design.md`
 
 ## Global Constraints
 
