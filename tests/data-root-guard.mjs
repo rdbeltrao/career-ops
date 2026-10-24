@@ -34,9 +34,12 @@ export const GUARDED_PATHS = [
   'portals.yml',
   'config/profile.yml',
   'config/plugins.yml',
+  'config/jev-criteria.yml',
+  'config/notion-map.yml',
   'modes/_profile.md',
   'modes/_custom.md',
   'modes/_brief.md',
+  'modes/_context.md',
   'data',
   'reports',
   'interview-prep',
@@ -44,6 +47,10 @@ export const GUARDED_PATHS = [
   'output',
   'jds',
   'writing-samples',
+  // Already inside `data` and `jds` above; listed because USER_PATHS names
+  // them on their own, and the guard holds the two lists to each other.
+  'data/jd-index.tsv',
+  'jds/feeder',
 ];
 
 /**

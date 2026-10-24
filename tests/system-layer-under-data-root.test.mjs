@@ -65,9 +65,9 @@ try {
 
   // 3. Source-level guard against the class: a variable bound to getCareerOpsRoot()
   //    must not be joined onto a System Layer directory. modes/_profile.md,
-  //    _custom.md and _brief.md are the documented exceptions — those specific
-  //    files ARE user data that happens to live under modes/.
-  const USER_FILES_IN_MODES = /^_(profile|custom|brief)\.md$/;
+  //    _custom.md, _brief.md and _context.md are the documented exceptions —
+  //    those specific files ARE user data that happens to live under modes/.
+  const USER_FILES_IN_MODES = /^_(profile|custom|brief|context)\.md$/;
   const offenders = [];
   for (const file of readdirSync(ROOT).filter(f => f.endsWith('.mjs'))) {
     const src = readFileSync(join(ROOT, file), 'utf-8');

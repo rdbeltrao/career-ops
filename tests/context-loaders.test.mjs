@@ -96,7 +96,9 @@ import { pathToFileURL } from 'node:url';
 import { getBash, toBashPath } from './helpers.mjs';
 
 const or = await import(pathToFileURL(join(ROOT, 'openrouter-runner.mjs')).href);
-const { readMachineSummary } = await import(pathToFileURL(join(ROOT, 'web', 'src', 'lib', 'machine-summary.mjs')).href);
+// The updater never ships web/; a CLI-only checkout has no machine-summary.mjs (#3269).
+const WEB_LIB = join(ROOT, 'web', 'src', 'lib');
+const { readMachineSummary } = existsSync(WEB_LIB) ? await import(pathToFileURL(join(WEB_LIB, 'machine-summary.mjs')).href) : { readMachineSummary: null };
 
 test('SKILL.md loads modes/_context.md after _profile.md and before _custom.md, for every mode group and the subagent template', () => {
   const skill = read('.agents/skills/career-ops/SKILL.md');
@@ -185,7 +187,7 @@ test('jevPrescreen degrades to "not run" without the module, a key or a working 
 
 const REPORT = (yaml) => `# Evaluation: Acme -- Engineer\n\n**Score:** 4.1/5\n\n## Machine Summary\n\n\`\`\`yaml\n${yaml}\n\`\`\`\n\n## A) Role Summary\n`;
 
-test('readMachineSummary returns the jev block, or null when it is null or absent', () => {
+test('readMachineSummary returns the jev block, or null when it is null or absent', { skip: !readMachineSummary && 'no web/ in this checkout' }, () => {
   const withJev = readMachineSummary(REPORT([
     'company: "Acme"', 'final_decision: "Apply"', 'score: 4.1',
     'jev:', '  model: "typesafe/jev-1.13"', '  fit: 79', '  score: 4.2', '  verdict: "apply"', '  blocking: []',
@@ -211,6 +213,7 @@ test('the eval scripts and the web evaluate prompt load modes/_context.md as tar
     assert.match(src, /targeting only, never evidence/, `${file} does not label the context as targeting only`);
     assert.match(src, /_context\.md not found/, `${file} has no one-line notice for the absent file`);
   }
+  if (!existsSync(WEB_LIB)) return;
   const prompts = read('web/src/lib/run-prompts.mjs');
   assert.match(prompts, /modes\/_context\.md/, 'run-prompts.mjs does not name modes/_context.md');
   assert.match(prompts, /targeting only/, 'run-prompts.mjs does not label it targeting only');
@@ -263,11 +266,10 @@ function batchFixture(t, { jevStub = true, context = false } = {}) {
   if (context) writeFileSync(join(dir, 'modes', '_context.md'), '# Fit profile\n\nCONTEXT_SENTINEL_TARGETING\n');
   if (jevStub) {
     writeFileSync(join(dir, 'jev-score.mjs'), [
-      "import { readFileSync, realpathSync, writeFileSync } from 'node:fs';",
-      "import { fileURLToPath } from 'node:url';",
-      '// Main guard: the runner imports this file looking for formatPrescreenMarkdown.',
-      '// realpath on both sides: macOS tmpdir is /var/..., a symlink to /private/var/...',
-      'if (realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url))) {',
+      "import { readFileSync, writeFileSync } from 'node:fs';",
+      '// The runner also imports this file (looking for formatPrescreenMarkdown) from a',
+      '// `node -e` script with no --job flag, so the flag is what says "run as the CLI".',
+      "if (process.argv.includes('--job')) {",
       "  const jobPath = process.argv[process.argv.indexOf('--job') + 1];",
       "  writeFileSync(process.env.CAPTURE_DIR + '/jev-job.json', readFileSync(jobPath, 'utf-8'));",
       "  const mode = process.env.JEV_STUB_MODE || 'apply';",

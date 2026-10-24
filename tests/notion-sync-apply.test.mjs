@@ -8,12 +8,13 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, relative } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { loadYaml } from '../lib/yaml-document.mjs';
 import { loadValidatedProfile } from '../lib/career-profile.mjs';
+import { listTree } from '../lib/walk-tree.mjs';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const SCRIPT = join(ROOT, 'notion-sync-apply.mjs');
@@ -98,14 +99,7 @@ function fixture(t) {
 
 function snapshot(dir) {
   const out = {};
-  const walk = (d) => {
-    for (const name of readdirSync(d)) {
-      const p = join(d, name);
-      if (statSync(p).isDirectory()) walk(p);
-      else out[relative(dir, p)] = readFileSync(p, 'utf-8');
-    }
-  };
-  walk(dir);
+  for (const file of listTree(dir)) out[relative(dir, file)] = readFileSync(file, 'utf-8');
   return out;
 }
 
