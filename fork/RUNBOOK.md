@@ -11,7 +11,8 @@ Last verified 2026-10-24. Paths are the ones on the machine where the fork was s
 | Runner defaults | `~/Projects/career-ops/.env` (gitignored) | `CAREER_OPS_MODEL=anthropic/claude-sonnet-5.5`, `CAREER_OPS_MODEL_TIMEOUT_MS=300000`, `CAREER_OPS_MAX_TOKENS=16384`, `CAREER_OPS_REASONING=low`. No key in the file. |
 | OpenRouter key | macOS Keychain, service `OPENROUTER_API_KEY_JOB_SEARCH` (fallback `OPENROUTER_API_KEY`) | Read by `lib/openrouter-key.mjs`; env or `.env` values win when present. |
 | Agent CLI | `claude`, recorded in the data root `.env` as `CAREER_OPS_CLI=claude` | Used by `rank-pipeline.mjs`, `doctor.mjs`, the web UI and the batch runner. |
-| LinkedIn feeder | `~/Projects/job-hunt` (Python, `uv`) | `searches.yaml`, `companies.yaml` and `creators.yaml` are symlinks into the data root. Logged-in browser profile at `~/.job-hunt/browser-profile`. |
+| LinkedIn searches | `providers.local/linkedin-browser.mjs` in the checkout; one `provider: linkedin-browser` entry per saved search in `portals.yml` (data root) | Fork-local, never offered upstream. Logged-in browser profile at `~/.job-hunt/browser-profile` (or `LINKEDIN_PROFILE_DIR`), signed in once with `node linkedin-login.mjs`. Opened job ids in `data/linkedin-seen.json`. |
+| LinkedIn comments | `~/Projects/job-hunt` (Python, `uv`), `jobs engage` only | `creators.yaml` is a symlink into the data root. Shares the browser profile above. The Python fetch is no longer needed. |
 
 Health check, any time:
 
@@ -25,21 +26,34 @@ Expected: all checks pass; the only warning is the optional web UI dependencies.
 
 Run these in order. Each step is safe to repeat; nothing here spends agent tokens except the optional chat step at the end.
 
-1. LinkedIn, through your own saved searches (needs the browser login once: `uv run python -m jobs login`):
+1. Sign in to LinkedIn once (a headed browser window opens on the login page; you type the credentials there, the script never does):
 
    ```bash
-   cd ~/Projects/job-hunt && uv run python -m jobs run --data-root ~/Projects/job-hunt-private
+   cd ~/Projects/career-ops && node linkedin-login.mjs
    ```
 
-   Fetches every enabled search in `searches.yaml` and every board in `companies.yaml`, then writes new openings as rows in `data/pipeline.md` with a JD file under `jds/feeder/`.
+   Exit 0 once the feed page shows, 1 after `LINKEDIN_LOGIN_TIMEOUT_MS` (default 300000). The profile keeps the session; repeat only when a scan reports a login wall. If Playwright has no Chromium yet: `npx playwright install chromium`.
 
-2. Company boards from `portals.yml` (141 tracked companies, zero tokens):
+2. Company boards and LinkedIn searches, both from `portals.yml` (zero tokens):
 
    ```bash
    cd ~/Projects/career-ops && node scan.mjs --since 14
    ```
 
-   Title, location, age and blacklist filters apply; survivors are appended to `data/pipeline.md` Pending.
+   Each saved LinkedIn search is a `tracked_companies` entry routed to the fork-local provider; paste the search URL from the browser, without its `currentJobId`:
+
+   ```yaml
+   tracked_companies:
+     - name: engineering-manager-germany-7d
+       provider: linkedin-browser
+       search_url: "https://www.linkedin.com/jobs/search/?f_TPR=r604800&f_WT=2%2C3&geoId=101282230&keywords=Engineering%20Manager&sortBy=DD"
+       max_pages: 3      # optional, 25 cards per page, default 3
+       enabled: true
+   ```
+
+   The HTTP boards run first; the LinkedIn searches run last, one at a time in random order, at a person's pace (1.5 to 4 s between cards, 5 to 10 s between pages). Keep the volume small: a few searches, 1 to 3 pages each, no cron. Each new card's detail pane is opened once; its id goes to `data/linkedin-seen.json` and is never reopened (delete the file to start over). Title, location, age and blacklist filters apply to every source; survivors are appended to `data/pipeline.md` Pending with `note: linkedin-browser {name}` for LinkedIn rows, and their JD is stored under `jds/feeder/linkedin-browser-{id}.json` so step 3 scores them without a fetch.
+
+   A login, checkpoint or authwall page stops the LinkedIn part at once with a message naming the page and `node linkedin-login.mjs`; nothing is retried, the HTTP boards are unaffected, and the error shows in the scan summary. `--dry-run` walks the pages but leaves the seen file alone. `LINKEDIN_HEADED=1` shows the browser; `LINKEDIN_DUMP_DIR=/some/dir` keeps the list and detail HTML a run saw, which is how a selector gets fixed after a LinkedIn redesign (turn the saved HTML into a fixture under `tests/fixtures/linkedin/`). `node scan.mjs --company <name>` runs one search.
 
 3. Jev pre-screen for every pending row without a `jev:` segment:
 
@@ -105,7 +119,7 @@ then `/career-ops engage` in chat with that file; record posted comments with `u
 - Notion career records: in a `claude` session with the Notion connector authorised, `/career-ops notion-sync`. It builds a proposal, shows the diff from `node notion-sync-apply.mjs --dry-run`, and writes `modes/_context.md`, the `preferences` and `interests` blocks, `article-digest.md`, `config/cv-facts.json` and `data/career-profile.yml` only after you say yes. Never writes to Notion.
 - Preferences by hand: edit `modes/_context.md` (what Jev reads) and the `preferences` and `interests` blocks in `config/profile.yml` (what the evaluation and drafts read); update `confirmed_on`, since modes ask again after 90 days. `node render-context.mjs` shows what the prompts will see.
 - Scoring wording: `config/jev-criteria.yml` in the data root. Keys and labels are the contract; the sentences are yours.
-- Search surface: `portals.yml` (`title_filter`, `location_filter`, `tracked_companies`, `search_queries`), `searches.yaml` for LinkedIn.
+- Search surface: `portals.yml` (`title_filter`, `location_filter`, `tracked_companies` including the `provider: linkedin-browser` entries, `search_queries`). `searches.yaml` in the Python repo is no longer read by anything in the daily run.
 - Commit the data root after a session: `cd ~/Projects/job-hunt-private && git add -A && git commit -m "..."`.
 
 ## Keeping up with upstream
