@@ -463,3 +463,16 @@ test('describeEmptyResponse names the all-reasoning budget exhaustion and falls 
   assert.equal(or.describeEmptyResponse(filtered, 8192), 'Empty response (finish_reason "content_filter")');
   assert.equal(or.describeEmptyResponse({}, 8192), 'Empty response (finish_reason "unknown")');
 });
+
+test('extractPostingUrl lifts a leading URL line from a pasted job and leaves other text alone', () => {
+  assert.deepEqual(or.extractPostingUrl('URL: https://x.test/j/1\nAcme — EM\nbody'), { url: 'https://x.test/j/1', rest: 'Acme — EM\nbody' });
+  assert.deepEqual(or.extractPostingUrl('Acme — EM\nURL: https://x.test/j/1'), { url: null, rest: 'Acme — EM\nURL: https://x.test/j/1' });
+  assert.deepEqual(or.extractPostingUrl(''), { url: null, rest: '' });
+});
+
+test('extractCompanyRole reads the report title with any dash and falls back to nulls', () => {
+  assert.deepEqual(or.extractCompanyRole('# Evaluation: Grafana Labs — Senior Engineering Manager\n\n**Score:** 4.0/5'), { company: 'Grafana Labs', role: 'Senior Engineering Manager' });
+  assert.deepEqual(or.extractCompanyRole('intro\n# Evaluation: n8n -- Engineering Manager | Remote\n'), { company: 'n8n', role: 'Engineering Manager | Remote' });
+  assert.deepEqual(or.extractCompanyRole('# Evaluation: Parloa - Senior Engineering Manager'), { company: 'Parloa', role: 'Senior Engineering Manager' });
+  assert.deepEqual(or.extractCompanyRole('no title here'), { company: null, role: null });
+});

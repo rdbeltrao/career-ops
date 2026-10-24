@@ -60,6 +60,8 @@ import { createAdmissionGate, formatSkipCounts } from './lib/admission-gate.mjs'
 import { localToday } from './lib/local-today.mjs';
 import { getCareerOpsRoot, getProfilePath } from './path-resolver.mjs';
 import { readMaskedContext } from './lib/context-evidence.mjs';
+import { markPipelineProcessed } from './lib/pipeline-processed.mjs';
+import { normalizeReportLink } from './tracker-links.mjs';
 import { SAMPLING_SEED, SAMPLING_TEMPERATURE } from './lib/sampling.mjs';
 import { isMainModule } from './lib/is-main-module.mjs';
 import { withJdArchiveSection } from './lib/jd-archive-section.mjs';
@@ -68,6 +70,9 @@ import { locateApplyReport } from './apply-scope.mjs';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const tracker = new TokenAccumulator();
 let activeModel = null;
+// The report cmdEvaluate last saved, so cmdPipeline can move the pipeline row
+// under Processed with its link and score.
+let lastSavedReport = null;
 
 // ---------------------------------------------------------------------------
 // .env loader
@@ -733,20 +738,17 @@ function readPipeline() {
   return pending;
 }
 
-// Tick the pending row whose URL is exactly `url`. The previous version matched
-// `- [ ] {url}.*`, so with `.../jobs/12` still pending above `.../jobs/1`,
-// finishing jobs/1 ticked jobs/12. It also rewrote the file with an unlocked,
-// truncating writeFileSync, which erased any row a scanner appended through
-// appendToPipeline in between. The URL is read the way readPipeline reads it.
-export async function markPipelineDone(url, { pipelinePath = path.join(DATA_ROOT, 'data', 'pipeline.md') } = {}) {
-  await withPipelineLock(pipelinePath, async () => {
-    if (!fs.existsSync(pipelinePath)) return;
-    const lines = fs.readFileSync(pipelinePath, 'utf-8').split('\n');
-    const i = lines.findIndex(line => /^- \[ \] /.test(line) && line.slice(6).split(' | ')[0].trim() === url);
-    if (i === -1) return;
-    lines[i] = lines[i].replace('- [ ]', '- [x]');
-    atomicWriteFile(pipelinePath, lines.join('\n'));
-  });
+// Move the pending row for `url` under Processed, through the one helper every
+// evaluator path shares (lib/pipeline-processed.mjs): matched by posting key,
+// written under the pipeline lock, with the report link and score when the
+// caller has them. An earlier version ticked the row in place with an
+// unlocked, truncating write and a prefix match that confused jobs/1 with
+// jobs/12; both faults are the helper's to prevent now.
+export async function markPipelineDone(url, { pipelinePath = path.join(DATA_ROOT, 'data', 'pipeline.md'), reportFile = null, score = 'N/A', pdf = '❌' } = {}) {
+  if (!fs.existsSync(pipelinePath)) return null;
+  const num = reportFile ? reportFile.match(/^(\d+)-/)?.[1] ?? null : null;
+  const reportLink = reportFile && num ? normalizeReportLink(`[${num}](reports/${reportFile})`, path.dirname(pipelinePath), DATA_ROOT) : '-';
+  return markPipelineProcessed(pipelinePath, [{ url, reportLink, score, pdf }]);
 }
 
 // Both writes go through the shared writers in scan.mjs rather than this
@@ -791,6 +793,39 @@ export async function addToPipeline(entries, config = {}, gate = createAdmission
   await appendToPipeline(admitted);
   await appendToScanHistory(admitted, localToday());
   return admitted.length;
+}
+
+/**
+ * A pasted job may start with `URL: https://...` (the line the feeder and the
+ * runbook put first). It is the posting URL for the report header and the
+ * tracker row, and it is dropped from the archived JD text.
+ *
+ * @param {string} text
+ * @returns {{ url: string|null, rest: string }}
+ */
+export function extractPostingUrl(text) {
+  const m = String(text ?? '').match(/^\s*URL:\s*(https?:\/\/\S+)\s*\n?/i);
+  if (!m) return { url: null, rest: String(text ?? '') };
+  return { url: m[1], rest: String(text).slice(m[0].length) };
+}
+
+/**
+ * Company and role from the report's own title line, `# Evaluation: {Company}
+ * — {Role}` (the dash may be an em dash, an en dash, `--` or ` - `). The slug
+ * guess from the JD text used to name a pasted evaluation "you" or "company",
+ * and the tracker row carried "(see report)" as the role, so merge-tracker had
+ * nothing to dedupe on (#fork).
+ *
+ * @param {string} result - the model's evaluation
+ * @returns {{ company: string|null, role: string|null }}
+ */
+export function extractCompanyRole(result) {
+  const m = String(result ?? '').match(/^#\s*(?:Evaluation|Evaluaci[oó]n|Bewertung):\s*(.+?)\s*(?:—|–|--| - |:)\s*(.+?)\s*$/m);
+  if (!m) return { company: null, role: null };
+  const clean = (s) => s.replace(/\*\*/g, '').replace(/\s+/g, ' ').trim();
+  const company = clean(m[1]); const role = clean(m[2]);
+  if (!company || !role || company.length > 80) return { company: null, role: null };
+  return { company, role };
 }
 
 function extractCompanySlug(text, url) {
@@ -865,6 +900,9 @@ async function cmdEvaluate(input, ctx) {
   // The posting text alone, for the report's verbatim archive: jdText gains a
   // `URL:` line for the model when the input is a link.
   let archiveText = input;
+  // The posting URL the report header and the tracker row carry: the link the
+  // user passed, or the `URL:` line at the top of a pasted job.
+  let postingUrl = typeof input === 'string' && input.startsWith('http') ? input : null;
 
   if (!input) {
     // Interactive paste mode
@@ -880,7 +918,9 @@ async function cmdEvaluate(input, ctx) {
       rl.close();
     }
     jdText = lines.join('\n');
-    archiveText = jdText;
+    const lifted = extractPostingUrl(jdText);
+    postingUrl = lifted.url;
+    archiveText = lifted.rest;
     if (!jdText.trim()) { console.log('No input provided.'); return null; }
   } else if (input.startsWith('http')) {
     console.log('Fetching job page...');
@@ -935,14 +975,18 @@ async function cmdEvaluate(input, ctx) {
     // Save report
     const today   = localToday();
     const num     = reservedNumbers[0];
-    const slug    = extractCompanySlug(jdText, typeof input === 'string' ? input : null);
+    const named   = extractCompanyRole(result);
+    const slug    = named.company
+      ? (named.company.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || extractCompanySlug(jdText, postingUrl))
+      : extractCompanySlug(jdText, postingUrl);
     const numStr  = formatReportNumber(num);
     const relPath = `reports/${numStr}-${slug}-${today}.md`;
+    lastSavedReport = null;
 
     // Extract Legitimacy from LLM output or fall back to placeholder
     const legitMatch = result.match(/\*\*Legitimacy:\*\*\s*([^\n]+)/);
     const legitLine  = legitMatch ? `**Legitimacy:** ${legitMatch[1].trim()}` : '**Legitimacy:** unconfirmed';
-    writeFile(relPath, `**URL:** ${input || '(pasted)'}\n${legitLine}\n\n${withJdArchiveSection(result, archiveText)}`);
+    writeFile(relPath, `**URL:** ${postingUrl || '(pasted)'}\n${legitLine}\n\n${withJdArchiveSection(result, archiveText)}`);
 
     // Capture the DENOMINATOR when the model writes one. The old pattern took
     // only the numeric prefix, so `Score: 8/10` yielded `8` and the cell became
@@ -966,16 +1010,20 @@ async function cmdEvaluate(input, ctx) {
     // documents for the drifted copies. The shared helper returns the `N/A`
     // sentinel (#1799), which merges as an unscored row instead of as nothing.
     const scoreStr    = normalizedTrackerScore(scoreMatch ? scoreMatch[1] : '');
-    const companyName = slug.replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+    const companyName = named.company ?? slug.replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+    const roleName    = named.role ?? '(see report)';
     const reportLink  = `[${numStr}](reports/${numStr}-${slug}-${today}.md)`;
-    const tsvLine     = `${num}\t${today}\t${companyName}\t(see report)\tEvaluated\t${scoreStr}\t❌\t${reportLink}\t\n`;
+    const cell        = (s) => String(s).replace(/[\t\r\n]+/g, ' ').trim();
+    const urlLabel    = postingUrl ? '\turl' : '';
+    const tsvLine     = `${num}\t${today}\t${cell(companyName)}\t${cell(roleName)}\tEvaluated\t${scoreStr}\t❌\t${reportLink}\t${postingUrl ? `\t${postingUrl}` : ''}\n`;
     const tsvFile     = `batch/tracker-additions/or-${numStr}-${slug}.tsv`;
     // Header row, then the single data row. merge-tracker.mjs resolves the
     // fields by NAME when the header is present (#3517), so this row cannot be
     // read into the wrong columns. (Headerless files still work; they are the
     // legacy form, and they are the ones that can hit the undecidable
     // score-vs-status case.)
-    writeFile(tsvFile, `${TSV_ADDITION_HEADER}\n${tsvLine}`);
+    writeFile(tsvFile, `${TSV_ADDITION_HEADER}${urlLabel}\n${tsvLine}`);
+    lastSavedReport = { reportFile: `${numStr}-${slug}-${today}.md`, score: scoreStr };
 
     console.log(`\n✅ Report saved: ${relPath}`);
     console.log('\n─── EVALUATION ──────────────────────────────────────\n');
@@ -1007,7 +1055,7 @@ async function cmdPipeline(ctx) {
     console.log(`\n[${i + 1}/${pending.length}] ${item.company} — ${item.role}`);
     try {
       const report = await cmdEvaluate(item.url, ctx);
-      if (report) await markPipelineDone(item.url);
+      if (report) await markPipelineDone(item.url, { reportFile: lastSavedReport?.reportFile ?? null, score: lastSavedReport?.score ?? 'N/A' });
     } catch (e) {
       console.error(`  Error: ${e.message}`);
     }
