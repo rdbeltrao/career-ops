@@ -3,6 +3,7 @@ import * as yaml from "js-yaml";
 /**
  * @typedef {"critical"|"high"|"meaningful"|"preferred"|"low_signal"} Importance
  * @typedef {{ requirement: string, importance: Importance, match: string }} Requirement
+ * @typedef {{ fit: number | null, score: number | null, verdict: string | null, blocking: string[] }} JevSummary
  * @typedef {{
  *   decision: string,
  *   strengths: string[],
@@ -11,6 +12,7 @@ import * as yaml from "js-yaml";
  *   requirements: Requirement[],
  *   confidenceGaps: string[],
  *   unknownEvidence: string[],
+ *   jev: JevSummary | null,
  * }} MachineSummary
  * @typedef {{ text: string, importance: Importance | null }} Lever
  * @typedef {{ holding: Lever[], close: Lever[], verify: string[], strengths: string[] }} ScoreLevers
@@ -29,6 +31,20 @@ const EVIDENCE_LABEL = {
 const FENCE = /##\s*Machine Summary\s*\n+```(?:yaml|yml)?\s*\n([\s\S]*?)\n```/i;
 
 const strings = (v) => (Array.isArray(v) ? v.map((s) => String(s ?? "").trim()).filter(Boolean) : []);
+const finite = (v) => (typeof v === "number" && Number.isFinite(v) ? v : null);
+
+/**
+ * The Jev pre-screen block (batch/batch-prompt.md → Machine Summary `jev:`),
+ * or null for `jev: null` and for reports that predate the block. The score
+ * is Jev's own 1-5, shown beside the Global score and never averaged with it.
+ * @param {unknown} raw
+ * @returns {JevSummary | null}
+ */
+function readJev(raw) {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const verdict = String(raw.verdict ?? "").trim();
+  return { fit: finite(raw.fit), score: finite(raw.score), verdict: verdict || null, blocking: strings(raw.blocking) };
+}
 
 /**
  * The report's Machine Summary, or null when the report has none or its YAML
@@ -60,6 +76,7 @@ export function readMachineSummary(report) {
         match: String(r.match ?? "").trim(),
       })),
     confidenceGaps: strings(raw.confidence_gaps),
+    jev: readJev(raw.jev),
     unknownEvidence: Object.entries(EVIDENCE_LABEL)
       .filter(([key]) => evidence[key] === "unknown")
       .map(([, label]) => label),

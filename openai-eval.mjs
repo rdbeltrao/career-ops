@@ -64,6 +64,7 @@ const PATHS = {
   cv:        join(DATA_ROOT, 'cv.md'),
   profileYml: getProfilePath(),
   profile:    join(DATA_ROOT, 'modes', '_profile.md'),
+  context:    join(DATA_ROOT, 'modes', '_context.md'),
   reports:    join(DATA_ROOT, 'reports'),
   // CAREER_OPS_ADDITIONS mirrors merge-tracker.mjs:43. Writing under DATA_ROOT
   // regardless would drop the addition somewhere the merge it instructs never
@@ -252,6 +253,15 @@ const ofertaLogic   = readFile(PATHS.oferta,     'modes/oferta.md');
 const cvContent     = readFile(PATHS.cv,         'cv.md');
 const profileYml    = readFile(PATHS.profileYml, 'config/profile.yml');
 const profileContent = readFile(PATHS.profile,   'modes/_profile.md');
+// modes/_context.md is the candidate's fit profile: a targeting source that
+// steers scores and framing, never evidence (modes/_shared.md → Sources of
+// Truth). Folded into the _profile.md section so the token budget treats the
+// two as one personalization block; absent, the prompt is exactly as before.
+const contextContent = existsSync(PATHS.context) ? readFileSync(PATHS.context, 'utf-8').trim() : '';
+if (!contextContent) console.log('ℹ️   modes/_context.md not found — evaluating on cv.md and profile.yml only');
+const profileWithContext = contextContent
+  ? `${profileContent}\n\n--- CANDIDATE CONTEXT (modes/_context.md — targeting only, never evidence) ---\n${contextContent}`
+  : profileContent;
 const languageInstruction = outputLanguageInstruction(parseOutputLanguage(profileYml));
 
 // ---------------------------------------------------------------------------
@@ -262,7 +272,7 @@ const { contextBody, budgetReport } = buildBudgetedPrompt({
   ofertaContent: ofertaLogic,
   cvContent,
   profileYml,
-  profileContent,
+  profileContent: profileWithContext,
   jdText,
   noCompress,
   modelName,

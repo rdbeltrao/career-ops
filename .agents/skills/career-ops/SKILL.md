@@ -20,7 +20,7 @@ career-ops is a multi-CLI AI job search agent. The routing below is shared acros
 
 Before reading any repo-relative path, derive `PROJECT_ROOT` from this loaded `SKILL.md`: start at the skill file's directory and walk upward until the nearest directory containing both `AGENTS.md` and `modes/`. This is required even when the checkout itself is nested (for example `Development\\career-ops`) or the command starts from a subdirectory. If those two sentinels cannot be found, stop and locate the career-ops checkout before reading or writing files. Then derive `DATA_ROOT`, where the user's own files live, with the precedence `path-resolver.mjs` uses: `CAREER_OPS_ROOT` or `CAREER_OPS_DATA_DIR` if either is set; otherwise the path written in `PROJECT_ROOT/.career-ops-data` if that file exists and is not empty; otherwise `PROJECT_ROOT` itself. A relative value in either place resolves against `PROJECT_ROOT`. Run from `PROJECT_ROOT`, `node -e "import('./path-resolver.mjs').then(m => console.log(m.getCareerOpsRoot()))"` prints the same directory. With no override the two roots are one directory.
 
-Resolve every path in this router against one of these two roots, never against the process's current working directory. User Layer paths resolve against `DATA_ROOT`. They include `cv.md`, `article-digest.md`, `portals.yml`, `config/` (except the shipped `*.example.*` files), `data/`, `reports/`, `output/`, `interview-prep/`, `modes/_profile.md`, `modes/_custom.md`, `modes/_brief.md`, `batch/tracker-additions/`, and every other User Layer path in `DATA_CONTRACT.md`. Everything else (the other `modes/` files, scripts, templates, the `config/*.example.*` files) resolves against `PROJECT_ROOT`.
+Resolve every path in this router against one of these two roots, never against the process's current working directory. User Layer paths resolve against `DATA_ROOT`. They include `cv.md`, `article-digest.md`, `portals.yml`, `config/` (except the shipped `*.example.*` files), `data/`, `reports/`, `output/`, `interview-prep/`, `modes/_profile.md`, `modes/_custom.md`, `modes/_brief.md`, `modes/_context.md`, `batch/tracker-additions/`, and every other User Layer path in `DATA_CONTRACT.md`. Everything else (the other `modes/` files, scripts, templates, the `config/*.example.*` files) resolves against `PROJECT_ROOT`.
 
 ## Invocation Notes
 
@@ -203,17 +203,19 @@ After determining the mode, load the necessary files before executing:
 
 If `modes/_custom.md` exists, read it after `modes/_profile.md` and before the selected mode file. It contains user house rules and procedural preferences. It may override workflow/style defaults, but it never adds factual claims about the candidate.
 
+If `modes/_context.md` exists, read it after `modes/_profile.md` and before `modes/_custom.md`, for the shared-context modes and the standalone modes alike. It is the candidate's fit profile (target role, location and language, preferences, deal-breakers, technical tiers, match signals): a targeting source that steers scores and framing and is never evidence — a claim or number that exists only there is not a fact for a CV, a letter or a form answer (`modes/_shared.md` → Sources of Truth). When it is absent, say so in one line and continue on `cv.md` and `config/profile.yml`.
+
 Resolve `language.modes_dir` before applying the path shorthand below. With no setting, use `modes`. With a scalar directory, preserve the existing behavior: use that directory's `_shared.md` and localized mode file when it provides one. With a list, load every declared directory's `_shared.md` exactly once (including the baseline `modes/_shared.md` when `modes` appears), but use only the FIRST entry's evaluation-mode file for Blocks A-F; later entries contribute context, never a competing evaluation file. User-layer `_profile.md` and `_custom.md` remain under `modes/` in `DATA_ROOT`.
 
 ### Modes that require `_shared.md` + their mode file
 
-Read the resolved shared context (default `modes/_shared.md`) + `modes/_profile.md` (if exists) + `modes/_custom.md` (if exists) + the resolved selected mode file (default `modes/{mode}.md`). For an A-F evaluation, that selected file is the primary directory's evaluation mode; do not also load an evaluation file from a secondary directory.
+Read the resolved shared context (default `modes/_shared.md`) + `modes/_profile.md` (if exists) + `modes/_context.md` (if exists; targeting only, never evidence) + `modes/_custom.md` (if exists) + the resolved selected mode file (default `modes/{mode}.md`). For an A-F evaluation, that selected file is the primary directory's evaluation mode; do not also load an evaluation file from a secondary directory.
 
 Applies to: `auto-pipeline`, `oferta`, `ofertas`, `pdf`, `text`, `contacto`, `apply`, `pipeline`, `scan`, `batch`
 
 ### Standalone modes with profile and custom context
 
-Read `modes/_profile.md` (if exists) + `modes/_custom.md` (if exists) + `modes/{mode}.md`
+Read `modes/_profile.md` (if exists) + `modes/_context.md` (if exists; targeting only, never evidence) + `modes/_custom.md` (if exists) + `modes/{mode}.md`
 
 Applies to: `tracker`, `agent-inbox`, `deep`, `interview-prep`, `interview`, `master-profile`, `regional/eu-swe`, `interview/plan`, `interview/practice`, `interview/debrief`, `latex`, `latex-tex`, `training`, `project`, `patterns`, `titles`, `upskill`, `followup`, `reply-watch`, `outcome`, `cover`, `email`, `add`, `offer-prep`, `discover`, `intake`, `ats`, `calibrate`, `retro`, `expand`, `interview-redflag`, `update`
 
@@ -225,12 +227,12 @@ Applies to: `triage`
 
 ### Modes delegated to subagent
 
-For `scan`, `apply` (with Playwright), and `pipeline` (3+ URLs): launch as a worker/subagent with the resolved shared context + `_profile.md` (if exists) + `_custom.md` (if exists) + the resolved selected mode file injected into the worker prompt. If your CLI exposes an `Agent(...)` primitive, the call looks like this:
+For `scan`, `apply` (with Playwright), and `pipeline` (3+ URLs): launch as a worker/subagent with the resolved shared context + `_profile.md` (if exists) + `_context.md` (if exists; targeting only) + `_custom.md` (if exists) + the resolved selected mode file injected into the worker prompt. If your CLI exposes an `Agent(...)` primitive, the call looks like this:
 
 ```python
 Agent(
   subagent_type="general-purpose",
-  prompt="[output language directive]\n\n[content of modes/_shared.md, or resolved shared context: every declared _shared.md once]\n\n[content of modes/_profile.md if exists]\n\n[content of modes/_custom.md if exists]\n\n[content of modes/{mode}.md, or resolved selected mode file; primary evaluation file for Blocks A-F]\n\n[invocation-specific data]",
+  prompt="[output language directive]\n\n[content of modes/_shared.md, or resolved shared context: every declared _shared.md once]\n\n[content of modes/_profile.md if exists]\n\n[content of modes/_context.md if exists — targeting only, never evidence]\n\n[content of modes/_custom.md if exists]\n\n[content of modes/{mode}.md, or resolved selected mode file; primary evaluation file for Blocks A-F]\n\n[invocation-specific data]",
   description="career-ops {mode}"
 )
 ```

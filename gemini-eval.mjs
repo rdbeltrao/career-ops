@@ -92,6 +92,7 @@ const PATHS = {
   evaluate:    join(CODE_ROOT, '.claude', 'skills', 'career-ops', 'SKILL.md'),
   cv:          join(DATA_ROOT, 'cv.md'),
   profile:     join(DATA_ROOT, 'modes', '_profile.md'),
+  context:     join(DATA_ROOT, 'modes', '_context.md'),
   profileYml:  getProfilePath(),
   reports:     join(DATA_ROOT, 'reports'),
   tracker:     resolveTrackerPath(DATA_ROOT),
@@ -371,6 +372,15 @@ for (const extraDir of extraModesDirs) {
 }
 const cvContent      = readFile(PATHS.cv,          'cv.md');
 const profileContent = readFile(PATHS.profile,     'modes/_profile.md');
+// modes/_context.md is the candidate's fit profile: a targeting source that
+// steers scores and framing, never evidence (modes/_shared.md → Sources of
+// Truth). Folded into the _profile.md section so the token budget treats the
+// two as one personalization block; absent, the prompt is exactly as before.
+const contextContent = existsSync(PATHS.context) ? stripBom(readFileSync(PATHS.context, 'utf-8')).trim() : '';
+if (!contextContent) console.log('ℹ️   modes/_context.md not found — evaluating on cv.md and profile.yml only');
+const profileWithContext = contextContent
+  ? `${profileContent}\n\n--- CANDIDATE CONTEXT (modes/_context.md — targeting only, never evidence) ---\n${contextContent}`
+  : profileContent;
 const profileYml     = readFile(PATHS.profileYml,  'config/profile.yml');
 const languageInstruction = outputLanguageInstruction(parseOutputLanguage(profileYml));
 
@@ -382,7 +392,7 @@ const { contextBody, budgetReport } = buildBudgetedPrompt({
   ofertaContent: ofertaLogic,
   cvContent,
   profileYml,
-  profileContent,
+  profileContent: profileWithContext,
   jdText,
   noCompress,
   maxTokens: 1_048_576, // gemini-2.5-flash context window

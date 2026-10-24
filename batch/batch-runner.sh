@@ -125,6 +125,8 @@ START_FROM=0
 SCOPE_COMPANY=""
 MAX_RETRIES=2
 MIN_SCORE=0
+MIN_JEV=0             # --min-jev: skip the worker when the Jev pre-screen fit is below this (0 = off)
+SKIP_JEV_VERDICT=""   # --skip-jev-verdict: comma-separated verdicts (skip, maybe) that skip the worker
 SKIP_PDF=false
 MODEL=""  # explicit override; otherwise resolved from the profile's spend_tier
 RESOLVED_MODEL=""
@@ -173,6 +175,13 @@ Options:
   --limit N            Max offers: positive integer; omit for no limit
   --max-retries N      Max retry attempts per offer (default: 2)
   --min-score N        Skip PDF/tracker for offers scoring below N (default: 0 = off)
+  --min-jev N          Skip the worker when the Jev pre-screen fit (0-100) is
+                       below N (default: 0 = off). The pre-screen runs through
+                       jev-score.mjs before each worker; when that script is
+                       missing, has no OPENROUTER_API_KEY or fails, the runner
+                       logs one line and spawns the worker as usual
+  --skip-jev-verdict V Skip the worker when the Jev verdict is in the comma-
+                       separated list V: skip, maybe or skip,maybe (default: off)
   --skip-pdf           Skip PDF generation entirely (write ❌ in tracker PDF column)
   --worker-timeout N   Stop a worker after N seconds and record it as failed
                        (default: 1800; 0 = no limit)
@@ -250,6 +259,12 @@ while [[ $# -gt 0 ]]; do
       ;;
     --max-retries) MAX_RETRIES="$2"; shift 2 ;;
     --min-score) MIN_SCORE="$2"; shift 2 ;;
+    --min-jev)
+      [[ $# -ge 2 ]] || { echo "ERROR: --min-jev requires an argument (0-100)"; exit 1; }
+      MIN_JEV="$2"; shift 2 ;;
+    --skip-jev-verdict)
+      [[ $# -ge 2 ]] || { echo "ERROR: --skip-jev-verdict requires an argument (skip, maybe or skip,maybe)"; exit 1; }
+      SKIP_JEV_VERDICT="$2"; shift 2 ;;
     --skip-pdf) SKIP_PDF=true; shift ;;
     --rate-limit-sleep)
       [[ $# -ge 2 ]] || { echo "ERROR: --rate-limit-sleep requires an argument"; exit 1; }
@@ -309,6 +324,20 @@ fi
 if ! is_decimal_number "$MIN_SCORE"; then
   echo "ERROR: --min-score must be a non-negative number."
   exit 1
+fi
+
+if ! is_decimal_number "$MIN_JEV"; then
+  echo "ERROR: --min-jev must be a non-negative number (a Jev fit, 0-100)."
+  exit 1
+fi
+if [[ -n "$SKIP_JEV_VERDICT" ]]; then
+  IFS=',' read -r -a _jev_verdicts <<< "$SKIP_JEV_VERDICT"
+  for _jev_verdict in "${_jev_verdicts[@]}"; do
+    case "$_jev_verdict" in
+      skip|maybe) ;;
+      *) echo "ERROR: --skip-jev-verdict accepts skip, maybe or skip,maybe (got '$_jev_verdict')."; exit 1 ;;
+    esac
+  done
 fi
 
 # Lock file to prevent double execution
@@ -1344,6 +1373,127 @@ process_offer() {
     return 0
   fi
 
+  # Jev pre-screen (modes/_shared.md → Calibrated pre-screen (Jev)). One call
+  # to jev-score.mjs per offer, zero agent tokens, before any worker exists.
+  # Every failure degrades to "not run": the script missing, no prefetched JD
+  # text, exit 2 (no OPENROUTER_API_KEY) or exit 1 (API or parse failure) each
+  # log one line and the worker is spawned exactly as before, writing
+  # `jev: null`. Only a scored result can skip a worker, and only when
+  # --min-jev or --skip-jev-verdict asked for it.
+  local jev_block="" jev_fit="" jev_verdict="" jev_blocking=""
+  if [[ ! -f "$PROJECT_DIR/jev-score.mjs" ]]; then
+    echo "    ℹ️  jev: jev-score.mjs not found — spawning the worker without a pre-screen"
+  elif [[ ! -s "$jd_file" ]]; then
+    echo "    ℹ️  jev: no prefetched JD text — spawning the worker without a pre-screen"
+  else
+    local jev_job jev_out jev_err jev_status=0
+    jev_job="$(mktemp "$jd_tmp_dir/batch-jev-${id}.XXXXXX")"
+    jev_out="${jev_job}.out"
+    jev_err="${jev_job}.err"
+    # The job JSON jev-score reads (contract C1): the row's URL and the JD text
+    # the prefetch left in $jd_file. The prefetch already stripped HTML; the
+    # strip here only guards the ATS-API and browser-extract paths, which can
+    # leave markup behind. Title and company are not in batch-input.tsv, so
+    # they travel empty and Jev reads them from the description.
+    if node -e '
+      const fs = require("fs");
+      const [url, jdPath, outPath] = process.argv.slice(1);
+      let text = fs.readFileSync(jdPath, "utf-8");
+      if (/<\/?(html|body|div|p|script|style)\b/i.test(text)) {
+        text = text
+          .replace(/<script[\s\S]*?<\/script>/gi, " ")
+          .replace(/<style[\s\S]*?<\/style>/gi, " ")
+          .replace(/<[^>]+>/g, " ")
+          .replace(/&(nbsp|#160|#xa0);/gi, " ")
+          .replace(/&amp;/gi, "&").replace(/&lt;/gi, "<").replace(/&gt;/gi, ">")
+          .replace(/&quot;/gi, "\"").replace(/&#39;/gi, "\x27");
+      }
+      text = text.replace(/\s+/g, " ").trim();
+      fs.writeFileSync(outPath, JSON.stringify({
+        url, title: "", company: "", location: "", workplace: "", seniority: "", description: text, source: "batch",
+      }));
+    ' "$url" "$jd_file" "$jev_job" 2>/dev/null; then
+      node "$PROJECT_DIR/jev-score.mjs" --job "$jev_job" --format json > "$jev_out" 2> "$jev_err" || jev_status=$?
+      case "$jev_status" in
+        0)
+          # fit, verdict and the blocking list on three lines; empty when unusable.
+          local jev_parsed
+          jev_parsed=$(node -e '
+            const fs = require("fs");
+            try {
+              const r = JSON.parse(fs.readFileSync(process.argv[1], "utf-8"));
+              const fit = typeof r.fit === "number" && Number.isFinite(r.fit) ? String(r.fit) : "";
+              const verdict = typeof r.verdict === "string" ? r.verdict.trim() : "";
+              const blocking = Array.isArray(r.blocking) ? r.blocking.join(", ") : "";
+              process.stdout.write(fit + "\n" + verdict + "\n" + blocking + "\n");
+            } catch (e) { process.stdout.write("\n\n\n"); }
+          ' "$jev_out" 2>/dev/null) || jev_parsed=$'\n\n'
+          { IFS= read -r jev_fit || true; IFS= read -r jev_verdict || true; IFS= read -r jev_blocking || true; } <<< "$jev_parsed"
+          jev_fit="${jev_fit//[^0-9.]/}"
+          # The C3 markdown block. jev-score.mjs owns the format, so its
+          # formatPrescreenMarkdown() is preferred; the inline fallback mirrors
+          # the contract for an older script without that export.
+          jev_block=$(node -e '
+            const fs = require("fs");
+            const { pathToFileURL } = require("url");
+            const [jsonPath, jevPath] = process.argv.slice(1);
+            const r = JSON.parse(fs.readFileSync(jsonPath, "utf-8"));
+            const local = (r) => {
+              const reasons = r.reasons && typeof r.reasons === "object" ? r.reasons : {};
+              const conf = r.confidences && typeof r.confidences === "object" ? r.confidences : {};
+              const order = ["seniority_match", "location_ok", "language_blocker", "team_type", "stack_fit"];
+              const keys = [...order.filter((k) => k in reasons), ...Object.keys(reasons).filter((k) => !order.includes(k))];
+              const line2 = keys.map((k) => `${k}: ${reasons[k] ?? "n/a"}${typeof conf[k] === "number" ? ` (${conf[k].toFixed(2)})` : ""}`).join(" | ");
+              const fit = typeof r.fit === "number" ? `${r.fit}/100` : "n/a";
+              const score = typeof r.score === "number" ? `${r.score}/5` : "n/a";
+              const blocking = Array.isArray(r.blocking) && r.blocking.length ? r.blocking.join(", ") : "none";
+              return `## Calibrated pre-screen (Jev)\n\nmodel: ${r.model ?? "n/a"} | fit: ${fit} | jev_score: ${score} | verdict: ${r.verdict ?? "n/a"}\n${line2}\nblocking: ${blocking}\n`;
+            };
+            (async () => {
+              try {
+                const m = await import(pathToFileURL(jevPath).href);
+                if (typeof m.formatPrescreenMarkdown === "function") { process.stdout.write(String(m.formatPrescreenMarkdown(r))); return; }
+              } catch (e) { /* fall through to the inline format */ }
+              process.stdout.write(local(r));
+            })();
+          ' "$jev_out" "$PROJECT_DIR/jev-score.mjs" 2>/dev/null) || jev_block=""
+          if [[ -z "$jev_block" ]]; then
+            echo "    ℹ️  jev: scored but the block could not be formatted — spawning the worker without a pre-screen"
+          else
+            echo "    ℹ️  jev: fit ${jev_fit:-n/a}, ${jev_verdict:-n/a}${jev_blocking:+ (blocking: $jev_blocking)}"
+          fi
+          ;;
+        2)
+          echo "    ℹ️  jev: no OPENROUTER_API_KEY — spawning the worker without a pre-screen"
+          ;;
+        *)
+          echo "    ℹ️  jev: jev-score.mjs failed (exit $jev_status: $(head -c 160 "$jev_err" 2>/dev/null | tr '\n\t' '  ')) — spawning the worker without a pre-screen"
+          ;;
+      esac
+    else
+      echo "    ℹ️  jev: could not build the job JSON — spawning the worker without a pre-screen"
+    fi
+    rm -f "$jev_job" "$jev_out" "$jev_err"
+  fi
+
+  # The batch form of the hard stop. Both gates default off, both need a
+  # scored result: a pre-screen that did not run never skips anything.
+  local jev_skip_reason=""
+  if [[ -n "$jev_fit" ]] && LC_ALL=C awk -v min="$MIN_JEV" 'BEGIN{exit !(min > 0)}' && LC_ALL=C awk -v fit="$jev_fit" -v min="$MIN_JEV" 'BEGIN{exit !(fit < min)}'; then
+    jev_skip_reason="below-min-jev"
+  elif [[ -n "$SKIP_JEV_VERDICT" && -n "$jev_verdict" && ",$SKIP_JEV_VERDICT," == *",$jev_verdict,"* ]]; then
+    jev_skip_reason="verdict-skip"
+  fi
+  if [[ -n "$jev_skip_reason" ]]; then
+    local jev_now
+    jev_now=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+    update_state_retrying "$id" "$url" "skipped" "$started_at" "$jev_now" "-" "-" "jev: ${jev_fit:-n/a} ${jev_verdict:-n/a} ${jev_skip_reason}${jev_blocking:+ ($jev_blocking)}" "$retries" || true
+    release_report_num "$report_num"
+    rm -f "$jd_file"
+    echo "    ⏭️  Skipped by Jev (fit: ${jev_fit:-n/a}, verdict: ${jev_verdict:-n/a}, $jev_skip_reason) — no worker spawned"
+    return 0
+  fi
+
   # Build the prompt with placeholders replaced
   local prompt
   if [[ "$SKIP_PDF" == "true" ]]; then
@@ -1416,7 +1566,10 @@ process_offer() {
   # Inject user-layer personalization into the temporary worker prompt.
   # The resolved prompt is gitignored runtime state, so user profile data stays
   # out of the system layer while batch scoring matches interactive scoring.
-  for context_file in "$DATA_ROOT/modes/_profile.md" "$PROFILE_FILE" "$DATA_ROOT/modes/_custom.md"; do
+  # modes/_context.md rides between the profile and the house rules, the order
+  # the router loads them in: it is the candidate's fit profile, a targeting
+  # source that steers scores and framing and never evidence.
+  for context_file in "$DATA_ROOT/modes/_profile.md" "$PROFILE_FILE" "$DATA_ROOT/modes/_context.md" "$DATA_ROOT/modes/_custom.md"; do
     if [[ -f "$context_file" ]]; then
       {
         printf '\n\n---\n\n'
@@ -1426,6 +1579,20 @@ process_offer() {
       } >> "$resolved_prompt"
     fi
   done
+
+  # The Jev pre-screen is the one per-offer block in the resolved prompt. It
+  # goes LAST, after every block that is the same for all offers, so the
+  # cacheable prefix prompt caching relies on stays byte-identical across the
+  # batch and only this tail differs. Nothing is appended when Jev did not run,
+  # which keeps a run without jev-score.mjs identical to one before it existed.
+  if [[ -n "$jev_block" ]]; then
+    {
+      printf '\n\n---\n\n'
+      printf '## Runtime pre-screen: jev\n\n'
+      printf '%s\n' "$jev_block" | sed 's/^/    /'
+      printf '\n'
+    } >> "$resolved_prompt"
+  fi
 
   # Build the launch command for the configured CLI.
   # For claude the model is resolved once per run from spend_tier unless --model
