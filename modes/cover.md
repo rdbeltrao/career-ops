@@ -44,6 +44,8 @@ Read `modes/_writing.md` — the shared writing guidance (Voice DNA guardrail, W
 
 Read `modes/_profile.md` if it exists — the candidate's personalization file. It captures their target roles, adaptive framing and archetypes, exit narrative, cross-cutting advantage, proof points, comp targets, negotiation scripts, location policy, and any voice or writing-style rules they have added. Its rules **govern the letter's voice and structure and override the generic defaults in this mode and in `_writing.md`**, so the candidate's personalization is never lost.
 
+Read `modes/_context.md` if it exists, and the `interests` block of `config/profile.yml`, through `modes/_writing.md` → **Interests in candidate-facing text**. They supply the "why this role" angles offered in Step 6A and the framing of the "Problems I will solve" paragraph, as **targeting only**: no fact, number or claim in the letter comes from `_context.md`; the letter's facts stay `cv.md` and `article-digest.md`, and the fact validator in Step 9 does not read it. Apply the staleness rule there: when `interests.confirmed_on` is older than 90 days, say so when presenting Step 6A and ask before an interest decides a paragraph. Neither file existing is not an error; say so once and continue.
+
 ---
 
 ## Step 2 — Parse the JD
@@ -175,7 +177,8 @@ Here are angles I spotted — pick 1-2 or write your own:
   3. {Domain/mission signal from JD opening}
   4. {Growth or stage signal — e.g. Series B, pre-IPO, category-defining}
   5. {Strategic learning — specific gap this role fills for you}
-  6. Other — write your own angle
+  6. {Match with a recorded interest — e.g. the domain, team type or way of working from `interests` and `modes/_context.md`, named only when current; say "confirmed {date}, please reconfirm" when it is older than 90 days}
+  7. Other — write your own angle
 
 **B. What problem would you solve for them?**
 Based on my research: {confirmed synthesis from Step 3}.

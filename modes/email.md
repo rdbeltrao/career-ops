@@ -69,7 +69,9 @@ Read:
 - `config/profile.yml`
 - `cv.md`
 - `article-digest.md` if it exists
-- `modes/_writing.md` — shared writing guidance (Voice DNA guardrail, Writing Style calibration, Professional Writing rules). An application email is candidate-facing prose, the same category that module governs (#2006)
+- `modes/_writing.md` — shared writing guidance (Voice DNA guardrail, Writing Style calibration, Professional Writing rules, and the Outreach and comment rules for the referral request). An application email is candidate-facing prose, the same category that module governs (#2006)
+- `modes/_context.md` if it exists, and the `interests` block of `config/profile.yml`, for the "why this company" sentence, through `modes/_writing.md` → **Interests in candidate-facing text**: targeting only, never a fact or a number for the email, and when `interests.confirmed_on` is older than 90 days say so and ask before building the sentence on it
+- `templates/outreach.md` → Referral, for the paragraph order of a `referral_request`, shortened to email length
 - `modes/_profile.md` if it exists
 - `modes/_custom.md` if it exists
 - `voice-dna.md` if it exists, for writing style only
