@@ -101,6 +101,51 @@ location:
 # sg:
 #   work_status: "foreign"
 
+# ── Targeting context ────────────────────────────────────────────────────────
+#
+# Three optional blocks that describe what you WANT, as opposed to what you
+# have done (that is cv.md). They steer scores and framing and are never a
+# fact source for a CV, a letter or a form answer. `node render-context.mjs`
+# prints them as markdown; the Jev pre-screen, the Dealbreaker gate and
+# `modes/_brief.md`'s Hard DQ list read them.
+#
+# dealbreakers — your hard rules, in your own words. The Dealbreaker gate
+# (modes/oferta.md) stops before Block A when a JD sentence states the fact
+# that breaks one. A hard rule is one you wrote as a dealbreaker, a hard
+# skip, a hard no, a "never" or a walk-away number; a scored preference such
+# as "5 days on site: 3.0" is not one. A hit needs the JD to state the fact
+# that breaks the rule; an inferred fact is not a hit.
+# dealbreakers:
+#   - "German required"
+#   - "Contractor or freelance engagement"
+#
+# preferences — the scored side of the same picture: what you avoid, what
+# leaves you cold, what attracts you and what you do not mind. confirmed_on
+# is the date you last reconfirmed these lists. Older than 90 days means any
+# mode that lets them decide a verdict says so and asks before relying on
+# them (`render-context.mjs` marks the block STALE).
+# preferences:
+#   confirmed_on: "2026-10-17"
+#   hard_rules: ["Employee contract only"]
+#   minus: ["Agency or consultancy", "Hybrid with more than two office days a week"]
+#   neutral: ["Company size"]
+#   plus: ["Remote-first", "Continuous delivery"]
+#   no_penalty: ["Travel up to 10%", "A title below Head of"]
+#
+# interests — what you are looking for in the next role: the "why this role"
+# and "what are you looking for" material for cover letters, outreach and
+# interview prep. recorded_on is when you first wrote them down; confirmed_on
+# is when you last confirmed they still apply (same 90-day rule as above).
+# interests:
+#   recorded_on: "2025-01-01"
+#   confirmed_on: "2026-10-17"
+#   role_balance: "about 75% people management, 25% hands-on"
+#   team_size: "6 to 10 engineers directly, or several teams through leads"
+#   team_type: ["customer-facing product teams"]
+#   domains: ["marketplaces", "health"]
+#   ways_of_working: ["remote-first", "continuous delivery"]
+#   learning: ["AI-assisted engineering"]
+
 # Optional. If you have a documented disability, some jurisdictions run
 # affirmative/quota hiring for it (e.g. Brazil's Lei de Cotas, Lei 8.213/91 --
 # employers with 100+ staff must reserve 2-5% of roles for PcD candidates).
