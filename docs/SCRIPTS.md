@@ -728,7 +728,10 @@ node closing-soon.mjs --summary                # human-readable table
 node closing-soon.mjs --within 14 --status Evaluated,Applied
 node closing-soon.mjs --today 2026-10-17       # deterministic runs/tests
 node closing-soon.mjs --tracker path/to/applications.md --jds path/to/jds
+node closing-soon.mjs --clashes --clash-min 3  # warn when closings pile up on an interview day
 ```
+
+**Interview-day clashes (opt-in):** `--clashes` reads `data/active-interviews.md` (the leading `YYYY-MM-DD` of the Date/Time cell; rows whose Status is Rejected, Declined, Ghosted or Done are skipped, emoji prefixes tolerated; unreadable dates are skipped silently). For each interview date inside the `--within` window it counts the closing-soon rows closing on that day or the day before; at `--clash-min` (default 2) or more it adds a `clashes` group `[{date, interview, closing}]` and a one-line hint in `--summary`. `--interviews <path>` overrides the file. Without `--clashes` the output is unchanged.
 
 **Exit codes:** `0` on a report (a missing tracker yields an empty result with a warning), `1` unrecognized flag, `2` invalid `--today` / `--within` / `--status` value.
 
