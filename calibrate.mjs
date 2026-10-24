@@ -55,6 +55,22 @@ import { loadYaml } from './lib/yaml-document.mjs';
 // exactly the thing this advisory is meant to answer.
 const DATA_ROOT = getCareerOpsRoot();
 
+/**
+ * @typedef {{ reachedInterview: boolean, reachedOffer: boolean }} Reach
+ * @typedef {{ source: 'journal'|'ledger'|'tracker', type: string, reachedInterview: boolean, reachedOffer: boolean, terminal?: boolean }} OutcomeVerdict
+ * @typedef {{ num: number, company: string, score: number|null, status: string, report: string, notes: string }} TrackerRow
+ * @typedef {{ num: number, company: string, score: number|null, status: string }} CalibrationRow
+ * @typedef {{ latestType: string|null, feedback: string[], splitAcross?: string[] }} Journal
+ * @typedef {{ n: number, interviews: number, offers: number, interviewRate: number|null, offerRate: number|null }} BandStats
+ * @typedef {{ band: string } & BandStats} ScoreBand
+ * @typedef {{ verdict: string } & BandStats} VerdictBand
+ * @typedef {{ fit: number|null, score: number|null, verdict: string, blocking: string[] }} JevInfo
+ * @typedef {{ resolved: number, scored: number, notRun: number, noReport: number, bands: ScoreBand[], verdicts: VerdictBand[] }} JevCalibration
+ * @typedef {{ kind: 'insufficient'|'separating'|'inverted'|'flat', text: string }} CalibrationVerdict
+ * @typedef {{ num: number, company: string, feedback: string }} FeedbackLine
+ * @typedef {{ resolved: number, inFlight: number, unscored: number, bands: ScoreBand[], verdict: CalibrationVerdict, feedback: FeedbackLine[], jev?: JevCalibration }} Calibration
+ */
+
 // --- Outcome semantics ---------------------------------------------------
 //
 // Two tiers, both cumulative: reaching an interview is success tier 1
@@ -66,6 +82,7 @@ const DATA_ROOT = getCareerOpsRoot();
 // writes whichever one was typed straight into the journal, so every read goes
 // through canonicalOutcome() first — a private list of the seven canonical
 // names silently ignored the other seven (see lib/outcome-types.mjs).
+/** @type {Record<string, { reachedInterview: boolean, reachedOffer: boolean, terminal: boolean }>} */
 export const JOURNAL_OUTCOMES = {
   hired: { reachedInterview: true, reachedOffer: true, terminal: true },
   offer_received: { reachedInterview: true, reachedOffer: true, terminal: true },
@@ -80,6 +97,7 @@ export const JOURNAL_OUTCOMES = {
 // `interview`/`offer`/`hired` prove tier reach; `rejected` is terminal
 // negative. Everything else (applied, responded, evaluated…) is in-flight
 // or pre-application and carries no outcome evidence.
+/** @type {Record<string, Reach>} */
 const TRACKER_TERMINAL = {
   hired: { reachedInterview: true, reachedOffer: true },
   offer: { reachedInterview: true, reachedOffer: true },
@@ -101,8 +119,8 @@ const BANDS = [
  *
  * @param {{status: string}} row
  * @param {{latestType: string|null}|undefined} journal
- * @param {{reachedInterview: boolean, reachedOffer: boolean}|undefined} led
- * @returns {{kind: 'resolved', verdict: object} | {kind: 'inFlight'} | {kind: 'outside'}}
+ * @param {Reach|undefined} led
+ * @returns {{kind: 'resolved', verdict: OutcomeVerdict} | {kind: 'inFlight'} | {kind: 'outside'}}
  */
 function resolveOutcome(row, journal, led) {
   if (journal?.latestType) {
@@ -126,6 +144,10 @@ function resolveOutcome(row, journal, led) {
  * Counts and, at or above the sample floor, rates for one group of resolved
  * rows. Below the floor the counts are still shown and the RATES are withheld:
  * the reader can see the raw anecdote without being handed a fake rate.
+ *
+ * @param {Reach[]} members
+ * @param {number} minBandN
+ * @returns {BandStats}
  */
 function bandStats(members, minBandN) {
   const interviews = members.filter((r) => r.reachedInterview).length;
@@ -180,17 +202,22 @@ export function parseOutcomeJournal(text) {
  * The core aggregation, pure so the self-test can exercise every branch
  * without touching a filesystem.
  *
- * @param {Array<{num:number, company:string, score:number|null, status:string}>} rows
- * @param {Map<number, {latestType:string|null, feedback:string[]}>} journals
- * @param {{minBandN?: number, reached?: Map<number, {reachedInterview:boolean, reachedOffer:boolean}>}} [opts]
+ * @param {CalibrationRow[]} rows
+ * @param {Map<number, Journal>} journals
+ * @param {{minBandN?: number, reached?: Map<number, Reach>}} [opts]
+ * @returns {Calibration}
  */
 export function computeCalibration(rows, journals, opts = {}) {
   const minBandN = opts.minBandN ?? 5;
   const reached = opts.reached ?? new Map();
 
+  /** @type {Array<{num: number, score: number} & OutcomeVerdict>} */
   const resolved = [];
+  /** @type {number[]} */
   const inFlight = [];
+  /** @type {number[]} */
   const unscored = [];
+  /** @type {FeedbackLine[]} */
   const allFeedback = [];
 
   for (const row of rows) {
@@ -201,7 +228,7 @@ export function computeCalibration(rows, journals, opts = {}) {
     const outcome = resolveOutcome(row, journal, reached.get(row.num));
     if (outcome.kind === 'inFlight') { inFlight.push(row.num); continue; }
     if (outcome.kind === 'outside') continue;
-    if (!Number.isFinite(row.score) || row.score <= 0) { unscored.push(row.num); continue; }
+    if (row.score === null || !Number.isFinite(row.score) || row.score <= 0) { unscored.push(row.num); continue; }
     resolved.push({ num: row.num, score: row.score, ...outcome.verdict });
   }
 
@@ -213,6 +240,7 @@ export function computeCalibration(rows, journals, opts = {}) {
   // Verdict: compare the highest and lowest bands that clear the floor.
   // One qualifying band (or none) is not a comparison — say so instead.
   const rated = bands.filter((b) => b.interviewRate !== null);
+  /** @type {CalibrationVerdict} */
   let verdict;
   if (rated.length < 2) {
     verdict = {
@@ -222,7 +250,9 @@ export function computeCalibration(rows, journals, opts = {}) {
   } else {
     const low = rated[0];
     const high = rated[rated.length - 1];
-    const gap = high.interviewRate - low.interviewRate;
+    // Both rates are non-null here (the filter above); the `?? 0` only tells
+    // the type checker so, it never changes the arithmetic.
+    const gap = (high.interviewRate ?? 0) - (low.interviewRate ?? 0);
     if (gap >= 10) {
       verdict = { kind: 'separating', text: `The scoring is separating for you: your ${high.band} applications reached interviews at ${high.interviewRate}% vs ${low.interviewRate}% for ${low.band}. Trusting the score is paying off.` };
     } else if (gap <= -10) {
@@ -244,6 +274,12 @@ export function computeCalibration(rows, journals, opts = {}) {
 
 // --- Filesystem assembly --------------------------------------------------
 
+/**
+ * The tracker's rows, one per application, with the fields calibration reads.
+ *
+ * @param {string} appsFile - Path to data/applications.md.
+ * @returns {TrackerRow[]}
+ */
 export function loadTrackerRows(appsFile) {
   const lines = readFileSync(appsFile, 'utf-8').split(/\r?\n/);
   // resolveColumns() takes the LINE ARRAY and locates the header itself.
@@ -256,10 +292,13 @@ export function loadTrackerRows(appsFile) {
   // drops out of the population. The report renders 0 resolved / 0 in-flight
   // and a false "insufficient data" verdict on a tracker full of outcomes.
   const colmap = resolveColumns(lines);
+  /** @type {TrackerRow[]} */
   const rows = [];
   for (const line of lines) {
     if (!line.trim().startsWith('|') || isHeaderRow(line) || isSeparatorRow(line)) continue;
-    const row = parseTrackerRow(line, colmap);
+    // parseTrackerRow declares `object|null`; its documented shape is the one
+    // named here.
+    const row = /** @type {{num: number, company?: string, score?: string, status?: string, report?: string, notes?: string} | null} */ (parseTrackerRow(line, colmap));
     if (!row || !Number.isFinite(row.num)) continue;
     // parseFloat reads "4.4" and the "4.4/5" cell form identically (it stops
     // at the slash); a blank or textual score cell becomes null, not 0 — a
@@ -277,7 +316,12 @@ export function loadTrackerRows(appsFile) {
   return rows;
 }
 
+/**
+ * @param {string} workspaceRoot
+ * @returns {Map<number, Journal>}
+ */
 function loadJournals(workspaceRoot) {
+  /** @type {Map<number, Journal>} */
   const journals = new Map();
   const dir = join(workspaceRoot, 'data', 'outcomes');
   if (!existsSync(dir)) return journals;
@@ -290,6 +334,7 @@ function loadJournals(workspaceRoot) {
   // journals.set() per directory meant whichever sorted last won — so which
   // half of the history calibration saw came down to alphabetical order.
   // outcomeDirsFor() puts the most recently written journal first.
+  /** @type {Set<number>} */
   const nums = new Set();
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
     if (!entry.isDirectory()) continue;
@@ -300,6 +345,7 @@ function loadJournals(workspaceRoot) {
     const dirs = outcomeDirsFor(dir, num);
     const logPath = dirs.length ? join(dir, dirs[0], 'outcome.md') : null;
     if (!logPath || !existsSync(logPath)) continue;
+    /** @type {Journal} */
     const journal = parseOutcomeJournal(readFileSync(logPath, 'utf-8'));
     // A split is reported rather than silently resolved: repairing it means
     // moving a user's recorded artifacts, which a read-only report must not do.
@@ -315,9 +361,11 @@ function loadJournals(workspaceRoot) {
  * transition entered OR left Interview/Offer/Hired; reached offer if it entered
  * OR left Offer/Hired. Offer implies interview. Missing file → empty Map (the
  * calibration falls back to journals + current status, exactly as before).
- * @returns {Map<number, {reachedInterview:boolean, reachedOffer:boolean}>}
+ * @param {string} workspaceRoot
+ * @returns {Map<number, Reach>}
  */
 export function loadLedgerReached(workspaceRoot) {
+  /** @type {Map<number, Reach>} */
   const reached = new Map();
   const logPath = join(workspaceRoot, 'data', 'status-log.tsv');
   if (!existsSync(logPath)) return reached;
@@ -373,17 +421,19 @@ export function readReportJev(reportText) {
   } catch {
     return null;
   }
-  const jev = raw && typeof raw === 'object' ? /** @type {any} */ (raw).jev : null;
+  const jev = raw && typeof raw === 'object' ? /** @type {Record<string, unknown>} */ (raw).jev : null;
   if (!jev || typeof jev !== 'object') return null;
+  const block = /** @type {Record<string, unknown>} */ (jev);
+  /** @param {unknown} v @returns {number|null} */
   const num = (v) => {
     const n = typeof v === 'number' ? v : parseFloat(String(v ?? ''));
     return Number.isFinite(n) ? n : null;
   };
   return {
-    fit: num(jev.fit),
-    score: num(jev.score),
-    verdict: String(jev.verdict ?? '').trim().toLowerCase(),
-    blocking: Array.isArray(jev.blocking) ? jev.blocking.map((b) => String(b)) : [],
+    fit: num(block.fit),
+    score: num(block.score),
+    verdict: String(block.verdict ?? '').trim().toLowerCase(),
+    blocking: Array.isArray(block.blocking) ? block.blocking.map((b) => String(b)) : [],
   };
 }
 
@@ -391,6 +441,11 @@ export function readReportJev(reportText) {
  * The report file a tracker row links to: the link target relative to the
  * tracker's folder or the workspace root, else the report number looked up in
  * `reports/` (padded or unpadded prefix). Null when nothing resolves.
+ *
+ * @param {TrackerRow} row
+ * @param {string} trackerDir
+ * @param {string} workspaceRoot
+ * @returns {string|null}
  */
 function resolveReportPath(row, trackerDir, workspaceRoot) {
   const link = firstLinkTarget(row.report);
@@ -401,6 +456,7 @@ function resolveReportPath(row, trackerDir, workspaceRoot) {
   }
   const reportsDir = join(workspaceRoot, 'reports');
   if (!existsSync(reportsDir)) return null;
+  /** @type {string[]} */
   let names;
   try {
     names = readdirSync(reportsDir);
@@ -427,12 +483,14 @@ function resolveReportPath(row, trackerDir, workspaceRoot) {
  * @returns {Map<number, ReturnType<typeof readReportJev>>}
  */
 export function loadTrackerJev(appsFile, workspaceRoot) {
+  /** @type {Map<number, JevInfo|null>} */
   const out = new Map();
   const trackerDir = dirname(appsFile);
   for (const row of loadTrackerRows(appsFile)) {
     if (out.has(row.num)) continue;
     const path = resolveReportPath(row, trackerDir, workspaceRoot);
     if (!path) continue;
+    /** @type {string} */
     let text;
     try {
       text = readFileSync(path, 'utf-8');
@@ -452,11 +510,13 @@ export function loadTrackerJev(appsFile, workspaceRoot) {
  * @param {Array<{num:number, status:string}>} rows
  * @param {Map<number, {latestType:string|null}>} journals
  * @param {Map<number, {score:number|null, verdict:string}|null>} jevByNum
- * @param {{minBandN?: number, reached?: Map<number, {reachedInterview:boolean, reachedOffer:boolean}>}} [opts]
+ * @param {{minBandN?: number, reached?: Map<number, Reach>}} [opts]
+ * @returns {JevCalibration}
  */
 export function computeJevCalibration(rows, journals, jevByNum, opts = {}) {
   const minBandN = opts.minBandN ?? 5;
   const reached = opts.reached ?? new Map();
+  /** @type {Array<{num: number, jevScore: number|null, verdict: string} & OutcomeVerdict>} */
   const population = [];
   let resolved = 0;
   let notRun = 0;
@@ -470,7 +530,13 @@ export function computeJevCalibration(rows, journals, jevByNum, opts = {}) {
     if (!jev) { notRun += 1; continue; }
     population.push({ num: row.num, jevScore: jev.score, verdict: jev.verdict, ...outcome.verdict });
   }
-  const withScore = population.filter((r) => Number.isFinite(r.jevScore));
+  // A loop rather than a filter so the checker sees `jevScore` as a number
+  // in the band comparison below; the membership rule is the same.
+  /** @type {Array<{jevScore: number} & OutcomeVerdict>} */
+  const withScore = [];
+  for (const r of population) {
+    if (typeof r.jevScore === 'number' && Number.isFinite(r.jevScore)) withScore.push({ ...r, jevScore: r.jevScore });
+  }
   const bands = BANDS.map((b) => ({
     band: b.key,
     ...bandStats(withScore.filter((r) => r.jevScore >= b.min && r.jevScore < b.max), minBandN),
@@ -482,8 +548,11 @@ export function computeJevCalibration(rows, journals, jevByNum, opts = {}) {
   return { resolved, scored: population.length, notRun, noReport, bands, verdicts };
 }
 
+/** @param {JevCalibration} jev @returns {string[]} */
 function renderJev(jev) {
+  /** @param {number|null} v */
   const rate = (v) => (v === null ? '(n too small)' : `${v}%`);
+  /** @type {string[]} */
   const out = [];
   out.push(`Jev pre-screen: ${jev.scored} scored · not run: ${jev.notRun} · no report: ${jev.noReport} (of ${jev.resolved} resolved)`);
   out.push('');
@@ -503,7 +572,9 @@ function renderJev(jev) {
   return out;
 }
 
+/** @param {Calibration} result @returns {string} */
 function renderHuman(result) {
+  /** @type {string[]} */
   const out = [];
   out.push('📐 Calibration — your scores vs your real outcomes');
   out.push('');
@@ -535,7 +606,9 @@ function renderHuman(result) {
 // --- Self-test ------------------------------------------------------------
 
 function selfTest() {
+  /** @type {string[]} */
   const failures = [];
+  /** @param {string} name @param {boolean} cond */
   const t = (name, cond) => { if (!cond) failures.push(name); };
 
   // Journal parsing: last entry wins, feedback collected, "None recorded" skipped.
@@ -560,7 +633,9 @@ function selfTest() {
   t('journal: last entry wins', journal.latestType === 'rejected');
   t('journal: feedback collected', journal.feedback.length === 1 && journal.feedback[0].includes('Go depth'));
 
+  /** @param {number} num @param {number} score @param {string} status @returns {CalibrationRow} */
   const mk = (num, score, status) => ({ num, company: `C${num}`, score, status });
+  /** @param {string} type @returns {Journal} */
   const J = (type) => ({ latestType: type, feedback: [] });
 
   // Separating: high band converts, low band does not. Floor 2 to keep fixtures small.
@@ -571,7 +646,7 @@ function selfTest() {
   );
   t('separating verdict', sep.verdict.kind === 'separating');
   t('in-flight excluded from resolved', sep.resolved === 4 && sep.inFlight === 1);
-  t('offer counted only on offer tier', sep.bands.find((b) => b.band === '>=4.5').offers === 1);
+  t('offer counted only on offer tier', sep.bands.find((b) => b.band === '>=4.5')?.offers === 1);
 
   // Inverted: low band converts better.
   const inv = computeCalibration(
@@ -594,7 +669,7 @@ function selfTest() {
     { minBandN: 2 },
   );
   t('tracker terminal resolves', fb.resolved === 2);
-  t('journal outranks tracker', fb.bands.find((b) => b.band === '4.0-4.4').interviews === 1);
+  t('journal outranks tracker', fb.bands.find((b) => b.band === '4.0-4.4')?.interviews === 1);
 
   // Never-applied rows (Evaluated / Discarded) are outside the population.
   const pop = computeCalibration([mk(1, 4.2, 'Evaluated'), mk(2, 2.1, 'Discarded')], new Map(), { minBandN: 2 });
@@ -610,14 +685,14 @@ function selfTest() {
     { minBandN: 2, reached: new Map([[1, { reachedInterview: true, reachedOffer: true }], [2, { reachedInterview: true, reachedOffer: false }]]) },
   );
   const ledHigh = led.bands.find((b) => b.band === '>=4.5');
-  t('ledger resolves declined offer as reachedOffer', ledHigh.offers === 1 && ledHigh.interviews === 2 && led.resolved === 2);
-  t('ledger leaves history-less Discarded excluded', led.bands.find((b) => b.band === '4.0-4.4').n === 0);
+  t('ledger resolves declined offer as reachedOffer', ledHigh?.offers === 1 && ledHigh?.interviews === 2 && led.resolved === 2);
+  t('ledger leaves history-less Discarded excluded', led.bands.find((b) => b.band === '4.0-4.4')?.n === 0);
   // A journal still outranks the ledger (explicit /outcome record wins).
   const ledVsJournal = computeCalibration(
     [mk(1, 4.6, 'Discarded')], new Map([[1, J('rejected')]]),
     { minBandN: 1, reached: new Map([[1, { reachedInterview: true, reachedOffer: true }]]) },
   );
-  t('journal outranks ledger', ledVsJournal.bands.find((b) => b.band === '>=4.5').offers === 0);
+  t('journal outranks ledger', ledVsJournal.bands.find((b) => b.band === '>=4.5')?.offers === 0);
 
   // Jev (--jev): the block is read from the Machine Summary fence, `jev: null`
   // reads as not run, and the bands use the same population and floor.
@@ -633,8 +708,8 @@ function selfTest() {
     { minBandN: 1 },
   );
   t('jev: in-flight excluded, no report counted', jevCal.resolved === 3 && jevCal.noReport === 1 && jevCal.notRun === 1 && jevCal.scored === 1);
-  t('jev: banded by its own score', jevCal.bands.find((b) => b.band === '4.0-4.4').interviews === 1);
-  t('jev: verdict table', jevCal.verdicts.find((v) => v.verdict === 'apply').n === 1 && jevCal.verdicts.find((v) => v.verdict === 'skip').n === 0);
+  t('jev: banded by its own score', jevCal.bands.find((b) => b.band === '4.0-4.4')?.interviews === 1);
+  t('jev: verdict table', jevCal.verdicts.find((v) => v.verdict === 'apply')?.n === 1 && jevCal.verdicts.find((v) => v.verdict === 'skip')?.n === 0);
   t('jev: floor withholds rates', computeJevCalibration([mk(1, 4.5, 'Interview')], new Map(), new Map([[1, { score: 4.2, verdict: 'apply' }]]), { minBandN: 5 }).bands.every((b) => b.interviewRate === null));
 
   if (failures.length) {
