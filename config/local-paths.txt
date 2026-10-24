@@ -3,3 +3,7 @@
 # directories (scripts, modes, lib, templates, docs) is declared in
 # lib/update-manifest.mjs SYSTEM_PATHS instead.
 fork/
+# Fork-local providers that upstream refuses by design (LinkedIn through the
+# user's own logged-in browser). Loaded by providers/_registry.mjs
+# loadLocalProviders(); never offered upstream.
+providers.local/
