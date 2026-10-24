@@ -492,6 +492,8 @@ A single-string `modes_dir` (today's default, ~90% of users) behaves exactly as 
 | Wants to queue a request for later / check the inbox between sessions | `agent-inbox` — append-only checklist drained next session; nothing auto-submits |
 | Wants to add a finished project, paper, or role to the CV | `add` — source-grounded preview, confirm-before-write; dedup + insertion via `add-entry.mjs` |
 | Wants to sync their Notion career records into the data root ("sync my Notion records") | `notion-sync` — reads the pages mapped in `config/notion-map.yml` through the session's Notion connector, builds one proposal (`modes/_context.md`, the `preferences` and `interests` blocks of `config/profile.yml`, `article-digest.md`, `config/cv-facts.json` lists, `data/career-profile.yml` facts as `needs_review`) under the factual rules in `modes/notion-sync.md`, shows the diff with `node notion-sync-apply.mjs --dry-run`, and writes only after an explicit yes with `--apply`; never writes to Notion |
+| Wants the weekly LinkedIn connection plan ("who should I connect with this week") | `network` — runs `node network-plan.mjs`, ranks the companies in the tracker and the pipeline, prints company-page and people-search links per role, records covered companies with `--done`; never sends an invitation |
+| Wants comments drafted for LinkedIn posts ("draft today's comments") | `engage` — picks at most three posts from the feeder's JSON hand-off or pasted text, drafts 40 to 90-word comments from `templates/posts.md`; never posts |
 
 ### CV Source of Truth
 

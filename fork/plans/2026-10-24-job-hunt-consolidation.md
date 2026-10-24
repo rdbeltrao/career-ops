@@ -13,7 +13,7 @@
 ## Global Constraints
 
 - Node engine stays `^22.13.0 || >=23.4.0`; no new npm dependency.
-- Personal data never enters the career-ops checkout. The data root is `/Users/renatobeltrao/Projects/job-hunt-private` (`CAREER_OPS_DATA_DIR`). Every new user-layer file is declared in `USER_PATHS` (`update-system.mjs`) and `DATA_CONTRACT.md`.
+- Personal data never enters the career-ops checkout. The data root is `~/Projects/job-hunt-private` (`CAREER_OPS_DATA_DIR`). Every new user-layer file is declared in `USER_PATHS` (`update-system.mjs`) and `DATA_CONTRACT.md`.
 - Scripts resolve paths through `path-resolver.mjs` (`getCareerOpsRoot()`, `getProfilePath()`), never `__dirname`, for anything in the user layer.
 - Scores: the LLM Global score stays 1-5 and holistic (`modes/_shared.md`). Jev reports `fit` 0-100, `verdict` apply|maybe|skip, and its own `score` 1-5 computed as `round(1 + 4 * fit / 100, 1)`. The two are shown side by side and never averaged.
 - Jev `skip` with a blocking answer is a hard stop before Block A unless the run says "evaluate anyway"; blocking answers are `seniority_match` in {below, above}, `location_ok` = no, `language_blocker` = missing, `stack_fit` = required_mismatch.
@@ -44,8 +44,8 @@ Four tracks run in parallel on their own branches and never edit the same file. 
 | A: Jev core | `feat/jev-score` | `lib/openrouter-key.mjs`, `lib/jev-criteria.mjs`, `lib/jd-store.mjs`, `jev-score.mjs`, `jev-rank.mjs`, `config/jev-criteria.example.yml`, `calibrate.mjs`, `docs/JEV.md`, `tests/jev-*.test.mjs`, `tests/jd-store.test.mjs`, `tests/openrouter-key.test.mjs`, `tests/fixtures/jev/` |
 | B: context + loaders | `feat/context-layer` | `config/profile.example.yml`, `modes/_context.template.md`, `render-context.mjs`, `notion-sync-apply.mjs`, `modes/notion-sync.md`, `modes/_shared.md`, `modes/oferta.md`, `modes/auto-pipeline.md`, `modes/triage.md`, `modes/pipeline.md`, `modes/_brief.template.md`, `batch/batch-prompt.md`, `batch/batch-runner.sh`, `openrouter-runner.mjs`, `openai-eval.mjs`, `gemini-eval.mjs`, `ollama-eval.mjs`, `web/src/lib/run-prompts.mjs`, `web/src/lib/machine-summary.mjs`, `.agents/skills/career-ops/SKILL.md`, `AGENTS.md`, `DATA_CONTRACT.md`, `update-system.mjs`, `doctor.mjs`, `tests/render-context.test.mjs`, `tests/notion-sync-apply.test.mjs`, `tests/context-loaders.test.mjs` |
 | C: drafts + LinkedIn modes | `feat/drafts-linkedin` | `modes/apply.md`, `modes/cover.md`, `modes/email.md`, `modes/contacto.md`, `modes/interview-prep.md`, `modes/followup.md`, `modes/_writing.md`, `modes/network.md`, `modes/engage.md`, `network-plan.mjs`, `templates/outreach.md`, `templates/posts.md`, `data-static/ats-notes.md`, `docs/LINKEDIN.md`, `tests/network-plan.test.mjs`, `tests/draft-modes-context.test.mjs` |
-| D: feeder (job-hunt repo) | `feat/pipeline-export` in `/Users/renatobeltrao/Projects/job-hunt` | `jobs/pipeline_md.py`, `jobs/cli.py`, `README.md`, `tests/test_pipeline_md.py` |
-| O: orchestrator | data root and merges | everything under `/Users/renatobeltrao/Projects/job-hunt-private`, `.env` and `config/local-paths.txt` in the checkout, router entries for `network` and `engage`, tracker import |
+| D: feeder (job-hunt repo) | `feat/pipeline-export` in `~/Projects/job-hunt` | `jobs/pipeline_md.py`, `jobs/cli.py`, `README.md`, `tests/test_pipeline_md.py` |
+| O: orchestrator | data root and merges | everything under `~/Projects/job-hunt-private`, `.env` and `config/local-paths.txt` in the checkout, router entries for `network` and `engage`, tracker import |
 
 ## Shared interface contracts (read before any track starts)
 
@@ -413,7 +413,7 @@ Run: `node --test tests/openrouter-key.test.mjs` — Expected: FAIL, module not 
 
 ### Task O1: Phase 0, data root and checkout wiring
 
-- [ ] `.env` in the checkout: `CAREER_OPS_DATA_DIR=/Users/renatobeltrao/Projects/job-hunt-private`, `CAREER_OPS_CLI=claude`.
+- [ ] `.env` in the checkout: `CAREER_OPS_DATA_DIR=~/Projects/job-hunt-private`, `CAREER_OPS_CLI=claude`.
 - [ ] `config/local-paths.txt` from the example with: `docs/superpowers/`, `jev-score.mjs`, `jev-rank.mjs`, `render-context.mjs`, `notion-sync-apply.mjs`, `network-plan.mjs`, `lib/openrouter-key.mjs`, `lib/jev-criteria.mjs`, `lib/jd-store.mjs`, `modes/notion-sync.md`, `modes/network.md`, `modes/engage.md`, `templates/outreach.md`, `templates/posts.md`, `data-static/ats-notes.md`, `docs/JEV.md`, `docs/LINKEDIN.md`, `config/jev-criteria.example.yml`, `config/notion-map.example.yml`, `modes/_context.template.md`; un-ignore and commit it per the example's instructions.
 - [ ] Data root: `node doctor.mjs --json --init-templates`; `node onboard-write.mjs --answers -` with the facts from `job-hunt-private/profile.md`; `cv.md` converted from `job-hunt/applications/Renato_Beltrao_CV_2026-10.docx` with `python-docx` (headings per AGENTS.md Step 1 shape); `modes/_context.md` = `profile.md` verbatim; `config/jev-criteria.yml` = port of `jobs/scoring/criteria.py` wording; `modes/_profile.md`, `_brief.md`, `_custom.md` personalised from `profile.md` and the job-search-plugin rules; `portals.yml` `tracked_companies` from `companies.yaml`; `data/applications.md`, `data/pipeline.md` skeletons; `config/notion-map.yml` from `job-search-plugin/shared/notion-map.md`; `.env` with `CAREER_OPS_CLI=claude`.
 - [ ] `node doctor.mjs` green except Playwright chromium when absent; commit the data root in job-hunt-private.
@@ -427,6 +427,6 @@ Run: `node --test tests/openrouter-key.test.mjs` — Expected: FAIL, module not 
 ### Task O3: Phase 5, tracker import and retirement notes
 
 - [ ] One-off script in the scratchpad: read `job-hunt/out/jobs.csv`; for rows with status `applied` write a headed TSV (status `Applied`, score `N/A`, pdf `❌`, report `-`, notes `imported from job-hunt; jev fit {score} {verdict}`, url), for `draft` write `Evaluated` with the same notes; `node merge-tracker.mjs`; `node tracker.mjs sync`.
-- [ ] Run the feeder once: `uv run python -m jobs pipeline --data-root /Users/renatobeltrao/Projects/job-hunt-private` on the existing `out/jobs.jsonl`; then `node jev-rank.mjs --limit 20 --no-fetch` and read the summary.
+- [ ] Run the feeder once: `uv run python -m jobs pipeline --data-root ~/Projects/job-hunt-private` on the existing `out/jobs.jsonl`; then `node jev-rank.mjs --limit 20 --no-fetch` and read the summary.
 - [ ] `job-search-plugin/README.md` (create if absent): one paragraph that the skills are superseded by the career-ops fork, with the mode names.
 - [ ] Verification run: `node openrouter-runner.mjs evaluate <one known URL>` and confirm the report carries `**Jev:**` and the `jev:` block; `bash batch/batch-runner.sh --dry-run --limit 3`.
