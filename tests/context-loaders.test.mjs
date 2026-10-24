@@ -483,3 +483,10 @@ test('extractCompanyRole prefers the Machine Summary company and role over the t
   const unknown = '## Machine Summary\n\n```yaml\ncompany: "?"\nrole: "EM"\n```\n# Evaluation: Acme — EM\n';
   assert.deepEqual(or.extractCompanyRole(unknown), { company: 'Acme', role: 'EM' });
 });
+
+test('paidModelRefusal lets free models and the explicit opt-in through, refuses paid pinned models', () => {
+  assert.equal(or.paidModelRefusal(undefined, {}), null);
+  assert.equal(or.paidModelRefusal('meta-llama/llama-3.3-70b-instruct:free', {}), null);
+  assert.match(or.paidModelRefusal('anthropic/claude-sonnet-5.5', {}), /Refusing to evaluate with the paid model anthropic\/claude-sonnet-5\.5/);
+  assert.equal(or.paidModelRefusal('anthropic/claude-sonnet-5.5', { CAREER_OPS_ALLOW_PAID_OPENROUTER: '1' }), null);
+});

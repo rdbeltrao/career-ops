@@ -389,6 +389,24 @@ export function buildCachedSystemMessage(systemPrompt) {
 // ---------------------------------------------------------------------------
 // OpenRouter API call — automatic model rotation with fallback
 // ---------------------------------------------------------------------------
+/**
+ * Fork guard: OpenRouter pays for the Jev pre-screen only. A pinned paid model
+ * spends real credit on every full evaluation (60k+ prompt tokens each), and
+ * the Claude subscription runs the same evaluation for nothing (`claude -p`,
+ * batch/batch-runner.sh, /career-ops pipeline). A `:free` model passes; any
+ * other pinned model needs CAREER_OPS_ALLOW_PAID_OPENROUTER=1 in that shell.
+ *
+ * @param {string|undefined} model - CAREER_OPS_MODEL
+ * @param {NodeJS.ProcessEnv} [env]
+ * @returns {string|null} the refusal message, or null when the call may proceed
+ */
+export function paidModelRefusal(model, env = process.env) {
+  if (!model || /:free$/.test(model) || env.CAREER_OPS_ALLOW_PAID_OPENROUTER === '1') return null;
+  return `Refusing to evaluate with the paid model ${model} through OpenRouter: this fork keeps OpenRouter for the Jev pre-screen. `
+    + 'Run evaluations through your Claude subscription (bash batch/batch-runner.sh, or /career-ops pipeline), '
+    + 'or set CAREER_OPS_ALLOW_PAID_OPENROUTER=1 for this one shell.';
+}
+
 async function callOpenRouter(systemPrompt, userMessage) {
   const key = process.env.OPENROUTER_API_KEY;
   if (!key) {
@@ -401,6 +419,8 @@ async function callOpenRouter(systemPrompt, userMessage) {
 
   const pinnedModel = process.env.CAREER_OPS_MODEL;
   if (pinnedModel) {
+    const refusal = paidModelRefusal(pinnedModel);
+    if (refusal) throw new Error(refusal);
     activeModel = pinnedModel;
     process.stdout.write(`[model] ${pinnedModel} (pinned) ... `);
     const body = JSON.stringify(buildRequestBody({ model: pinnedModel, systemPrompt, userMessage, maxTokens: MAX_TOKENS, reasoning: REASONING }));
