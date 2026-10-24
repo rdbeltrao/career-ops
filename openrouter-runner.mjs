@@ -1027,18 +1027,18 @@ async function cmdEvaluate(input, ctx) {
     const roleName    = named.role ?? '(see report)';
     const reportLink  = `[${numStr}](reports/${numStr}-${slug}-${today}.md)`;
     const cell        = (s) => String(s).replace(/[\t\r\n]+/g, ' ').trim();
-    // The header gains a `url` label only when the row carries one; the
-    // name keeps the HEADER suffix test-all.mjs looks for in every evaluator's
-    // addition write.
-    const ADDITION_HEADER = postingUrl ? `${TSV_ADDITION_HEADER}\turl` : TSV_ADDITION_HEADER;
-    const tsvLine     = `${num}\t${today}\t${cell(companyName)}\t${cell(roleName)}\tEvaluated\t${scoreStr}\t❌\t${reportLink}\t${postingUrl ? `\t${postingUrl}` : ''}\n`;
+    // No url column: merge-tracker.mjs derives the posting URL from the report's
+    // own `**URL:**` header (resolveReportUrl), which this report now carries,
+    // and the suite checks that every evaluator writes exactly the shared
+    // header above its row.
+    const tsvLine     = `${num}\t${today}\t${cell(companyName)}\t${cell(roleName)}\tEvaluated\t${scoreStr}\t❌\t${reportLink}\t\n`;
     const tsvFile     = `batch/tracker-additions/or-${numStr}-${slug}.tsv`;
     // Header row, then the single data row. merge-tracker.mjs resolves the
     // fields by NAME when the header is present (#3517), so this row cannot be
     // read into the wrong columns. (Headerless files still work; they are the
     // legacy form, and they are the ones that can hit the undecidable
     // score-vs-status case.)
-    writeFile(tsvFile, `${ADDITION_HEADER}\n${tsvLine}`);
+    writeFile(tsvFile, `${TSV_ADDITION_HEADER}\n${tsvLine}`);
     lastSavedReport = { reportFile: `${numStr}-${slug}-${today}.md`, score: scoreStr };
 
     console.log(`\n✅ Report saved: ${relPath}`);
