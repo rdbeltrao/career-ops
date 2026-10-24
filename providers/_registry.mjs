@@ -11,6 +11,15 @@ import { existsSync, readdirSync } from 'fs';
 import path from 'path';
 import { pathToFileURL } from 'url';
 
+// Fork-local providers (rdbeltrao/career-ops). Upstream refuses some sources by
+// design (LinkedIn scraping), so a fork keeps those modules in providers.local/
+// next to the shipped providers/ and never offers them upstream. The ids below
+// are the optional modules a fork may supply there: a portals.yml entry naming
+// one while the file is missing is a feature that is off, reported once as a
+// skip, not an unknown-provider error. Loaded by loadLocalProviders().
+export const LOCAL_PROVIDERS_DIRNAME = 'providers.local';
+export const LOCAL_PROVIDER_IDS = new Set(['linkedin-browser']);
+
 /**
  * Load every provider plugin in a directory into an id→provider Map.
  *
@@ -51,6 +60,32 @@ export async function loadProviders(dir) {
 }
 
 /**
+ * Merge a fork's own providers from `providers.local/` into the shipped set.
+ *
+ * The directory is optional: when it is absent the map comes back untouched
+ * and nothing is printed. Each module is loaded by loadProviders() with the
+ * same forgiveness (a broken module is a warning, never a crash); a local id
+ * that collides with a shipped provider is skipped with a warning and the
+ * shipped one stays, so a fork cannot silently shadow an upstream provider.
+ *
+ * @param {string} dir - Absolute path to the providers.local directory.
+ * @param {Map<string, object>} providers - The map from loadProviders(), mutated.
+ * @returns {Promise<Map<string, object>>} The same map.
+ */
+export async function loadLocalProviders(dir, providers) {
+  if (!existsSync(dir)) return providers;
+  const local = await loadProviders(dir);
+  for (const [id, p] of local) {
+    if (providers.has(id)) {
+      console.error(`⚠️  ${LOCAL_PROVIDERS_DIRNAME}/${id}.mjs: id "${id}" is already a shipped provider — keeping the shipped one`);
+      continue;
+    }
+    providers.set(id, p);
+  }
+  return providers;
+}
+
+/**
  * Resolve which provider handles a portals.yml entry (tracked_companies or job_boards).
  *   1. Explicit `provider:` field wins (skips detect()).
  *   2. local-parser when parser.command + script are configured (before API detect).
@@ -63,12 +98,20 @@ export async function loadProviders(dir) {
  *   skipped id is skipped however the entry reached it: an explicit `provider:`
  *   naming one resolves as if the field were absent, the same way the same
  *   entry resolves when it relies on detect().
- * @returns {{provider: object}|{error: string}|null}
+ * @returns {{provider: object}|{error: string}|{skipped: string}|null} `skipped`
+ *   names a fork-local provider (LOCAL_PROVIDER_IDS) whose module is not on
+ *   disk: the caller skips the entry and says so once, as it would for an
+ *   entry no provider claims.
  */
 export function resolveProvider(entry, providers, { skipIds = [] } = {}) {
   if (entry.provider && !skipIds.includes(entry.provider)) {
     const p = providers.get(entry.provider);
-    if (!p) return { error: `unknown provider: ${entry.provider}` };
+    if (!p) {
+      if (LOCAL_PROVIDER_IDS.has(entry.provider)) {
+        return { skipped: `provider "${entry.provider}" is fork-local and ${LOCAL_PROVIDERS_DIRNAME}/${entry.provider}.mjs is not installed` };
+      }
+      return { error: `unknown provider: ${entry.provider}` };
+    }
     return { provider: p };
   }
 
