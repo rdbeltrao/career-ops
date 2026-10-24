@@ -521,6 +521,26 @@ export async function loadJevModule({ jevPath } = {}) {
  *   `block` is the markdown block to append to the request (null when the
  *   script is not installed), `result` the parsed score when it ran.
  */
+/**
+ * Fill process.env.OPENROUTER_API_KEY from the shared resolver when .env and the
+ * environment left it empty: OPENROUTER_API_KEY_JOB_SEARCH, the code-root and
+ * data-root .env files, then the macOS Keychain (lib/openrouter-key.mjs). The
+ * main OpenRouter call reads process.env, so this is the one place the fork
+ * widens where the key may live; nothing here prints or stores the key.
+ *
+ * @param {{ env?: NodeJS.ProcessEnv, dataRoot?: string }} [opts]
+ * @returns {Promise<string|null>} the key now in env, or null when none was found
+ */
+export async function ensureOpenRouterKeyInEnv({ env = process.env, dataRoot = DATA_ROOT } = {}) {
+  if (env.OPENROUTER_API_KEY) return env.OPENROUTER_API_KEY;
+  const keyModule = await loadOptionalModule('./lib/openrouter-key.mjs');
+  if (typeof keyModule?.resolveOpenRouterKey !== 'function') return null;
+  const codeRoot = fileURLToPath(new URL('.', import.meta.url));
+  const { key } = keyModule.resolveOpenRouterKey({ env, codeRoot, dataRoot });
+  if (key) env.OPENROUTER_API_KEY = key;
+  return key ?? null;
+}
+
 export async function jevPrescreen(job, { jev, env = process.env, dataRoot = DATA_ROOT, loadCriteria } = {}) {
   if (!jev) {
     return { block: null, result: null, notice: 'ℹ️  Jev pre-screen not run: jev-score.mjs is not installed' };
@@ -1044,6 +1064,7 @@ async function cmdApply(ref, ctx) {
 const invokedDirectly = isMainModule(import.meta.url);
 const [,, command, ...args] = invokedDirectly ? process.argv : [];
 if (invokedDirectly) loadEnvFile();
+if (invokedDirectly) await ensureOpenRouterKeyInEnv();
 if (invokedDirectly) MODEL_TIMEOUT_MS = resolveModelTimeoutMs();
 const ctx = invokedDirectly ? loadContext() : null;
 

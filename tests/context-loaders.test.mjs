@@ -401,3 +401,12 @@ test('batch-runner.sh rejects a bad --min-jev or --skip-jev-verdict before doing
     assert.match(`${r.stdout}${r.stderr}`, /ERROR: --(min-jev|skip-jev-verdict)/);
   }
 });
+
+test('ensureOpenRouterKeyInEnv keeps an existing key and returns null with no source', async () => {
+  const withKey = { OPENROUTER_API_KEY: 'present' };
+  assert.equal(await or.ensureOpenRouterKeyInEnv({ env: withKey }), 'present');
+  const emptyRoot = mkdtempSync(join(tmpdir(), 'ctx-runner-key-'));
+  const env = { CAREER_OPS_SKIP_KEYCHAIN: '1' };
+  assert.equal(await or.ensureOpenRouterKeyInEnv({ env, dataRoot: emptyRoot }), null);
+  assert.equal(env.OPENROUTER_API_KEY, undefined, 'nothing is written when no key was found');
+});
