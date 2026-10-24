@@ -71,3 +71,33 @@ test('the templates carry no email address or phone number', () => {
     assert.ok(!text.includes('+49'), `${rel} contains "+49"`);
   }
 });
+
+// ── C2: draft modes read the context ────────────────────────────────────────
+
+const DRAFT_MODES = ['modes/cover.md', 'modes/email.md', 'modes/contacto.md', 'modes/interview-prep.md', 'modes/followup.md'];
+
+for (const rel of DRAFT_MODES) {
+  test(`${rel} reads modes/_context.md and the interests block`, () => {
+    const text = read(rel);
+    assert.ok(text.includes('modes/_context.md'), `${rel} does not name modes/_context.md`);
+    assert.ok(text.includes('interests'), `${rel} does not name the interests block`);
+    assert.ok(text.includes('modes/_writing.md'), `${rel} does not name modes/_writing.md`);
+  });
+}
+
+test('contacto.md builds its messages from templates/outreach.md and has the referral and networking variants', () => {
+  const text = read('modes/contacto.md');
+  assert.ok(text.includes('templates/outreach.md'), 'contacto.md does not name templates/outreach.md');
+  for (const heading of ['## Referral variant', '## Networking variant']) {
+    assert.ok(text.includes(heading), `contacto.md is missing "${heading}"`);
+  }
+  // The existing variants and personas stay: other suites pin them.
+  for (const kept of ['## LinkedIn power move (default)', '## Greeting variant', 'Internal Referral', 'contact-lookup.mjs']) {
+    assert.ok(text.includes(kept), `contacto.md lost "${kept}"`);
+  }
+});
+
+test('contacto.md applies the outreach rules from _writing.md', () => {
+  const text = read('modes/contacto.md');
+  assert.ok(text.includes('Outreach and comment rules'), 'contacto.md does not point at the outreach rules');
+});
