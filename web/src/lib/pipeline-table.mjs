@@ -28,7 +28,24 @@ export function splitLines(text) {
   return text.split(/\r?\n/);
 }
 
-const LABELED_SEGMENT = /^(posted|trust|note|rank):\s(.*)$/i;
+const LABELED_SEGMENT = /^(posted|trust|note|rank|jev):\s(.*)$/i;
+
+/** The Jev pre-screen segment jev-rank.mjs writes: `jev: {fit} {verdict} — {reasons}`
+ *  (modes/pipeline.md). `fit` is 0-100 or `n/a`; the reasons are free text. */
+const JEV_SEGMENT = /^(\d{1,3}|n\/a)\s+(apply|maybe|skip)(?:\s+[—-]\s+(.*))?$/i;
+
+/** @typedef {{ fit: number | null, verdict: "apply" | "maybe" | "skip", reasons: string }} InboxJev */
+
+/** Parse the value of a `jev:` label, or null when it does not follow the segment grammar.
+ *  @param {string | undefined} value
+ *  @returns {InboxJev | null} */
+export function parseJevSegment(value) {
+  if (!value) return null;
+  const m = value.trim().match(JEV_SEGMENT);
+  if (!m) return null;
+  const fit = /^\d+$/.test(m[1]) ? Math.min(100, Number(m[1])) : null;
+  return { fit, verdict: /** @type {InboxJev["verdict"]} */ (m[2].toLowerCase()), reasons: (m[3] ?? "").trim() };
+}
 
 /** What a row points at: a posting URL, or a job description saved on disk
  *  (`local:jds/…`, the row modes/scan.md writes for a pasted posting). */
@@ -42,7 +59,7 @@ const ROW_TARGET = /^(?:https?:\/\/|local:\S)/i;
  *  compensation. Missing company and role stay empty. A row with neither an
  *  http(s) nor a `local:` cell is skipped. Further trailing columns are ignored.
  *  @param {string} md - content of data/pipeline.md.
- *  @returns {{url: string, company: string, role: string, location?: string, compensation?: string, done: boolean, postedAt?: string}[]}
+ *  @returns {{url: string, company: string, role: string, location?: string, compensation?: string, done: boolean, postedAt?: string, jev?: InboxJev}[]}
  */
 export function parseInbox(md) {
   const jobs = [];
@@ -73,6 +90,8 @@ export function parseInbox(md) {
       // the row's own posting date (scan.mjs `posted:` label) — a more direct
       // freshness signal than the scan-history join, which stays as fallback
       postedAt: posted && /^\d{4}-\d{2}-\d{2}$/.test(posted) ? posted : undefined,
+      // the Jev pre-screen (`jev:` label from jev-rank.mjs or the feeder); absent when unscored
+      ...(labels.has("jev") && parseJevSegment(labels.get("jev")) ? { jev: parseJevSegment(labels.get("jev")) } : {}),
     });
   }
   return jobs;

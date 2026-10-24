@@ -90,8 +90,22 @@ export function TriageRow({
           {job.location && <span className="truncate">{job.location}</span>}
           {source && <span className="rounded bg-surface-hover px-1 py-px font-medium text-muted">{ATS_LABEL[source]}</span>}
           {ago && <span>{ago}</span>}
+          {/* Jev pre-screen (jev-rank.mjs): a calibrated verdict, not the A-H score. */}
+          {job.jev && (
+            <span
+              title={job.jev.reasons || undefined}
+              className={cn(
+                "rounded px-1 py-px font-medium",
+                job.jev.verdict === "apply" && "bg-emerald-500/15 text-emerald-700 dark:text-emerald-300",
+                job.jev.verdict === "maybe" && "bg-amber-500/15 text-amber-700 dark:text-amber-300",
+                job.jev.verdict === "skip" && "bg-red-500/15 text-red-700 dark:text-red-300",
+              )}
+            >
+              Jev {job.jev.fit ?? "n/a"} · {job.jev.verdict}
+            </span>
+          )}
           {/* 🔴 CRUDA: honest "not scored" — no fabricated match%. */}
-          {!evaluated && <span className="italic text-muted">not scored</span>}
+          {!evaluated && !job.jev && <span className="italic text-muted">not scored</span>}
         </p>
       </div>
 

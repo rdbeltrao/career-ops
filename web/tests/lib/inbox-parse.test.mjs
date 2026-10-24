@@ -141,3 +141,21 @@ test("a CRLF bare URL row still parses", () => {
   assert.ok(!jobs[0].url.includes("\r"));
   assert.equal(jobs[0].company, "");
 });
+
+test("a jev: segment becomes a parsed pre-screen and never leaks into location", () => {
+  const [row] = parseInbox(
+    `- [ ] ${URL} | Acme | Engineering Manager | Berlin, Germany | posted: 2026-10-18 | note: linkedin em-berlin | jev: 79 apply — seniority match, location yes, language none, product, stack agnostic\n`,
+  );
+  assert.equal(row.location, "Berlin, Germany");
+  assert.equal(row.compensation, undefined);
+  assert.deepEqual(row.jev, { fit: 79, verdict: "apply", reasons: "seniority match, location yes, language none, product, stack agnostic" });
+});
+
+test("a jev: segment with n/a fit and no reasons parses; an unscored row has no jev", () => {
+  const [a, b, c] = parseInbox(
+    `- [ ] ${URL}1 | Acme | Engineer | jev: n/a maybe\n- [ ] ${URL}2 | Acme | Engineer | posted: 2026-10-18\n- [ ] ${URL}3 | Acme | Engineer | jev: garbage\n`,
+  );
+  assert.deepEqual(a.jev, { fit: null, verdict: "maybe", reasons: "" });
+  assert.equal(b.jev, undefined);
+  assert.equal(c.jev, undefined, "a malformed segment is ignored rather than guessed at");
+});

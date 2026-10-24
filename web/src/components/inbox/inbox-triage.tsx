@@ -19,6 +19,9 @@ const SHORTLIST_KEY = "career-ops:shortlist";
 const HIDDEN_KEY = "career-ops:hidden";
 const CONFIG_KEY = "career-ops:config";
 const BATCH = 20;
+type JevFacet = "apply" | "maybe" | "unscored";
+const JEV_FACETS: JevFacet[] = ["apply", "maybe", "unscored"];
+const jevFacetOf = (job: InboxJob): JevFacet => (job.jev ? (job.jev.verdict === "apply" ? "apply" : "maybe") : "unscored");
 type UndoNotice = { label: string; fn: () => Promise<void>; busy?: boolean; error?: string };
 
 // The inbox as a TRIAGE surface: Abundance → Triage → Shortlist → Opt-in Score.
@@ -40,6 +43,8 @@ export function InboxTriage({ inbox }: { inbox: InboxJob[] }) {
   const [locQ, setLocQ] = useState("");
   const [kw, setKw] = useState("");
   const [showAll, setShowAll] = useState(false);
+  // Jev verdict facet (apply / maybe / unscored). Empty set = no verdict filter.
+  const [verdicts, setVerdicts] = useState<Set<JevFacet>>(() => new Set());
 
   // persisted triage state + ephemeral selection/undo
   const [shortlist, setShortlist] = useState<ShortItem[]>([]);
@@ -144,17 +149,29 @@ export function InboxTriage({ inbox }: { inbox: InboxJob[] }) {
         if (seniorities.size && (!e.seniority || !seniorities.has(e.seniority))) return false;
         if (locQ.trim() && !(e.job.location || "").toLowerCase().includes(locQ.trim().toLowerCase())) return false;
         if (kw.trim() && !`${e.job.company} ${e.job.role}`.toLowerCase().includes(kw.trim().toLowerCase())) return false;
+        if (verdicts.size && !verdicts.has(jevFacetOf(e.job))) return false;
         return true;
       }),
-    [enriched, hidden, within, sources, seniorities, locQ, kw],
+    [enriched, hidden, within, sources, seniorities, locQ, kw, verdicts],
   );
 
   // 🔴 SINGLE ORDER PLUG POINT — freshness only (newest first_seen first; unknown last).
   // A smarter ranker replaces ONLY this comparator; facets/triage/shortlist/score never
   // touch relevance. This is the whole firewall in one line.
-  const ordered = useMemo(() => [...filtered].sort((a, b) => (a.age ?? Infinity) - (b.age ?? Infinity)), [filtered]);
+  // Fork: the Jev pre-screen fit comes first when present (apply above maybe, higher fit
+  // first), freshness breaks ties and orders the unscored rows exactly as before.
+  const ordered = useMemo(
+    () =>
+      [...filtered].sort((a, b) => {
+        const fa = a.job.jev?.fit ?? -1;
+        const fb = b.job.jev?.fit ?? -1;
+        if (fa !== fb) return fb - fa;
+        return (a.age ?? Infinity) - (b.age ?? Infinity);
+      }),
+    [filtered],
+  );
 
-  const anyFacet = within != null || sources.size > 0 || seniorities.size > 0 || locQ.trim() !== "" || kw.trim() !== "";
+  const anyFacet = within != null || sources.size > 0 || seniorities.size > 0 || locQ.trim() !== "" || kw.trim() !== "" || verdicts.size > 0;
   const capped = !showAll && !anyFacet;
   const visible = capped ? ordered.slice(0, BATCH) : ordered;
   const hiddenCount = hidden.length;
@@ -266,8 +283,34 @@ export function InboxTriage({ inbox }: { inbox: InboxJob[] }) {
         resultCount={filtered.length}
         totalCount={enriched.length - hiddenCount}
         anyActive={anyFacet}
-        onClear={() => { setWithin(null); setSources(new Set()); setSeniorities(new Set()); setLocQ(""); setKw(""); }}
+        onClear={() => { setWithin(null); setSources(new Set()); setSeniorities(new Set()); setLocQ(""); setKw(""); setVerdicts(new Set()); }}
       />
+
+      {/* Jev verdict chips (fork): free, from the jev: segment jev-rank.mjs writes */}
+      {enriched.some((e) => e.job.jev) && (
+        <div className="mt-2 flex flex-wrap items-center gap-1.5 text-xs">
+          <span className="text-faint">Jev</span>
+          {JEV_FACETS.map((v) => {
+            const count = enriched.filter((e) => !hidden.includes(e.job.url) && jevFacetOf(e.job) === v).length;
+            if (count === 0) return null;
+            const active = verdicts.has(v);
+            return (
+              <button
+                key={v}
+                type="button"
+                aria-pressed={active}
+                onClick={() => setVerdicts((set) => { const n = new Set(set); n.has(v) ? n.delete(v) : n.add(v); return n; })}
+                className={cn(
+                  "rounded-full border px-2.5 py-1 font-medium transition-colors max-sm:min-h-[44px]",
+                  active ? "border-brand bg-brand-soft text-brand" : "border-border text-muted hover:border-brand/40 hover:text-foreground",
+                )}
+              >
+                {v} <span className="tabular-nums text-faint">{count}</span>
+              </button>
+            );
+          })}
+        </div>
+      )}
 
       {/* batch header: fresh slice by default, or the full filtered set */}
       <div className="mt-4 flex items-baseline justify-between gap-3">
