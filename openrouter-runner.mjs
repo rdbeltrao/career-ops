@@ -23,6 +23,14 @@
  *                               milliseconds (positive integer; default 15000).
  *                               A pinned model running a full evaluation needs
  *                               more than the default, e.g. 180000.
+ *   CAREER_OPS_MAX_TOKENS       Completion budget per call (positive integer;
+ *                               default 8192). Shared with reasoning on models
+ *                               that think first.
+ *   CAREER_OPS_REASONING        off | low | medium | high | <token budget>.
+ *                               Sent as OpenRouter's `reasoning` field; unset
+ *                               sends none. claude-sonnet-5.5 needs `low` plus
+ *                               CAREER_OPS_MAX_TOKENS=16384 to return a report
+ *                               instead of an empty, all-reasoning answer.
  *
  * Context: cv.md, config/profile.yml, modes/_profile.md and, when present,
  * modes/_context.md (the fit profile — targeting only, never evidence). The Jev
@@ -81,7 +89,9 @@ function loadEnvFile() {
 // ---------------------------------------------------------------------------
 const OPENROUTER_API_URL    = 'https://openrouter.ai/api/v1/chat/completions';
 const OPENROUTER_MODELS_URL = 'https://openrouter.ai/api/v1/models';
-const MAX_TOKENS            = 8192;
+const DEFAULT_MAX_TOKENS    = 8192;
+let MAX_TOKENS              = DEFAULT_MAX_TOKENS; // resolved from CAREER_OPS_MAX_TOKENS at startup
+let REASONING               = null;               // resolved from CAREER_OPS_REASONING at startup
 const RATE_LIMIT_DELAY_MS   = 2500;  // pause between requests on free tier
 const DEFAULT_MODEL_TIMEOUT_MS = 15_000; // abort a single model call after 15 s unless overridden
 
@@ -101,6 +111,96 @@ export function resolveModelTimeoutMs(env = process.env) {
   if (!/^\d+$/.test(text)) return DEFAULT_MODEL_TIMEOUT_MS;
   const parsed = Number(text);
   return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : DEFAULT_MODEL_TIMEOUT_MS;
+}
+
+/**
+ * CAREER_OPS_MAX_TOKENS as a positive safe integer, else 8192. The budget is
+ * shared between reasoning and the answer on models that think before they
+ * write, so a full A-H report from such a model needs more than the default
+ * (16384 is enough for claude-sonnet-5.5 with CAREER_OPS_REASONING=low).
+ *
+ * @param {NodeJS.ProcessEnv} [env]
+ * @returns {number}
+ */
+export function resolveMaxTokens(env = process.env) {
+  const raw = env.CAREER_OPS_MAX_TOKENS;
+  if (raw === undefined) return DEFAULT_MAX_TOKENS;
+  const text = String(raw).trim();
+  if (!/^\d+$/.test(text)) return DEFAULT_MAX_TOKENS;
+  const parsed = Number(text);
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : DEFAULT_MAX_TOKENS;
+}
+
+/**
+ * CAREER_OPS_REASONING as OpenRouter's unified `reasoning` request field, or
+ * null when unset or unrecognised (the request then carries no field, exactly
+ * as before). Accepted: `off` (no thinking), `low` / `medium` / `high` (an
+ * effort level), or a positive integer (a thinking budget in tokens).
+ *
+ * A reasoning-first model such as claude-sonnet-5.5 otherwise spends the whole
+ * max_tokens budget thinking about a 60k-token evaluation prompt and returns
+ * no content at all (finish_reason "length", every completion token a
+ * reasoning token). Bounding the effort leaves room for the report.
+ *
+ * @param {NodeJS.ProcessEnv} [env]
+ * @returns {{ enabled: false } | { effort: 'low'|'medium'|'high' } | { max_tokens: number } | null}
+ */
+export function resolveReasoning(env = process.env) {
+  const raw = env.CAREER_OPS_REASONING;
+  if (raw === undefined) return null;
+  const text = String(raw).trim().toLowerCase();
+  if (!text) return null;
+  if (text === 'off' || text === 'none' || text === 'disabled') return { enabled: false };
+  if (text === 'low' || text === 'medium' || text === 'high') return { effort: text };
+  if (/^\d+$/.test(text)) {
+    const n = Number(text);
+    return Number.isSafeInteger(n) && n > 0 ? { max_tokens: n } : null;
+  }
+  return null;
+}
+
+/**
+ * The chat-completions body for one model call: the cached system message,
+ * the user message, the token budget, and the `reasoning` field only when one
+ * was resolved, so an install without CAREER_OPS_REASONING sends the request
+ * it always sent.
+ *
+ * @param {{ model: string, systemPrompt: string, userMessage: string, maxTokens: number, reasoning?: object|null }} args
+ * @returns {object}
+ */
+export function buildRequestBody({ model, systemPrompt, userMessage, maxTokens, reasoning = null }) {
+  const body = {
+    model,
+    messages: [
+      buildCachedSystemMessage(systemPrompt),
+      { role: 'user', content: userMessage },
+    ],
+    max_tokens: maxTokens,
+  };
+  if (reasoning) body.reasoning = reasoning;
+  return body;
+}
+
+/**
+ * Why a 200 response carried no content, as one actionable sentence. The case
+ * this exists for: finish_reason "length" with (nearly) every completion token
+ * spent on reasoning, which is a budget problem, not a provider failure.
+ *
+ * @param {object} data - the parsed chat-completions response
+ * @param {number} maxTokens - the max_tokens the request carried
+ * @returns {string}
+ */
+export function describeEmptyResponse(data, maxTokens) {
+  const choice = data?.choices?.[0] ?? {};
+  const finish = choice.finish_reason ?? choice.native_finish_reason ?? 'unknown';
+  const completion = Number(data?.usage?.completion_tokens ?? 0);
+  const reasoning = Number(data?.usage?.completion_tokens_details?.reasoning_tokens ?? 0);
+  if (finish === 'length' && completion > 0 && reasoning >= completion * 0.9) {
+    return `Empty response: the model spent its whole max_tokens budget (${maxTokens}) on reasoning `
+      + `(${reasoning} of ${completion} completion tokens, finish_reason "length"). `
+      + 'Set CAREER_OPS_REASONING=low (or off) and raise CAREER_OPS_MAX_TOKENS, for example 16384.';
+  }
+  return `Empty response (finish_reason "${finish}")`;
 }
 
 let MODEL_TIMEOUT_MS = DEFAULT_MODEL_TIMEOUT_MS;
@@ -290,14 +390,7 @@ async function callOpenRouter(systemPrompt, userMessage) {
   if (pinnedModel) {
     activeModel = pinnedModel;
     process.stdout.write(`[model] ${pinnedModel} (pinned) ... `);
-    const body = JSON.stringify({
-      model: pinnedModel,
-      messages: [
-        buildCachedSystemMessage(systemPrompt),
-        { role: 'user', content: userMessage },
-      ],
-      max_tokens: MAX_TOKENS,
-    });
+    const body = JSON.stringify(buildRequestBody({ model: pinnedModel, systemPrompt, userMessage, maxTokens: MAX_TOKENS, reasoning: REASONING }));
     const ctrl = new AbortController();
     const timerId = setTimeout(() => ctrl.abort(), MODEL_TIMEOUT_MS);
     try {
@@ -319,7 +412,7 @@ async function callOpenRouter(systemPrompt, userMessage) {
       const data = await resp.json();
       if (data.error) throw new Error(data.error.message);
       const content = data.choices?.[0]?.message?.content ?? '';
-      if (!content) throw new Error('Empty response');
+      if (!content) throw new Error(describeEmptyResponse(data, MAX_TOKENS));
       console.log('OK');
       const usage = normalizeOpenAIUsage(data.usage);
       return { content, usage };
@@ -349,14 +442,7 @@ async function callOpenRouter(systemPrompt, userMessage) {
     process.stdout.write(`[model] ${model} ... `);
 
     try {
-      const body = JSON.stringify({
-        model,
-        messages: [
-          buildCachedSystemMessage(systemPrompt),
-          { role: 'user', content: userMessage },
-        ],
-        max_tokens: MAX_TOKENS,
-      });
+      const body = JSON.stringify(buildRequestBody({ model, systemPrompt, userMessage, maxTokens: MAX_TOKENS, reasoning: REASONING }));
 
       const controller = new AbortController();
       const timerId = setTimeout(() => controller.abort(), MODEL_TIMEOUT_MS);
@@ -387,7 +473,7 @@ async function callOpenRouter(systemPrompt, userMessage) {
       if (data.error) throw new Error(data.error.message);
 
       const content = data.choices?.[0]?.message?.content ?? '';
-      if (!content) throw new Error('Empty response');
+      if (!content) throw new Error(describeEmptyResponse(data, MAX_TOKENS));
 
       const usage = normalizeOpenAIUsage(data.usage);
 
@@ -1066,6 +1152,7 @@ const [,, command, ...args] = invokedDirectly ? process.argv : [];
 if (invokedDirectly) loadEnvFile();
 if (invokedDirectly) await ensureOpenRouterKeyInEnv();
 if (invokedDirectly) MODEL_TIMEOUT_MS = resolveModelTimeoutMs();
+if (invokedDirectly) { MAX_TOKENS = resolveMaxTokens(); REASONING = resolveReasoning(); }
 const ctx = invokedDirectly ? loadContext() : null;
 
 // Load free models list before running any AI command (skip when a model is pinned)

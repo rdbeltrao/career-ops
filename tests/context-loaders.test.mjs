@@ -410,3 +410,46 @@ test('ensureOpenRouterKeyInEnv keeps an existing key and returns null with no so
   assert.equal(await or.ensureOpenRouterKeyInEnv({ env, dataRoot: emptyRoot }), null);
   assert.equal(env.OPENROUTER_API_KEY, undefined, 'nothing is written when no key was found');
 });
+
+test('resolveMaxTokens and resolveReasoning: defaults for unset or invalid, parsed otherwise', () => {
+  assert.equal(or.resolveMaxTokens({}), 8192);
+  for (const bad of ['', 'abc', '-1', '0', '1.5']) assert.equal(or.resolveMaxTokens({ CAREER_OPS_MAX_TOKENS: bad }), 8192, `"${bad}" should fall back`);
+  assert.equal(or.resolveMaxTokens({ CAREER_OPS_MAX_TOKENS: ' 16384 ' }), 16384);
+  assert.equal(or.resolveReasoning({}), null);
+  for (const bad of ['', 'maximum', '0', '-5', 'LOWEST']) assert.equal(or.resolveReasoning({ CAREER_OPS_REASONING: bad }), null, `"${bad}" should send no field`);
+  assert.deepEqual(or.resolveReasoning({ CAREER_OPS_REASONING: 'off' }), { enabled: false });
+  assert.deepEqual(or.resolveReasoning({ CAREER_OPS_REASONING: ' Low ' }), { effort: 'low' });
+  assert.deepEqual(or.resolveReasoning({ CAREER_OPS_REASONING: 'high' }), { effort: 'high' });
+  assert.deepEqual(or.resolveReasoning({ CAREER_OPS_REASONING: '2048' }), { max_tokens: 2048 });
+});
+
+test('buildRequestBody sends reasoning only when resolved and keeps the cached system message', () => {
+  const base = { model: 'm', systemPrompt: 'SYS', userMessage: 'USER', maxTokens: 8192 };
+  const plain = or.buildRequestBody(base);
+  assert.deepEqual(plain, {
+    model: 'm',
+    messages: [
+      { role: 'system', content: [{ type: 'text', text: 'SYS', cache_control: { type: 'ephemeral' } }] },
+      { role: 'user', content: 'USER' },
+    ],
+    max_tokens: 8192,
+  });
+  assert.equal(Object.hasOwn(plain, 'reasoning'), false, 'no field when nothing was resolved');
+  const bounded = or.buildRequestBody({ ...base, maxTokens: 16384, reasoning: { effort: 'low' } });
+  assert.equal(bounded.max_tokens, 16384);
+  assert.deepEqual(bounded.reasoning, { effort: 'low' });
+});
+
+test('describeEmptyResponse names the all-reasoning budget exhaustion and falls back to the finish reason', () => {
+  const exhausted = {
+    choices: [{ finish_reason: 'length', native_finish_reason: 'max_tokens', message: { content: null } }],
+    usage: { completion_tokens: 8192, completion_tokens_details: { reasoning_tokens: 8191 } },
+  };
+  const msg = or.describeEmptyResponse(exhausted, 8192);
+  assert.match(msg, /spent its whole max_tokens budget \(8192\) on reasoning \(8191 of 8192/);
+  assert.match(msg, /CAREER_OPS_REASONING=low/);
+  assert.match(msg, /CAREER_OPS_MAX_TOKENS/);
+  const filtered = { choices: [{ finish_reason: 'content_filter', message: { content: '' } }], usage: { completion_tokens: 10 } };
+  assert.equal(or.describeEmptyResponse(filtered, 8192), 'Empty response (finish_reason "content_filter")');
+  assert.equal(or.describeEmptyResponse({}, 8192), 'Empty response (finish_reason "unknown")');
+});
