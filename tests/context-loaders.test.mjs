@@ -476,3 +476,10 @@ test('extractCompanyRole reads the report title with any dash and falls back to 
   assert.deepEqual(or.extractCompanyRole('# Evaluation: Parloa - Senior Engineering Manager'), { company: 'Parloa', role: 'Senior Engineering Manager' });
   assert.deepEqual(or.extractCompanyRole('no title here'), { company: null, role: null });
 });
+
+test('extractCompanyRole prefers the Machine Summary company and role over the title', () => {
+  const report = '**Score:** 3.1/5\n\n## Machine Summary\n\n```yaml\ncompany: "Jobgether (for a client)"\nrole: "Head of Engineering"\nscore: 3.1\n```\n\n## A) Role Summary\n';
+  assert.deepEqual(or.extractCompanyRole(report), { company: 'Jobgether (for a client)', role: 'Head of Engineering' });
+  const unknown = '## Machine Summary\n\n```yaml\ncompany: "?"\nrole: "EM"\n```\n# Evaluation: Acme — EM\n';
+  assert.deepEqual(or.extractCompanyRole(unknown), { company: 'Acme', role: 'EM' });
+});

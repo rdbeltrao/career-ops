@@ -820,9 +820,18 @@ export function extractPostingUrl(text) {
  * @returns {{ company: string|null, role: string|null }}
  */
 export function extractCompanyRole(result) {
-  const m = String(result ?? '').match(/^#\s*(?:Evaluation|Evaluaci[oó]n|Bewertung):\s*(.+?)\s*(?:—|–|--| - |:)\s*(.+?)\s*$/m);
+  const text = String(result ?? '');
+  const clean = (s) => s.replace(/\*\*/g, '').replace(/^["']|["']$/g, '').replace(/\s+/g, ' ').trim();
+  // The Machine Summary is the schema authority (batch/batch-prompt.md): its
+  // company and role fields are filled even when the model skipped the title.
+  const fence = text.match(/##\s*Machine Summary\s*\n+```(?:yaml|yml)?\s*\n([\s\S]*?)\n```/i);
+  if (fence) {
+    const c = fence[1].match(/^company:\s*(.+?)\s*$/m); const r = fence[1].match(/^role:\s*(.+?)\s*$/m);
+    const company = c ? clean(c[1]) : ''; const role = r ? clean(r[1]) : '';
+    if (company && role && company !== '?' && !/^\{.*\}$/.test(company) && company.length <= 80) return { company, role };
+  }
+  const m = text.match(/^#\s*(?:Evaluation|Evaluaci[oó]n|Bewertung):\s*(.+?)\s*(?:—|–|--| - |:)\s*(.+?)\s*$/m);
   if (!m) return { company: null, role: null };
-  const clean = (s) => s.replace(/\*\*/g, '').replace(/\s+/g, ' ').trim();
   const company = clean(m[1]); const role = clean(m[2]);
   if (!company || !role || company.length > 80) return { company: null, role: null };
   return { company, role };
@@ -983,10 +992,14 @@ async function cmdEvaluate(input, ctx) {
     const relPath = `reports/${numStr}-${slug}-${today}.md`;
     lastSavedReport = null;
 
-    // Extract Legitimacy from LLM output or fall back to placeholder
+    // The report opens with the model's own header when it wrote one. Only a
+    // result without a `**URL:**` line gets the URL and Legitimacy lines
+    // prepended: a second header above the first made the dashboard read
+    // `(pasted)` as the posting URL (reports showed "No application URL").
     const legitMatch = result.match(/\*\*Legitimacy:\*\*\s*([^\n]+)/);
     const legitLine  = legitMatch ? `**Legitimacy:** ${legitMatch[1].trim()}` : '**Legitimacy:** unconfirmed';
-    writeFile(relPath, `**URL:** ${postingUrl || '(pasted)'}\n${legitLine}\n\n${withJdArchiveSection(result, archiveText)}`);
+    const prelude = /^\*\*URL:\*\*/m.test(result) ? '' : `**URL:** ${postingUrl || '(pasted)'}\n${legitLine}\n\n`;
+    writeFile(relPath, `${prelude}${withJdArchiveSection(result, archiveText)}`);
 
     // Capture the DENOMINATOR when the model writes one. The old pattern took
     // only the numeric prefix, so `Score: 8/10` yielded `8` and the cell became
