@@ -9,6 +9,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
+import { spawnSync } from 'node:child_process';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import provider, {
@@ -441,4 +442,20 @@ test('the browser profile comes from LINKEDIN_PROFILE_DIR, else ~/.job-hunt/brow
   } finally {
     if (previous === undefined) delete process.env.LINKEDIN_PROFILE_DIR; else process.env.LINKEDIN_PROFILE_DIR = previous;
   }
+});
+
+// ---- the login script
+
+test('node linkedin-login.mjs --help prints usage and exits 0 without opening a browser; a bad flag exits 1', () => {
+  const script = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'linkedin-login.mjs');
+  const help = spawnSync(process.execPath, [script, '--help'], { encoding: 'utf-8', timeout: 20_000 });
+  assert.equal(help.status, 0, help.stderr);
+  assert.ok(help.stdout.includes('node linkedin-login.mjs'), help.stdout);
+  assert.ok(help.stdout.includes('LINKEDIN_LOGIN_TIMEOUT_MS'), help.stdout);
+  assert.ok(help.stdout.includes('no credential is read or stored'), help.stdout);
+  const bad = spawnSync(process.execPath, [script, '--bogus'], { encoding: 'utf-8', timeout: 20_000 });
+  assert.equal(bad.status, 1);
+  assert.match(bad.stderr, /unrecognized flag/);
+  const src = readFileSync(script, 'utf-8');
+  assert.ok(!/password|credential\s*=|\.fill\(|\.type\(/i.test(src.replace(/^\s*(\/\/|\*).*$/gm, '').replace(/`[\s\S]*?`/g, '')), 'the script never types or reads a credential');
 });
