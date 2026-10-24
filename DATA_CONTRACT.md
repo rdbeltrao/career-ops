@@ -18,6 +18,9 @@ These files contain your personal data, customizations, and work product. Update
 | `modes/_profile.md` | Your archetypes, narrative, negotiation scripts |
 | `modes/_custom.md` | Your house rules, custom workflows & output preferences (procedural — survives updates) |
 | `modes/_brief.md` | Your compact profile brief (~1.5–2K tokens) read by the two-pass triage first pass |
+| `modes/_context.md` | Your fit profile (target role, location and language, preferences, deal-breakers, technical tiers, match signals) — a targeting source every evaluation and draft reads, never evidence: `verify-cv-facts.mjs` does not read it, so a number that exists only here still fails the fact gate. Seeded from `modes/_context.template.md`, or written by the `notion-sync` mode after a shown diff. Read whole by `node jev-score.mjs` as the profile text |
+| `config/jev-criteria.yml` | Your Jev pre-screen questions and wording (optional; copy `config/jev-criteria.example.yml` here and tune it — read by `node jev-score.mjs`; question keys and labels are the contract, the wording is yours) |
+| `config/notion-map.yml` | Your Notion page map for the `notion-sync` mode: root, the career-record pages, employer pages and example ids (optional; copy `config/notion-map.example.yml` here and fill in your own URLs — never written by any script) |
 | `voice-dna.md` | Your writing voice guardrail — banned words, anti-AI-slop rules, tone (optional) |
 | `article-digest.md` | Your proof points from portfolio |
 | `interview-prep/story-bank.md` | Your accumulated STAR+R stories |
@@ -64,6 +67,8 @@ These files contain your personal data, customizations, and work product. Update
 | `batch/tracker-additions/*.tsv` | Pending tracker rows, one TSV per evaluation (gitignored). `merge-tracker.mjs` reads them from the data root, not the checkout |
 | `output/*` | Your generated PDFs; `output/.gitkeep` is the system-owned directory scaffold and may be replaced by the updater |
 | `jds/*` | Your saved job descriptions; `jds/.gitkeep` is the system-owned directory scaffold and may be replaced by the updater |
+| `jds/feeder/*.json` | JD files written by an external feeder (the job-hunt LinkedIn fetch) or `lib/jd-store.mjs`: one `{source}-{source_id}.json` per posting with the job object `node jev-score.mjs` reads, plus `source`, `source_id`, `first_seen`, `search_name`. Read by `node jev-rank.mjs` before it fetches anything |
+| `data/jd-index.tsv` | Append-only index of `jds/feeder/`: `url\tpath\tsource\tsource_id\tfirst_seen`, one row per URL, `path` relative to the data root. Written by the feeder and `lib/jd-store.mjs`; never edited in place |
 | `templates/cv-{candidate}-{company-slug}.html`, `templates/cover-{candidate}-{company-slug}.html` | Your per-application generated CVs/cover letters, for installs that save the HTML twin under `templates/` instead of `output/` (#3636). `templates/` is otherwise system-owned (base CV/cover templates), so these are recognized by name rather than directory: anything under `templates/` starting with `cv-` or `cover-` that is NOT one of the shipped `cv-template*.html` / `cover-letter-template*.html` files is treated as your data — see `isGeneratedTemplateArtifact()` in `update-system.mjs` |
 | `templates/cv-template.{name}.html` / `.tex`, `templates/cover-letter-template.{name}.html` / `.tex` | Your own named CV/cover-letter template variant, when `{name}` matches `cv.template` / `cover_letter.template` in `config/profile.yml`, or in the profile an exported `CAREER_OPS_PROFILE` names (the updater never loads a `.env`; it reads both, and skips with a warning a data-root profile it cannot parse while the override is the one in force; the convention `cv-templates.mjs`'s `resolveTemplate()` reads — see its `KINDS`). `templates/` is otherwise system-owned, and a variant file this install created shares that directory and naming shape with the real shipped variants (`cv-template.zh-minimal.html`, ...), so it is recognized by cross-referencing the configured template name rather than by directory — see `isUserConfiguredTemplateVariant()` in `update-system.mjs`. An unconfigured or differently-named `cv-template.*.html` file is not covered by this carve-out and is still managed as a system file (updated or pruned normally). This is distinct from `templates/cv-{candidate}-{company-slug}.html` / `templates/cover-{candidate}-{company-slug}.html`, which is generated per-application *output*, not an authored template *variant*. |
 
@@ -101,6 +106,7 @@ These files contain system logic, scripts, templates, and instructions that impr
 | `modes/_custom.template.md` | Template seed for the user's `modes/_custom.md` |
 | `modes/_profile.template.md` | Template seed for the user's `modes/_profile.md` |
 | `modes/_brief.template.md` | Template seed for the user's `modes/_brief.md` |
+| `modes/_context.template.md` | Template seed for the user's `modes/_context.md` (the fit profile; targeting source, never evidence) |
 | `modes/oferta.md` | Evaluation mode instructions |
 | `modes/pdf.md` | PDF generation instructions |
 | `modes/cover.md` | Cover letter generation instructions |
@@ -166,6 +172,7 @@ These files contain system logic, scripts, templates, and instructions that impr
 | `plugins-registry/` | Curated community plugins, one `<id>.json` per plugin (the trust root) |
 | `plugin-install.mjs` / `plugin-audit.mjs` / `validate-plugin-registry.mjs` | Plugin install/audit/registry-validation utilities |
 | `config/plugins.example.yml` | Plugin activation template (seed for `config/plugins.yml`) |
+| `config/jev-criteria.example.yml` | Jev pre-screen criteria template (seed for `config/jev-criteria.yml`; the default `node jev-score.mjs` reads when the user file is absent) |
 | `opencode.example.json` | OpenCode project config template (seed for `opencode.json`; ships Playwright MCP registration) |
 | `batch/batch-prompt.md` | Batch worker prompt |
 | `batch/batch-runner.sh` | Batch orchestrator |
