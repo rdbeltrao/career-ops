@@ -31,7 +31,9 @@
 | article-digest.md | `article-digest.md` (varsa) | Her zaman — ayrıntılı kanıtlar |
 | profile.yml | `config/profile.yml` | Her zaman — kişisel bilgiler ve hedef roller |
 | _profile.md | `modes/_profile.md` | Her zaman — kullanıcı arketipleri, anlatı, müzakere |
+| _context.md | `{DATA_ROOT}/modes/_context.md` (if exists), read through `node context-evidence.mjs` | ALWAYS, context tier — the candidate's fit profile. Its qualitative facts (roles, employers, domains, responsibilities, skills, practices, languages, talks, publications) are evidence for the evaluation, cited as `_context.md:`; its numbers arrive masked as `[n]`, so a figure is evidence only when `cv.md` or `article-digest.md` carries it; it is never a source for candidate-facing text. Full rule: `AGENTS.md` → Source-of-Truth Boundary → Context tier. Read it after `_profile.md` and before `_custom.md`; when absent, say so in one line |
 
+**RULE: `modes/_context.md` is evidence for the evaluation and never for candidate-facing text.** Read it through `node context-evidence.mjs` (numbers masked as `[n]`); a requirement that only `_context.md` meets is `✅ Strong (context)` or `⚠️ Partial (context)`, never `❌ Missing`; a `[n]` is never written out as a figure. The tier is defined once, in `AGENTS.md` → Source-of-Truth Boundary → Context tier.
 **KURAL: Kanıt noktalarındaki ölçüm değerlerini ASLA sabit kodlama.** Değerlendirme sırasında bunları cv.md + article-digest.md dosyalarından oku.
 **KURAL: Makale/proje metrikleri için `article-digest.md`, `cv.md`'ye göre önceliklidir.**
 **KURAL: `cv.md` veya `article-digest.md` içinde açıkça adaya atfedilmediği sürece, adayın bir projenin, deponun, kütüphanenin, aracın, framework'ün veya açık kaynak bir yapıtın yaratıcısı olduğunu ASLA iddia etme.** Bir aracı "kullanmak" ile onu "yaratmış olmak"ı karıştırmak (X'i kullanmak, X'i yaratmış olmak değildir) en yaygın uydurma kalıbıdır ve yasaktır.

@@ -39,7 +39,9 @@
 | article-digest.md | `article-digest.md` (если есть) | ВСЕГДА (детальные proof points) |
 | profile.yml | `config/profile.yml` | ВСЕГДА (идентичность кандидата и целевые роли) |
 | _profile.md | `modes/_profile.md` | ВСЕГДА (пользовательские архетипы, нарратив, переговоры) |
+| _context.md | `{DATA_ROOT}/modes/_context.md` (if exists), read through `node context-evidence.mjs` | ALWAYS, context tier — the candidate's fit profile. Its qualitative facts (roles, employers, domains, responsibilities, skills, practices, languages, talks, publications) are evidence for the evaluation, cited as `_context.md:`; its numbers arrive masked as `[n]`, so a figure is evidence only when `cv.md` or `article-digest.md` carries it; it is never a source for candidate-facing text. Full rule: `AGENTS.md` → Source-of-Truth Boundary → Context tier. Read it after `_profile.md` and before `_custom.md`; when absent, say so in one line |
 
+**RULE: `modes/_context.md` is evidence for the evaluation and never for candidate-facing text.** Read it through `node context-evidence.mjs` (numbers masked as `[n]`); a requirement that only `_context.md` meets is `✅ Strong (context)` or `⚠️ Partial (context)`, never `❌ Missing`; a `[n]` is never written out as a figure. The tier is defined once, in `AGENTS.md` → Source-of-Truth Boundary → Context tier.
 **ПРАВИЛО: НИКОГДА не хардкодить метрики из proof points.** Читать их из cv.md + article-digest.md во время оценки.
 **ПРАВИЛО: Для метрик статей/проектов `article-digest.md` имеет приоритет над `cv.md`.**
 **ПРАВИЛО: Читать `_profile.md` ПОСЛЕ этого файла. Пользовательские настройки в `_profile.md` перезаписывают значения по умолчанию.**

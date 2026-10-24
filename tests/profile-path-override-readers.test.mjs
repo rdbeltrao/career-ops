@@ -124,6 +124,9 @@ function touched(argv, { override, cwd = decoyCwd, dotEnvDir }) {
     CAREER_OPS_TRACKER: '',
     CAREER_OPS_PROFILE: override ? profileB : '',
     OPENAI_API_KEY: 'unused', GEMINI_API_KEY: 'unused', OPENROUTER_API_KEY: 'unused',
+    // The evaluators run the Jev pre-screen before their request; off here so
+    // no request leaves the machine and only the profile reads are observed.
+    CAREER_OPS_JEV: 'off',
     OPENAI_BASE_URL: 'http://127.0.0.1:9/v1', OLLAMA_BASE_URL: ollamaUrl,
     CAREER_OPS_MODEL: 'probe-model',
   };

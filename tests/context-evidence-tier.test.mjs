@@ -15,6 +15,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import * as fsSync from 'node:fs';
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -66,12 +67,13 @@ test('modes/_shared.md states the context-tier rule and points at AGENTS.md', ()
   const row = sources.split('\n').find((l) => l.startsWith('| _context.md |')) ?? '';
   assert.match(row, /ALWAYS, context tier/);
   assert.match(row, /qualitative facts .* are evidence for the evaluation/);
-  assert.match(row, /numbers are targeting only/);
+  assert.match(row, /numbers arrive masked as `\[n\]`/);
+  assert.match(row, /node context-evidence\.mjs/);
   assert.match(row, /never a source for candidate-facing text/);
   assert.match(row, /`AGENTS\.md` → Source-of-Truth Boundary → Context tier/, 'the row does not point at the one definition');
   assert.match(sources, /^\*\*RULE: `modes\/_context\.md` is evidence for the evaluation and never for candidate-facing text\.\*\*/m);
   assert.match(sources, /`✅ Strong \(context\)` or `⚠️ Partial \(context\)`, never `❌ Missing`/);
-  assert.match(sources, /A number that exists only in `_context\.md` is written nowhere in the report/);
+  assert.match(sources, /The context reaches you number-masked: a `\[n\]` stands for a figure that lives only in `_context\.md`, is written nowhere in the report/);
 });
 
 for (const [rel, blockHeading] of [['modes/oferta.md', '## Block B — Match with CV'], ['batch/batch-prompt.md', '#### Block B — CV Match']]) {
@@ -92,11 +94,69 @@ for (const [rel, blockHeading] of [['modes/oferta.md', '## Block B — Match wit
     assert.match(blockB, /never quoted in `Evidence \/ gap`/, 'a context-only number must never be quoted as evidence');
     assert.match(blockB, /`✅ Strong` never rests on it|never the basis of a `✅ Strong`/, 'a context-only number must never carry a Strong');
     assert.match(blockB, /figure left out/, 'the row that needs the figure must drop it');
+    assert.match(blockB, /masked as `\[n\]`/, 'Block B does not say the context arrives number-masked');
+    assert.match(blockB, /\*\*Context gaps to confirm:\*\*/, 'Block B has no Context gaps to confirm line');
+    assert.match(blockB, /never invent a fact to close one/i);
+    assert.match(blockB, /`requirement_importance\.match` stays `strong \| partial \| missing \| na`/, 'the gaps line must stay out of the Machine Summary enum');
     // The CV stays the CV.
     assert.match(blockB, /Nothing from `modes\/_context\.md` reaches the tailored CV|Nothing from `_context\.md` reaches the tailored CV/,
       'a cited row must not leak into the tailored CV');
   });
 }
+
+test('both report templates carry a Scoring note line that names a missing Jev gate or research', () => {
+  const oferta = read('modes/oferta.md');
+  assert.match(oferta, /^\*\*Jev:\*\* [^\n]*\n\*\*Scoring note:\*\* /m, 'oferta.md: **Scoring note:** is not the line under **Jev:**');
+  const batch = read('batch/batch-prompt.md');
+  assert.match(batch, /^\*\*Score:\*\* \{X\.X\/5\}\n\*\*Scoring note:\*\* /m, 'batch-prompt.md: **Scoring note:** is not the line under **Score:**');
+  for (const text of [oferta, batch]) {
+    const line = text.split('\n').find((l) => l.startsWith('**Scoring note:**'));
+    assert.match(line, /`no Jev gate`/);
+    assert.match(line, /`no web research`/);
+    assert.match(line, /docs\/JEV\.md → Score variance/);
+  }
+  const jev = read('docs/JEV.md');
+  assert.match(jev, /^## Score variance$/m);
+  assert.match(jev, /lib\/sampling\.mjs/);
+  assert.match(jev, /model noise/);
+});
+
+test('the router, the web prompt and the batch runner read the context through node context-evidence.mjs', () => {
+  const skill = read('.agents/skills/career-ops/SKILL.md');
+  assert.match(skill, /read it through `node context-evidence\.mjs`[^\n]*never the raw file/);
+  assert.match(skill, /\[output of `node context-evidence\.mjs` if modes\/_context\.md exists/);
+  const runner = read('batch/batch-runner.sh');
+  assert.match(runner, /node "\$PROJECT_DIR\/context-evidence\.mjs" --file "\$context_file"/);
+  assert.match(runner, /context-evidence\.mjs not found — pasting modes\/_context\.md unmasked/, 'the runner must degrade with a line, never fail');
+  const agents = read('AGENTS.md');
+  assert.match(agents, /^\| `context-evidence\.mjs` \|/m, 'AGENTS.md scripts table has no row for context-evidence.mjs');
+  assert.match(agents, /mask such figures as `\[n\]` before the model sees the file/);
+});
+
+test('every automated evaluator sends temperature 0 and a fixed seed and runs the Jev pre-screen', () => {
+  for (const file of ['openai-eval.mjs', 'gemini-eval.mjs', 'ollama-eval.mjs', 'batch-evaluate-gemini.mjs', 'openrouter-runner.mjs']) {
+    const src = read(file);
+    assert.match(src, /SAMPLING_TEMPERATURE/, `${file} does not use the shared temperature`);
+    assert.match(src, /SAMPLING_SEED/, `${file} does not use the shared seed`);
+    assert.ok(!/temperature:\s*0\.4/.test(src), `${file} still hardcodes temperature 0.4`);
+    assert.match(src, /jevPrescreen\(/, `${file} does not run the Jev pre-screen`);
+  }
+  const sampling = read('lib/sampling.mjs');
+  assert.match(sampling, /export const SAMPLING_TEMPERATURE = 0;/);
+  assert.match(sampling, /export const SAMPLING_SEED = 42;/);
+});
+
+test('every translated _shared.md carries the _context.md row and the pointer to the tier', () => {
+  const { readdirSync, statSync } = fsSync;
+  const dirs = readdirSync(join(ROOT, 'modes')).filter((d) => statSync(join(ROOT, 'modes', d)).isDirectory() && existsSync(join(ROOT, 'modes', d, '_shared.md')) && d !== 'oferta-signals');
+  assert.ok(dirs.length >= 20, `expected the translated modes directories, found ${dirs.length}`);
+  for (const d of dirs) {
+    const text = read(`modes/${d}/_shared.md`);
+    assert.match(text, /^\| _context\.md \| `\{DATA_ROOT\}\/modes\/_context\.md` \(if exists\), read through `node context-evidence\.mjs` \| ALWAYS, context tier/m, `modes/${d}/_shared.md has no _context.md row`);
+    assert.match(text, /`AGENTS\.md` → Source-of-Truth Boundary → Context tier/, `modes/${d}/_shared.md does not point at the tier`);
+    assert.match(text, /^\*\*RULE: `modes\/_context\.md` is evidence for the evaluation and never for candidate-facing text\.\*\*/m, `modes/${d}/_shared.md has no context rule`);
+  }
+});
 
 test('modes/oferta.md: Blocks C and F may frame on context facts, with the figures from cv.md only', () => {
   const oferta = read('modes/oferta.md');
@@ -112,7 +172,7 @@ test('modes/oferta.md: Blocks C and F may frame on context facts, with the figur
 });
 
 test('every evaluator presents modes/_context.md as the context tier with the quantified-claims caveat', () => {
-  const LABEL = 'CANDIDATE CONTEXT (modes/_context.md — context tier: qualitative facts are evidence for the evaluation, cite them as _context.md:; a number that appears below but not in cv.md or article-digest.md is written nowhere in the report, not even as an approximate team size or scope; never a source for the CV, a letter or a form answer)';
+  const LABEL = 'CANDIDATE CONTEXT (modes/_context.md — context tier: qualitative facts are evidence for the evaluation, cite them as _context.md:; its numbers are masked as [n], so every figure you see came from cv.md or article-digest.md and a [n] is never written as a figure; never a source for the CV, a letter or a form answer)';
   for (const file of ['openai-eval.mjs', 'gemini-eval.mjs', 'ollama-eval.mjs', 'batch-evaluate-gemini.mjs']) {
     const src = read(file);
     assert.ok(src.includes(LABEL), `${file} does not carry the shared context-tier label`);
@@ -120,20 +180,20 @@ test('every evaluator presents modes/_context.md as the context tier with the qu
     assert.ok(!/targeting only, never evidence/.test(src), `${file} still carries the old targeting-only label`);
   }
   const runner = read('openrouter-runner.mjs');
-  assert.ok(runner.includes('CANDIDATE CONTEXT (context tier: qualitative facts are evidence for the evaluation, cite them as _context.md:; a number that appears below but not in cv.md or article-digest.md is written nowhere in the report, not even as an approximate team size or scope; never a source for the CV, a letter or a form answer):'),
+  assert.ok(runner.includes('CANDIDATE CONTEXT (context tier: qualitative facts are evidence for the evaluation, cite them as _context.md:; its numbers are masked as [n], so every figure you see came from cv.md or article-digest.md and a [n] is never written as a figure; never a source for the CV, a letter or a form answer):'),
     'openrouter-runner.mjs does not carry the context-tier label');
   const webPrompts = join(ROOT, 'web', 'src', 'lib', 'run-prompts.mjs');
   if (existsSync(webPrompts)) {
     const prompts = read('web/src/lib/run-prompts.mjs');
     assert.match(prompts, /context tier of the Source-of-Truth Boundary/);
-    assert.match(prompts, /its numbers are targeting only and a figure that exists only there is written nowhere in the report/);
+    assert.match(prompts, /node context-evidence\.mjs/);
   }
 });
 
 test('batch-evaluate-gemini.mjs loads modes/_context.md after _profile.md and runs as before without it', () => {
   const src = read('batch-evaluate-gemini.mjs');
   assert.match(src, /context:\s+join\(DATA_ROOT, 'modes', '_context\.md'\)/, 'PATHS has no context entry under the data root');
-  assert.match(src, /existsSync\(PATHS\.context\)/, 'the file must be optional');
+  assert.match(src, /readMaskedContext\(DATA_ROOT\)\?\.text \?\? ''/, 'the file must be optional and masked');
   assert.match(src, /modes\/_context\.md not found — evaluating on cv\.md and profile\.yml only/, 'no one-line notice for the absent file');
   const template = section(src, 'systemPromptTemplate = `', /IMPORTANT OPERATING RULES/);
   assert.ok(template.indexOf('(_profile.md)') < template.indexOf('${contextSection}'), 'the context section must follow _profile.md');

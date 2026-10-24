@@ -31,7 +31,9 @@
 | 個人偏好設定 | `config/profile.yml` | 一律讀取（求職者的個人身分、目標薪資與地點偏好）|
 | 個人客製策略 | `modes/_profile.md` | 一律讀取（自訂原型偏好、求職敘事、談判話術）|
 | 寫作樣本目錄 | `writing-samples/` | 僅在產生求職者對外文本時 — 先檢查 `_profile.md` 中快取的 `## 寫作風格`，缺少時再掃描此目錄 |
+| _context.md | `{DATA_ROOT}/modes/_context.md` (if exists), read through `node context-evidence.mjs` | ALWAYS, context tier — the candidate's fit profile. Its qualitative facts (roles, employers, domains, responsibilities, skills, practices, languages, talks, publications) are evidence for the evaluation, cited as `_context.md:`; its numbers arrive masked as `[n]`, so a figure is evidence only when `cv.md` or `article-digest.md` carries it; it is never a source for candidate-facing text. Full rule: `AGENTS.md` → Source-of-Truth Boundary → Context tier. Read it after `_profile.md` and before `_custom.md`; when absent, say so in one line |
 
+**RULE: `modes/_context.md` is evidence for the evaluation and never for candidate-facing text.** Read it through `node context-evidence.mjs` (numbers masked as `[n]`); a requirement that only `_context.md` meets is `✅ Strong (context)` or `⚠️ Partial (context)`, never `❌ Missing`; a `[n]` is never written out as a figure. The tier is defined once, in `AGENTS.md` → Source-of-Truth Boundary → Context tier.
 **規則：嚴禁把專案／文章的量化指標寫死在程式或模式檔中。** 必須在評估時從 `cv.md` 和 `article-digest.md` 動態讀取。
 **規則：關於文章與專案指標，`article-digest.md` 的優先權高於 `cv.md`。**
 **規則：絕不宣稱求職者是某個專案、程式碼儲存庫、函式庫、工具、框架或開源產物的作者／建立者，除非 `cv.md` 或 `article-digest.md` 中明確歸於求職者。** 把「使用某個工具」與「建立了它」混為一談（使用 X 不等於建立了 X）是最常見的捏造模式，嚴禁如此。

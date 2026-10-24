@@ -1570,12 +1570,20 @@ process_offer() {
   # the router loads them in: it is the candidate's fit profile, the context
   # tier of the Source-of-Truth Boundary (qualitative facts are evidence for
   # the evaluation, numbers are targeting only, never a source for the CV).
+  # The context file is pasted number-masked (node context-evidence.mjs), so a
+  # figure that lives only there never reaches the worker; when the masking
+  # script is missing from this checkout the raw file is used and a line says so.
   for context_file in "$DATA_ROOT/modes/_profile.md" "$PROFILE_FILE" "$DATA_ROOT/modes/_context.md" "$DATA_ROOT/modes/_custom.md"; do
     if [[ -f "$context_file" ]]; then
       {
         printf '\n\n---\n\n'
         printf '## Runtime personalization: %s\n\n' "${context_file#"$DATA_ROOT/"}"
-        sed 's/^/    /' "$context_file"
+        if [[ "$context_file" == "$DATA_ROOT/modes/_context.md" && -f "$PROJECT_DIR/context-evidence.mjs" ]]; then
+          node "$PROJECT_DIR/context-evidence.mjs" --file "$context_file" | sed 's/^/    /'
+        else
+          [[ "$context_file" == "$DATA_ROOT/modes/_context.md" ]] && echo "context: context-evidence.mjs not found — pasting modes/_context.md unmasked" >&2
+          sed 's/^/    /' "$context_file"
+        fi
         printf '\n'
       } >> "$resolved_prompt"
     fi

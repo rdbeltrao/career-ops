@@ -33,7 +33,9 @@
 | cv.md | `cv.md` (프로젝트 루트) | 항상 |
 | article-digest.md | `article-digest.md` (있다면) | 항상 (상세 proof point) |
 | profile.yml | `config/profile.yml` | 항상 (신원 정보와 목표 역할) |
+| _context.md | `{DATA_ROOT}/modes/_context.md` (if exists), read through `node context-evidence.mjs` | ALWAYS, context tier — the candidate's fit profile. Its qualitative facts (roles, employers, domains, responsibilities, skills, practices, languages, talks, publications) are evidence for the evaluation, cited as `_context.md:`; its numbers arrive masked as `[n]`, so a figure is evidence only when `cv.md` or `article-digest.md` carries it; it is never a source for candidate-facing text. Full rule: `AGENTS.md` → Source-of-Truth Boundary → Context tier. Read it after `_profile.md` and before `_custom.md`; when absent, say so in one line |
 
+**RULE: `modes/_context.md` is evidence for the evaluation and never for candidate-facing text.** Read it through `node context-evidence.mjs` (numbers masked as `[n]`); a requirement that only `_context.md` meets is `✅ Strong (context)` or `⚠️ Partial (context)`, never `❌ Missing`; a `[n]` is never written out as a figure. The tier is defined once, in `AGENTS.md` → Source-of-Truth Boundary → Context tier.
 **규칙: proof point의 metric을 절대 하드코딩하지 않습니다.** 평가 시점에 `cv.md`와 `article-digest.md`에서 읽습니다.
 **규칙: article/project metric은 `article-digest.md`가 `cv.md`보다 우선합니다** (`cv.md`에는 더 오래된 수치가 있을 수 있음).
 **규칙: `cv.md` 또는 `article-digest.md`에 후보자의 것으로 명시되어 있지 않는 한, 후보자가 어떤 프로젝트, 리포지터리, 라이브러리, 도구, 프레임워크, 오픈소스 산출물의 제작자/저자라고 절대 주장하지 않습니다.** 도구를 "사용하는 것"과 그것을 "만든 것"을 혼동하는 것(X를 사용한 것은 X를 만든 것이 아님)은 가장 흔한 조작 패턴이며 금지됩니다.

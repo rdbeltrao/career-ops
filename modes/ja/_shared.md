@@ -35,7 +35,9 @@
 | writing-samples/ | `writing-samples/` | 候補者が外部に出す文章を生成する場合。まず `_profile.md` のキャッシュ済み `## Writing Style` を確認し、存在しない場合だけファイルを読む |
 | voice-dna.md | `voice-dna.md`（プロジェクトルート、存在する場合） | 候補者が外部に出す文章を生成する場合。AI っぽさを避ける guardrail + voice。下の Voice DNA precedence を参照 |
 | interview-prep | `interview-prep/story-bank.md`, `interview-prep/{company}-{role}.md` | ATS フォーム回答 / 面接コンテンツを生成する場合。ユーザー自身の STAR stories と prep notes。ナラティブと表現には使ってよいが、数値の claim は自動的には `cv.md` と同等ではない — AGENTS.md の Source-of-Truth Boundary の階層化（#2947）と `story-provenance-check.mjs` を参照。`apply` / `match-star` と interview modes が使用 |
+| _context.md | `{DATA_ROOT}/modes/_context.md` (if exists), read through `node context-evidence.mjs` | ALWAYS, context tier — the candidate's fit profile. Its qualitative facts (roles, employers, domains, responsibilities, skills, practices, languages, talks, publications) are evidence for the evaluation, cited as `_context.md:`; its numbers arrive masked as `[n]`, so a figure is evidence only when `cv.md` or `article-digest.md` carries it; it is never a source for candidate-facing text. Full rule: `AGENTS.md` → Source-of-Truth Boundary → Context tier. Read it after `_profile.md` and before `_custom.md`; when absent, say so in one line |
 
+**RULE: `modes/_context.md` is evidence for the evaluation and never for candidate-facing text.** Read it through `node context-evidence.mjs` (numbers masked as `[n]`); a requirement that only `_context.md` meets is `✅ Strong (context)` or `⚠️ Partial (context)`, never `❌ Missing`; a `[n]` is never written out as a figure. The tier is defined once, in `AGENTS.md` → Source-of-Truth Boundary → Context tier.
 **ルール：proof point のメトリクスを絶対にハードコードしない。** 評価時に `cv.md` と `article-digest.md` から読み取ること。
 **ルール：記事・プロジェクトのメトリクスは、`article-digest.md` が `cv.md` より優先される。**
 **ルール：このファイルの後に `_profile.md` を読む。`_profile.md` のユーザーカスタマイズはここのデフォルト値を上書きする。**

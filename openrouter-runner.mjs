@@ -59,6 +59,8 @@ import { withPipelineLock } from './pipeline-lock.mjs';
 import { createAdmissionGate, formatSkipCounts } from './lib/admission-gate.mjs';
 import { localToday } from './lib/local-today.mjs';
 import { getCareerOpsRoot, getProfilePath } from './path-resolver.mjs';
+import { readMaskedContext } from './lib/context-evidence.mjs';
+import { SAMPLING_SEED, SAMPLING_TEMPERATURE } from './lib/sampling.mjs';
 import { isMainModule } from './lib/is-main-module.mjs';
 import { withJdArchiveSection } from './lib/jd-archive-section.mjs';
 import { locateApplyReport } from './apply-scope.mjs';
@@ -178,6 +180,10 @@ export function buildRequestBody({ model, systemPrompt, userMessage, maxTokens, 
       { role: 'user', content: userMessage },
     ],
     max_tokens: maxTokens,
+    // lib/sampling.mjs: temperature 0 and a fixed seed remove the spread the
+    // provider lets us remove; the rest is model noise (docs/JEV.md).
+    temperature: SAMPLING_TEMPERATURE,
+    seed: SAMPLING_SEED,
   };
   if (reasoning) body.reasoning = reasoning;
   return body;
@@ -527,9 +533,10 @@ function loadContext() {
   // modes/_context.md is the candidate's fit profile, the context tier of the
   // Source-of-Truth Boundary (AGENTS.md): qualitative facts are evidence for
   // the evaluation, numbers are targeting only, never a source for
-  // candidate-facing text. Optional: an install without it evaluates on cv.md and
-  // profile.yml exactly as before, with one line saying so.
-  const context = readFile('modes/_context.md');
+  // candidate-facing text. Its numbers are masked before the model sees them
+  // (lib/context-evidence.mjs). Optional: an install without it evaluates on
+  // cv.md and profile.yml exactly as before, with one line saying so.
+  const context = readMaskedContext(DATA_ROOT)?.text ?? null;
   if (context === null) console.log('ℹ️  modes/_context.md not found — evaluating on cv.md and profile.yml only');
   return {
     cv:          readFile('cv.md')               ?? 'CV not found.',
@@ -546,7 +553,7 @@ export function buildSystemPrompt(modeContent, ctx) {
   // prompt is byte-identical to the one built before the block existed, so
   // prompt caching and the recorded prompts of older runs are undisturbed.
   const contextBlock = ctx.context
-    ? ['---', 'CANDIDATE CONTEXT (context tier: qualitative facts are evidence for the evaluation, cite them as _context.md:; a number that appears below but not in cv.md or article-digest.md is written nowhere in the report, not even as an approximate team size or scope; never a source for the CV, a letter or a form answer):', ctx.context]
+    ? ['---', 'CANDIDATE CONTEXT (context tier: qualitative facts are evidence for the evaluation, cite them as _context.md:; its numbers are masked as [n], so every figure you see came from cv.md or article-digest.md and a [n] is never written as a figure; never a source for the CV, a letter or a form answer):', ctx.context]
     : [];
   return [
     ctx.shared,
@@ -568,14 +575,14 @@ export function buildSystemPrompt(modeContent, ctx) {
 // ---------------------------------------------------------------------------
 // Jev pre-screen (modes/_shared.md → Calibrated pre-screen (Jev))
 // ---------------------------------------------------------------------------
-// jev-score.mjs is an optional sibling script. Everything here degrades to a
-// "not run" block (or to no block at all when the script is not installed), so
-// an evaluation never fails because the pre-screen could not run.
-const JEV_HEADING = '## Calibrated pre-screen (Jev)';
-const notRunBlock = (reason) => `${JEV_HEADING}\n\nnot run: ${reason}`;
+// The helper lives in lib/jev-prescreen.mjs so every evaluator shares it
+// without importing this runner; re-exported here for the existing callers
+// and tests.
+import { jevPrescreen, loadJevModule } from './lib/jev-prescreen.mjs';
+export { jevPrescreen, loadJevModule };
 
 /**
- * Import an optional sibling module, or null when it is not installed or does
+ * Import a sibling module by path, or null when it does not exist or does
  * not load. Resolved from this file's own URL, never from the data root.
  * @param {string} rel
  * @returns {Promise<object|null>}
@@ -586,30 +593,6 @@ async function loadOptionalModule(rel) {
   try { return await import(pathToFileURL(target).href); } catch { return null; }
 }
 
-/**
- * The jev-score.mjs module, or null when it is not installed.
- * @param {{jevPath?: string}} [opts] - `jevPath` overrides the sibling path (tests).
- * @returns {Promise<object|null>}
- */
-export async function loadJevModule({ jevPath } = {}) {
-  if (jevPath === undefined) return loadOptionalModule('./jev-score.mjs');
-  if (!fs.existsSync(jevPath)) return null;
-  try { return await import(pathToFileURL(jevPath).href); } catch { return null; }
-}
-
-/**
- * Run the Jev pre-screen for one job and format it for the evaluation request.
- *
- * @param {object} job - The job object jev-score takes (url, title, company, location, workplace, seniority, description).
- * @param {object} [opts]
- * @param {object|null} [opts.jev] - The jev-score.mjs module; null means not installed.
- * @param {NodeJS.ProcessEnv} [opts.env] - Where the OpenRouter key is looked up.
- * @param {string} [opts.dataRoot] - The data root (modes/_context.md, config/jev-criteria.yml).
- * @param {(args: {dataRoot: string, codeRoot: string}) => any} [opts.loadCriteria] - Criteria loader; lib/jev-criteria.mjs by default.
- * @returns {Promise<{block: string|null, result: object|null, notice: string}>}
- *   `block` is the markdown block to append to the request (null when the
- *   script is not installed), `result` the parsed score when it ran.
- */
 /**
  * Fill process.env.OPENROUTER_API_KEY from the shared resolver when .env and the
  * environment left it empty: OPENROUTER_API_KEY_JOB_SEARCH, the code-root and
@@ -630,46 +613,6 @@ export async function ensureOpenRouterKeyInEnv({ env = process.env, dataRoot = D
   return key ?? null;
 }
 
-export async function jevPrescreen(job, { jev, env = process.env, dataRoot = DATA_ROOT, loadCriteria } = {}) {
-  if (!jev) {
-    return { block: null, result: null, notice: 'ℹ️  Jev pre-screen not run: jev-score.mjs is not installed' };
-  }
-  const codeRoot = fileURLToPath(new URL('.', import.meta.url));
-  try {
-    let apiKey = null;
-    const keyModule = await loadOptionalModule('./lib/openrouter-key.mjs');
-    if (typeof keyModule?.resolveOpenRouterKey === 'function') {
-      apiKey = keyModule.resolveOpenRouterKey({ env, codeRoot, dataRoot }).key;
-    } else {
-      apiKey = env.OPENROUTER_API_KEY_JOB_SEARCH || env.OPENROUTER_API_KEY || null;
-    }
-    if (!apiKey) {
-      const reason = 'no OpenRouter key (OPENROUTER_API_KEY)';
-      return { block: notRunBlock(reason), result: null, notice: `ℹ️  Jev pre-screen not run: ${reason}` };
-    }
-    let criteria;
-    if (typeof loadCriteria === 'function') {
-      criteria = loadCriteria({ dataRoot, codeRoot });
-    } else {
-      const criteriaModule = await loadOptionalModule('./lib/jev-criteria.mjs');
-      if (typeof criteriaModule?.loadCriteria !== 'function') throw new Error('lib/jev-criteria.mjs is not installed');
-      criteria = criteriaModule.loadCriteria({ dataRoot, codeRoot });
-    }
-    const context = jev.loadContextText({ dataRoot });
-    const result = await jev.scoreJob({ profileText: context.text, job, criteria, apiKey });
-    if (result?.error) {
-      return { block: notRunBlock(result.error), result: null, notice: `ℹ️  Jev pre-screen not run: ${result.error}` };
-    }
-    const fit = result.fit === null || result.fit === undefined ? 'n/a' : result.fit;
-    return {
-      block: jev.formatPrescreenMarkdown(result),
-      result,
-      notice: `ℹ️  Jev pre-screen: fit ${fit}, ${result.verdict ?? 'n/a'} (context: ${context.source})`,
-    };
-  } catch (e) {
-    return { block: notRunBlock(e.message), result: null, notice: `ℹ️  Jev pre-screen not run: ${e.message}` };
-  }
-}
 
 // ---------------------------------------------------------------------------
 // Job page content fetcher (Playwright-first, plain fetch fallback)

@@ -26,7 +26,7 @@ const read = (rel) => readFileSync(join(ROOT, rel), 'utf-8').replace(/\r\n/g, '\
 test('modes/_shared.md lists _context.md as the context tier and states the Jev rules once', () => {
   const shared = read('modes/_shared.md');
   const sourcesTable = shared.match(/^## Sources of Truth[\s\S]*?(?=^## )/m)?.[0] ?? '';
-  assert.match(sourcesTable, /^\| _context\.md \| `\{DATA_ROOT\}\/modes\/_context\.md` \(if exists\) \| ALWAYS, context tier/m,
+  assert.match(sourcesTable, /^\| _context\.md \| `\{DATA_ROOT\}\/modes\/_context\.md` \(if exists\)(?:, read through `node context-evidence\.mjs`)? \| ALWAYS, context tier/m,
     'the sources table has no _context.md row marked "ALWAYS, context tier"');
   assert.match(shared, /^## Calibrated pre-screen \(Jev\)$/m);
   // The section names its own heading in prose, so cut at heading LINES, not at
@@ -127,7 +127,7 @@ test('buildSystemPrompt appends the context after the CV and is byte-identical w
   assert.ok(!before.includes('CANDIDATE CONTEXT'), 'the label leaks into a prompt with no context');
   const withContext = or.buildSystemPrompt('MODE', { ...ctx, context: 'CTX_SENTINEL_TARGETING' });
   assert.ok(withContext.includes('CANDIDATE CONTEXT (context tier:'), 'the context block has no label');
-  assert.ok(withContext.includes('is written nowhere in the report'), 'the context label drops the quantified-claims caveat');
+  assert.ok(withContext.includes('its numbers are masked as [n]'), 'the context label drops the masking note');
   assert.ok(withContext.indexOf('CV TEXT') < withContext.indexOf('CTX_SENTINEL_TARGETING'), 'the context must follow the CV');
   assert.ok(withContext.indexOf('CTX_SENTINEL_TARGETING') < withContext.indexOf('OUTPUT LANGUAGE'), 'the context must precede the language instruction');
 });
@@ -218,14 +218,15 @@ test('the eval scripts and the web evaluate prompt load modes/_context.md as the
     const src = read(file);
     assert.ok(src.includes("'_context.md'"), `${file} does not read modes/_context.md`);
     assert.match(src, /CANDIDATE CONTEXT \(modes\/_context\.md — context tier:/, `${file} does not label the context as the context tier`);
-    assert.match(src, /is written nowhere in the report/, `${file} drops the quantified-claims caveat`);
+    assert.match(src, /its numbers are masked as \[n\]/, `${file} drops the masking note`);
+    assert.match(src, /readMaskedContext\(DATA_ROOT\)/, `${file} reads the context file raw instead of masked`);
     assert.match(src, /_context\.md not found/, `${file} has no one-line notice for the absent file`);
   }
   if (!existsSync(WEB_LIB)) return;
   const prompts = read('web/src/lib/run-prompts.mjs');
   assert.match(prompts, /modes\/_context\.md/, 'run-prompts.mjs does not name modes/_context.md');
   assert.match(prompts, /context tier/, 'run-prompts.mjs does not name the context tier');
-  assert.match(prompts, /numbers are targeting only/, 'run-prompts.mjs drops the quantified-claims caveat');
+  assert.match(prompts, /node context-evidence\.mjs/, 'run-prompts.mjs lets the agent read the raw context file instead of the masked output');
 });
 
 // ── batch-runner.sh: the flags, the context file and the degraded paths ────
@@ -270,9 +271,12 @@ function batchFixture(t, { jevStub = true, context = false } = {}) {
   writeFileSync(join(dir, 'batch', 'batch-prompt.md'), 'Fixture worker prompt for {{URL}}.\n');
   writeFileSync(join(dir, 'batch', 'batch-input.tsv'), 'id\turl\tsource\tnotes\n1\thttps://example.com/jobs/one\tfixture\t-\n');
   writeFileSync(join(dir, 'path-resolver.mjs'), read('path-resolver.mjs'));
+  mkdirSync(join(dir, 'lib'), { recursive: true });
+  for (const rel of ['lib/is-main-module.mjs', 'lib/context-evidence.mjs']) writeFileSync(join(dir, rel), read(rel));
+  writeFileSync(join(dir, 'context-evidence.mjs'), read('context-evidence.mjs'));
   writeFileSync(join(dir, 'reserve-report-num.mjs'), "if (!process.argv.includes('--release')) console.log('001');\n");
   for (const name of ['merge-tracker.mjs', 'reconcile-pipeline.mjs', 'verify-pipeline.mjs']) writeFileSync(join(dir, name), '// Not under test here.\n');
-  if (context) writeFileSync(join(dir, 'modes', '_context.md'), '# Fit profile\n\nCONTEXT_SENTINEL_TARGETING\n');
+  if (context) writeFileSync(join(dir, 'modes', '_context.md'), '# Fit profile\n\nCONTEXT_SENTINEL_TARGETING across five teams of 20.\n');
   if (jevStub) {
     writeFileSync(join(dir, 'jev-score.mjs'), [
       "import { readFileSync, writeFileSync } from 'node:fs';",
@@ -350,7 +354,7 @@ test('batch-runner.sh: no jev-score.mjs → one log line, worker spawned as befo
   assert.match(run.out, /jev: jev-score\.mjs not found/, 'the degraded path logs no line');
   assert.ok(!run.prompt.includes('## Runtime pre-screen: jev'), 'no block may be appended when Jev did not run');
   // The runner indents the file as a code block, blank lines included.
-  assert.match(run.prompt, /## Runtime personalization: modes\/_context\.md\n\n    # Fit profile\n\s*\n    CONTEXT_SENTINEL_TARGETING/, 'modes/_context.md is not injected into the worker prompt');
+  assert.match(run.prompt, /## Runtime personalization: modes\/_context\.md\n\n    <!-- Numbers in this context are masked as \[n\][^\n]*-->\n\s*\n    # Fit profile\n\s*\n    CONTEXT_SENTINEL_TARGETING across \[n\] teams of \[n\]\./, 'modes/_context.md is not injected masked into the worker prompt');
 });
 
 test('batch-runner.sh: jev-score.mjs exits 2 (no key) → one log line, worker spawned', { skip: !bash && 'no bash' }, (t) => {
@@ -437,6 +441,8 @@ test('buildRequestBody sends reasoning only when resolved and keeps the cached s
       { role: 'user', content: 'USER' },
     ],
     max_tokens: 8192,
+    temperature: 0,
+    seed: 42,
   });
   assert.equal(Object.hasOwn(plain, 'reasoning'), false, 'no field when nothing was resolved');
   const bounded = or.buildRequestBody({ ...base, maxTokens: 16384, reasoning: { effort: 'low' } });

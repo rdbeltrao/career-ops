@@ -33,7 +33,9 @@
 | cv.md | `cv.md` (Projekt-Root) | IMMER |
 | article-digest.md | `article-digest.md` (falls vorhanden) | IMMER (detaillierte Proof Points) |
 | profile.yml | `config/profile.yml` | IMMER (Identität und Zielrollen) |
+| _context.md | `{DATA_ROOT}/modes/_context.md` (if exists), read through `node context-evidence.mjs` | ALWAYS, context tier — the candidate's fit profile. Its qualitative facts (roles, employers, domains, responsibilities, skills, practices, languages, talks, publications) are evidence for the evaluation, cited as `_context.md:`; its numbers arrive masked as `[n]`, so a figure is evidence only when `cv.md` or `article-digest.md` carries it; it is never a source for candidate-facing text. Full rule: `AGENTS.md` → Source-of-Truth Boundary → Context tier. Read it after `_profile.md` and before `_custom.md`; when absent, say so in one line |
 
+**RULE: `modes/_context.md` is evidence for the evaluation and never for candidate-facing text.** Read it through `node context-evidence.mjs` (numbers masked as `[n]`); a requirement that only `_context.md` meets is `✅ Strong (context)` or `⚠️ Partial (context)`, never `❌ Missing`; a `[n]` is never written out as a figure. The tier is defined once, in `AGENTS.md` → Source-of-Truth Boundary → Context tier.
 **REGEL: Niemals Kennzahlen aus Proof Points hartcodieren.** Lies sie zur Bewertungszeit aus `cv.md` und `article-digest.md`.
 **REGEL: Bei Kennzahlen zu Artikeln/Projekten hat `article-digest.md` Vorrang vor `cv.md`** (in `cv.md` können ältere Zahlen stehen).
 **REGEL: NIEMALS behaupten, dass der Kandidat Autor/Urheber eines Projekts, Repositories, einer Bibliothek, eines Tools, Frameworks oder Open-Source-Artefakts ist, es sei denn, dies ist ausdrücklich in `cv.md` oder `article-digest.md` belegt.** Die Verwechslung von "ein Tool benutzen" mit "es erschaffen haben" ist das häufigste Erfindungsmuster und ist verboten.

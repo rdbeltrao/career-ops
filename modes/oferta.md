@@ -256,7 +256,7 @@ The asymmetry is deliberate and runs one way. Inflated importance on a requireme
 `Match` is a claim about the candidate, so it comes from the **primary** files (`cv.md`, `article-digest.md`, `config/profile.yml`, `modes/_profile.md`) and from the **context tier** (`modes/_context.md`), under the rule in `AGENTS.md` → Source-of-Truth Boundary → Context tier:
 
 - A **qualitative** fact in `modes/_context.md` — a role held, an employer, a domain, a responsibility, a skill, a practice, a language, a talk, a publication — backs a `✅ Strong (context)` or `⚠️ Partial (context)` row, cited as `_context.md:`. Marking such a requirement `❌ Missing` because `cv.md` is silent is wrong: the CV is the document the candidate sends, not the record of what they have done.
-- A **quantified** claim in `modes/_context.md` — a number, percentage, amount, team size, duration or ratio — is targeting only. It is never quoted in `Evidence / gap`, and a `✅ Strong` never rests on it; a row that needs the figure to be strong is `⚠️ Partial (context)` with the qualitative fact cited and the figure left out. A figure is evidence only when `cv.md` or `article-digest.md` carries it.
+- A **quantified** claim in `modes/_context.md` — a number, percentage, amount, team size, duration or ratio — is targeting only, and the context reaches you with every such figure masked as `[n]` (`node context-evidence.mjs`). A `[n]` is never quoted in `Evidence / gap`, never written out as a figure, and a `✅ Strong` never rests on it; a row that needs the figure to be strong is `⚠️ Partial (context)` with the qualitative fact cited and the figure left out. A figure is evidence only when `cv.md` or `article-digest.md` carries it, which is where every figure you can see comes from.
 - Nothing from `modes/_context.md` reaches the tailored CV, a letter or a form answer because a row cited it; `verify-cv-facts.mjs` does not read the file. When Block E wants a context fact in the CV, it goes through the user's confirmation in the conversation, never through an edit to `cv.md` made to make a row pass.
 
 A `✅ Strong` may **not** rest on an `interview-prep/story-bank.md` figure that is marked, or defaults to, `derived-unverified` or `user-cannot-confirm` — such a row is `⚠️ Partial`.
@@ -280,6 +280,8 @@ The Importance column does **not** affect the 1-5 global score — it is a prior
 4. Concrete mitigation plan (phrase for cover letter, quick project, etc.)
 
 **Mandatory for every `❌ Missing` or `⚠️ Partial` row at `critical` or `high` importance:** a specific interview-risk description **and** a mitigation strategy, here in Gaps. Risk lives here rather than in a sixth table column — a risk sentence has to be specific to be worth anything, and a specific sentence does not fit a markdown cell that must also render in a terminal and on a phone. Keeping risk next to its mitigation keeps the pair together.
+
+**Context gaps to confirm.** One line after Gaps, always present: `**Context gaps to confirm:** {requirement}, {requirement}` listing every `❌ Missing` or `⚠️ Partial` row where neither the primary files nor `modes/_context.md` carried anything, or `**Context gaps to confirm:** none`. It tells the candidate which facts to add to `modes/_context.md` (or to confirm into `cv.md`) if they exist, because a row the context file could have answered is a gap in the file, not in the person. Never invent a fact to close one, and keep the line out of the Machine Summary: `requirement_importance.match` stays `strong | partial | missing | na`.
 
 ## Block C — Level and Strategy
 
@@ -726,6 +728,7 @@ Save full evaluation in `reports/{###}-{company-slug}-{YYYY-MM-DD}.md`.
      not do is stand in for a target the user actually has. -->
 **Score:** {X/5}
 **Jev:** {jev_score/5 (fit {fit}, {verdict}) — or exactly `not run` when no pre-screen block exists; see the Jev pre-screen gate}
+**Scoring note:** {`none` when the Jev gate ran and Block D and G research happened; otherwise the missing parts, comma-separated: `no Jev gate`, `no web research`. A run without the Jev segment has no deterministic anchor, and a run without research scored Blocks D and G on the JD alone, so the Global score of such a run moves more between runs (docs/JEV.md → Score variance)}
 **Decision:** {Apply | Consider | Research first | Skip}
 **Legitimacy:** {High Confidence | Proceed with Caution | Suspicious}
 **Work Auth:** {✅ Sponsors | ➖ Not needed | ⚠️ Unstated | ⛔ No sponsorship}
@@ -742,7 +745,7 @@ Save full evaluation in `reports/{###}-{company-slug}-{YYYY-MM-DD}.md`.
 (full content of block A)
 
 ## B) Match with CV
-(full content of block B)
+(full content of block B, ending with the Gaps section and the `**Context gaps to confirm:**` line)
 
 ## C) Level and Strategy
 (full content of block C)

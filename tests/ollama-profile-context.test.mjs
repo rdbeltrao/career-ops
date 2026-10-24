@@ -47,6 +47,11 @@ for (const relativePath of [
   // ollama-eval dates its report with localToday() rather than the UTC day,
   // so the fixture has to carry that helper for the module to load at all.
   'lib/local-today.mjs',
+  // ollama-eval reads modes/_context.md number-masked, sends the shared
+  // sampling parameters and runs the Jev pre-screen through lib/ helpers.
+  'lib/context-evidence.mjs',
+  'lib/sampling.mjs',
+  'lib/jev-prescreen.mjs',
   'utils/token-tracker.mjs',
 ]) {
   copyIntoFixture(relativePath);

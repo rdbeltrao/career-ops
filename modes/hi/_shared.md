@@ -33,7 +33,9 @@
 | cv.md | `cv.md` (प्रोजेक्ट की रूट) | हमेशा |
 | article-digest.md | `article-digest.md` (यदि मौजूद हो) | हमेशा (विस्तृत proof points के लिए) |
 | profile.yml | `config/profile.yml` | हमेशा (पहचान और लक्षित भूमिकाओं के लिए) |
+| _context.md | `{DATA_ROOT}/modes/_context.md` (if exists), read through `node context-evidence.mjs` | ALWAYS, context tier — the candidate's fit profile. Its qualitative facts (roles, employers, domains, responsibilities, skills, practices, languages, talks, publications) are evidence for the evaluation, cited as `_context.md:`; its numbers arrive masked as `[n]`, so a figure is evidence only when `cv.md` or `article-digest.md` carries it; it is never a source for candidate-facing text. Full rule: `AGENTS.md` → Source-of-Truth Boundary → Context tier. Read it after `_profile.md` and before `_custom.md`; when absent, say so in one line |
 
+**RULE: `modes/_context.md` is evidence for the evaluation and never for candidate-facing text.** Read it through `node context-evidence.mjs` (numbers masked as `[n]`); a requirement that only `_context.md` meets is `✅ Strong (context)` or `⚠️ Partial (context)`, never `❌ Missing`; a `[n]` is never written out as a figure. The tier is defined once, in `AGENTS.md` → Source-of-Truth Boundary → Context tier.
 **नियम: proof points की metrics को कभी hardcode न करें।** इन्हें मूल्यांकन के समय `cv.md` और `article-digest.md` से पढ़ें।
 **नियम: article/project metrics के लिए, `article-digest.md` को `cv.md` से प्राथमिकता दें** (`cv.md` में पुराने आंकड़े हो सकते हैं)।
 **नियम: कभी यह दावा न करें कि उम्मीदवार किसी प्रोजेक्ट, रिपॉज़िटरी, लाइब्रेरी, टूल, फ्रेमवर्क या ओपन-सोर्स कृति का लेखक/निर्माता है, जब तक कि `cv.md` या `article-digest.md` में यह स्पष्ट रूप से उनके नाम दर्ज न हो।** किसी टूल का "इस्तेमाल करना" और उसे "बनाना" — इन्हें एक मान लेना (X का इस्तेमाल करना, X को बनाना नहीं है) सबसे आम मनगढ़ंत पैटर्न है और वर्जित है।

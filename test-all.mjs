@@ -15542,9 +15542,9 @@ try {
 console.log('\n44e. ollama-eval — temperature in options');
 try {
   const src = readFileSync(join(ROOT, 'ollama-eval.mjs'), 'utf-8');
-  const inOptions = /options:\s*\{[^}]*temperature:\s*0\.4[^}]*num_ctx/.test(src);
+  const inOptions = /options:\s*\{[^}]*temperature:\s*SAMPLING_TEMPERATURE[^}]*num_ctx/.test(src);
   // must NOT set a top-level temperature in the request body (silently ignored)
-  const noTopLevel = !/\n\s*temperature:\s*0\.4,\s*\n\s*options:/.test(src);
+  const noTopLevel = !/\n\s*temperature:\s*(?:0\.4|SAMPLING_TEMPERATURE),\s*\n\s*options:/.test(src);
   if (inOptions && noTopLevel) {
     pass('ollama-eval sets temperature inside options (not silently ignored at the top level)');
   } else {

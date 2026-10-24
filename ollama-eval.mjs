@@ -26,6 +26,9 @@ import { readFileSync, existsSync, writeFileSync, mkdirSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { getCareerOpsRoot, getProfilePath } from './path-resolver.mjs';
+import { readMaskedContext } from './lib/context-evidence.mjs';
+import { SAMPLING_SEED, SAMPLING_TEMPERATURE } from './lib/sampling.mjs';
+import { jevPrescreen } from './lib/jev-prescreen.mjs';
 import { localToday } from './lib/local-today.mjs';
 import { TSV_ADDITION_HEADER } from './tracker-parse.mjs';
 import { outputLanguageInstruction, parseOutputLanguage } from './profile-language.mjs';
@@ -243,13 +246,14 @@ const profileContent = readFile(PATHS.profile, 'modes/_profile.md');
 // modes/_context.md is the candidate's fit profile, the context tier of the
 // Source-of-Truth Boundary (AGENTS.md): its qualitative facts are evidence for
 // the evaluation, its numbers are targeting only, and it is never a source for
-// candidate-facing text. Folded into the _profile.md section so the token
-// budget treats the two as one personalization block; absent, the prompt is
-// exactly as before.
-const contextContent = existsSync(PATHS.context) ? readFileSync(PATHS.context, 'utf-8').trim() : '';
+// candidate-facing text. Its numbers are masked before the model sees them
+// (lib/context-evidence.mjs), so no figure that lives only there can reach the
+// report. Folded into the _profile.md section so the token budget treats the
+// two as one personalization block; absent, the prompt is exactly as before.
+const contextContent = readMaskedContext(DATA_ROOT)?.text ?? '';
 if (!contextContent) console.log('ℹ️   modes/_context.md not found — evaluating on cv.md and profile.yml only');
 const profileWithContext = contextContent
-  ? `${profileContent}\n\n--- CANDIDATE CONTEXT (modes/_context.md — context tier: qualitative facts are evidence for the evaluation, cite them as _context.md:; a number that appears below but not in cv.md or article-digest.md is written nowhere in the report, not even as an approximate team size or scope; never a source for the CV, a letter or a form answer) ---\n${contextContent}`
+  ? `${profileContent}\n\n--- CANDIDATE CONTEXT (modes/_context.md — context tier: qualitative facts are evidence for the evaluation, cite them as _context.md:; its numbers are masked as [n], so every figure you see came from cv.md or article-digest.md and a [n] is never written as a figure; never a source for the CV, a letter or a form answer) ---\n${contextContent}`
   : profileContent;
 const profileYml    = readFile(PATHS.profileYml, 'config/profile.yml');
 const languageInstruction = outputLanguageInstruction(parseOutputLanguage(profileYml));
@@ -316,6 +320,19 @@ if (Number.isNaN(timeoutMs) || timeoutMs <= 0) {
   process.exit(1);
 }
 
+
+// Jev pre-screen: the deterministic segment of the score, mandatory whenever
+// jev-score.mjs and an OpenRouter key are present. Zero model tokens; the
+// block is appended to the user turn so the report copies it (`**Jev:**`,
+// Machine Summary `jev:`) and never recomputes it. Without the script or the
+// key the request is exactly what it was before and the report says `not run`.
+const prescreen = await jevPrescreen({
+  url: '', // this evaluator takes JD text, not a posting URL
+  title: '', company: '', location: '', workplace: '', seniority: '',
+  description: jdText,
+}, { dataRoot: DATA_ROOT });
+console.log(prescreen.notice);
+
 console.log(`🤖  Calling Ollama (${modelName})... this may take a minute.\n`);
 
 let evaluationText;
@@ -327,7 +344,7 @@ try {
       model:    modelName,
       messages: [
         { role: 'system', content: systemPrompt },
-        { role: 'user',   content: `JOB DESCRIPTION TO EVALUATE:\n\n${jdText}` },
+        { role: 'user',   content: `JOB DESCRIPTION TO EVALUATE:\n\n${jdText}${prescreen.block ? `\n\n${prescreen.block}` : ''}` },
       ],
       // stream:true so response headers arrive with the FIRST token. With stream:false
       // Ollama sends nothing until the whole report is generated, and Node's undici client
@@ -340,7 +357,9 @@ try {
       // deterministic temperature and the enlarged context window actually take
       // effect. Without num_ctx here Ollama defaults to a 2048-token context and
       // silently truncates the prompt; without temperature it runs at 0.8.
-      options: { temperature: 0.4, num_ctx: numCtx },
+      // lib/sampling.mjs: temperature 0 and a fixed seed remove the spread the
+      // provider lets us remove; the rest is model noise (docs/JEV.md).
+      options: { temperature: SAMPLING_TEMPERATURE, seed: SAMPLING_SEED, num_ctx: numCtx },
     }),
     signal: AbortSignal.timeout(timeoutMs),
   });

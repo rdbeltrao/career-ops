@@ -59,7 +59,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { flagValue, hasFlag, validateFlags } from './lib/cli-flags.mjs';
 import { isMainModule } from './lib/is-main-module.mjs';
-import { getCareerOpsRoot, getProfilePath } from './path-resolver.mjs';
+import { getCareerOpsRoot, getProfilePath, hasProfileOverride } from './path-resolver.mjs';
 import { resolveOpenRouterKey } from './lib/openrouter-key.mjs';
 import { loadCriteria, parseCriteria } from './lib/jev-criteria.mjs';
 import { sanitizeMarkdownField } from './scan.mjs';
@@ -500,7 +500,8 @@ export function loadContextText({ dataRoot, contextPath, profilePath } = {}) {
 
   const read = (p) => (existsSync(p) ? readFileSync(p, 'utf-8').trim() : '');
   const cv = read(join(root, 'cv.md'));
-  const profile = read(profilePath ?? getProfilePath(root));
+  // CAREER_OPS_PROFILE wins over the data root, as for every other reader (#5026).
+  const profile = read(profilePath ?? (hasProfileOverride() ? getProfilePath() : getProfilePath(root)));
   const text = [
     cv && `# CV (cv.md)\n\n${cv}`,
     profile && `# Profile (config/profile.yml)\n\n${profile}`,

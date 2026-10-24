@@ -10,8 +10,9 @@
      (roles, employers, domains, responsibilities, skills, practices,
      languages, talks, publications) are evidence for the evaluation and
      are cited as `_context.md:` next to `cv.md:` lines. Its numbers are
-     targeting only: they steer a score, but a figure counts as evidence
-     only when cv.md or article-digest.md carries it. It is never a fact
+     targeting only and are masked as [n] before an evaluator reads the
+     file (node context-evidence.mjs): a figure counts as evidence only
+     when cv.md or article-digest.md carries it. It is never a fact
      source for a CV, a cover letter or a form answer: a number that exists
      only here still fails the fact gate. The CV is what you send; this
      file is what you have done. Keep them as two documents.

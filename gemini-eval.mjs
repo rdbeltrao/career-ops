@@ -77,6 +77,9 @@ import { GoogleGenerativeAI } from '@google/generative-ai';
 // Paths
 // ---------------------------------------------------------------------------
 import { getCareerOpsRoot, getProfilePath, resolveTrackerPath } from './path-resolver.mjs';
+import { readMaskedContext } from './lib/context-evidence.mjs';
+import { SAMPLING_SEED, SAMPLING_TEMPERATURE } from './lib/sampling.mjs';
+import { jevPrescreen } from './lib/jev-prescreen.mjs';
 import { localToday } from './lib/local-today.mjs';
 import { withJdArchiveSection } from './lib/jd-archive-section.mjs';
 import { TSV_ADDITION_HEADER } from './tracker-parse.mjs';
@@ -375,13 +378,14 @@ const profileContent = readFile(PATHS.profile,     'modes/_profile.md');
 // modes/_context.md is the candidate's fit profile, the context tier of the
 // Source-of-Truth Boundary (AGENTS.md): its qualitative facts are evidence for
 // the evaluation, its numbers are targeting only, and it is never a source for
-// candidate-facing text. Folded into the _profile.md section so the token
-// budget treats the two as one personalization block; absent, the prompt is
-// exactly as before.
-const contextContent = existsSync(PATHS.context) ? stripBom(readFileSync(PATHS.context, 'utf-8')).trim() : '';
+// candidate-facing text. Its numbers are masked before the model sees them
+// (lib/context-evidence.mjs), so no figure that lives only there can reach the
+// report. Folded into the _profile.md section so the token budget treats the
+// two as one personalization block; absent, the prompt is exactly as before.
+const contextContent = readMaskedContext(DATA_ROOT)?.text ?? '';
 if (!contextContent) console.log('ℹ️   modes/_context.md not found — evaluating on cv.md and profile.yml only');
 const profileWithContext = contextContent
-  ? `${profileContent}\n\n--- CANDIDATE CONTEXT (modes/_context.md — context tier: qualitative facts are evidence for the evaluation, cite them as _context.md:; a number that appears below but not in cv.md or article-digest.md is written nowhere in the report, not even as an approximate team size or scope; never a source for the CV, a letter or a form answer) ---\n${contextContent}`
+  ? `${profileContent}\n\n--- CANDIDATE CONTEXT (modes/_context.md — context tier: qualitative facts are evidence for the evaluation, cite them as _context.md:; its numbers are masked as [n], so every figure you see came from cv.md or article-digest.md and a [n] is never written as a figure; never a source for the CV, a letter or a form answer) ---\n${contextContent}`
   : profileContent;
 const profileYml     = readFile(PATHS.profileYml,  'config/profile.yml');
 const languageInstruction = outputLanguageInstruction(parseOutputLanguage(profileYml));
@@ -466,14 +470,27 @@ const model = genAI.getGenerativeModel({
   model: modelName,
   systemInstruction: systemPrompt,
   generationConfig: {
-    temperature: 0.4,      // deterministic enough for structured evaluation
-    maxOutputTokens: 8192, // full 7-block evaluation
+    temperature: SAMPLING_TEMPERATURE, // lib/sampling.mjs: the spread that is ours to remove
+    seed: SAMPLING_SEED,
+    maxOutputTokens: 8192,             // full 7-block evaluation
   },
 });
 
+// Jev pre-screen: the deterministic segment of the score, mandatory whenever
+// jev-score.mjs and an OpenRouter key are present. Zero model tokens; the
+// block is appended to the user turn so the report copies it (`**Jev:**`,
+// Machine Summary `jev:`) and never recomputes it. Without the script or the
+// key the request is exactly what it was before and the report says `not run`.
+const prescreen = await jevPrescreen({
+  url: '', // this evaluator takes JD text, not a posting URL
+  title: '', company: '', location: '', workplace: '', seniority: '',
+  description: jdText,
+}, { dataRoot: DATA_ROOT });
+console.log(prescreen.notice);
+
 let evaluationText;
 try {
-  const result = await model.generateContent(`JOB DESCRIPTION TO EVALUATE:\n\n${jdText}`);
+  const result = await model.generateContent(`JOB DESCRIPTION TO EVALUATE:\n\n${jdText}${prescreen.block ? `\n\n${prescreen.block}` : ''}`);
   evaluationText = result.response.text();
   const usage = {
     prompt_tokens: result.response.usageMetadata?.promptTokenCount ?? 0,

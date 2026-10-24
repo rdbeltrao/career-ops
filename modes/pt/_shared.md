@@ -31,7 +31,9 @@
 | article-digest.md | `article-digest.md` (se existir) | SEMPRE (proof points detalhados) |
 | profile.yml | `config/profile.yml` | SEMPRE (identidade e vagas-alvo) |
 | _profile.md | `modes/_profile.md` | SEMPRE (arquétipos, narrativa, negociação do usuário) |
+| _context.md | `{DATA_ROOT}/modes/_context.md` (if exists), read through `node context-evidence.mjs` | ALWAYS, context tier — the candidate's fit profile. Its qualitative facts (roles, employers, domains, responsibilities, skills, practices, languages, talks, publications) are evidence for the evaluation, cited as `_context.md:`; its numbers arrive masked as `[n]`, so a figure is evidence only when `cv.md` or `article-digest.md` carries it; it is never a source for candidate-facing text. Full rule: `AGENTS.md` → Source-of-Truth Boundary → Context tier. Read it after `_profile.md` and before `_custom.md`; when absent, say so in one line |
 
+**RULE: `modes/_context.md` is evidence for the evaluation and never for candidate-facing text.** Read it through `node context-evidence.mjs` (numbers masked as `[n]`); a requirement that only `_context.md` meets is `✅ Strong (context)` or `⚠️ Partial (context)`, never `❌ Missing`; a `[n]` is never written out as a figure. The tier is defined once, in `AGENTS.md` → Source-of-Truth Boundary → Context tier.
 **REGRA: NUNCA fazer hardcode de métricas de proof points.** Leia-as de `cv.md` e `article-digest.md` no momento da avaliação.
 **REGRA: Para métricas de artigos/projetos, `article-digest.md` tem prioridade sobre `cv.md`** (`cv.md` pode conter números desatualizados).
 **REGRA: Leia `_profile.md` DEPOIS deste arquivo. As personalizações do usuário em `_profile.md` sobrescrevem os valores padrão aqui.**

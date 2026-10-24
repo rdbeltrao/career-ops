@@ -117,6 +117,13 @@ pinSandboxDataRoot();
  * @param {Record<string, string>} [extra] - Further variables for the child.
  * @returns {NodeJS.ProcessEnv}
  */
+// Every automated evaluator runs the Jev pre-screen before its model request
+// (lib/jev-prescreen.mjs), and a developer machine may hold a real OpenRouter
+// key in the Keychain. The suite never scores a fixture for real: the switch is
+// set once here, inherited by every child the suites spawn, and a test that
+// needs the pre-screen on sets its own env.
+process.env.CAREER_OPS_JEV ??= 'off';
+
 export function ownRootEnv(extra = {}) {
   return { ...process.env, CAREER_OPS_ROOT: '', CAREER_OPS_DATA_DIR: '', ...extra };
 }

@@ -33,7 +33,9 @@
 | cv.md | `cv.md` (katalog główny projektu) | ZAWSZE |
 | article-digest.md | `article-digest.md` (jeśli istnieje) | ZAWSZE (szczegółowe proof points) |
 | profile.yml | `config/profile.yml` | ZAWSZE (tożsamość i docelowe role) |
+| _context.md | `{DATA_ROOT}/modes/_context.md` (if exists), read through `node context-evidence.mjs` | ALWAYS, context tier — the candidate's fit profile. Its qualitative facts (roles, employers, domains, responsibilities, skills, practices, languages, talks, publications) are evidence for the evaluation, cited as `_context.md:`; its numbers arrive masked as `[n]`, so a figure is evidence only when `cv.md` or `article-digest.md` carries it; it is never a source for candidate-facing text. Full rule: `AGENTS.md` → Source-of-Truth Boundary → Context tier. Read it after `_profile.md` and before `_custom.md`; when absent, say so in one line |
 
+**RULE: `modes/_context.md` is evidence for the evaluation and never for candidate-facing text.** Read it through `node context-evidence.mjs` (numbers masked as `[n]`); a requirement that only `_context.md` meets is `✅ Strong (context)` or `⚠️ Partial (context)`, never `❌ Missing`; a `[n]` is never written out as a figure. The tier is defined once, in `AGENTS.md` → Source-of-Truth Boundary → Context tier.
 **REGUŁA: NIGDY nie zakodowuj na sztywno metryk pochodzących z proof points.** Czytaj je z `cv.md` i `article-digest.md` w momencie oceny.
 **REGUŁA: Dla metryk z artykułów/projektów `article-digest.md` ma priorytet nad `cv.md`** (`cv.md` może zawierać starsze liczby).
 **REGUŁA: NIGDY nie twierdź, że kandydat jest autorem/twórcą projektu, repozytorium, biblioteki, narzędzia, frameworka ani artefaktu open-source, chyba że jest to wprost przypisane jemu w `cv.md` lub `article-digest.md`.** Mylenie "używania narzędzia" z "jego stworzeniem" (używanie X to nie jest stworzenie X) to najczęstszy wzorzec zmyślania i jest zabronione.

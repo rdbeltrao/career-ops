@@ -33,7 +33,9 @@
 | cv.md | `cv.md` (root proyek) | SELALU |
 | article-digest.md | `article-digest.md` (jika ada) | SELALU (proof point terperinci) |
 | profile.yml | `config/profile.yml` | SELALU (identitas dan role target) |
+| _context.md | `{DATA_ROOT}/modes/_context.md` (if exists), read through `node context-evidence.mjs` | ALWAYS, context tier — the candidate's fit profile. Its qualitative facts (roles, employers, domains, responsibilities, skills, practices, languages, talks, publications) are evidence for the evaluation, cited as `_context.md:`; its numbers arrive masked as `[n]`, so a figure is evidence only when `cv.md` or `article-digest.md` carries it; it is never a source for candidate-facing text. Full rule: `AGENTS.md` → Source-of-Truth Boundary → Context tier. Read it after `_profile.md` and before `_custom.md`; when absent, say so in one line |
 
+**RULE: `modes/_context.md` is evidence for the evaluation and never for candidate-facing text.** Read it through `node context-evidence.mjs` (numbers masked as `[n]`); a requirement that only `_context.md` meets is `✅ Strong (context)` or `⚠️ Partial (context)`, never `❌ Missing`; a `[n]` is never written out as a figure. The tier is defined once, in `AGENTS.md` → Source-of-Truth Boundary → Context tier.
 **ATURAN: JANGAN PERNAH menuliskan metrik dari proof point secara hardcode.** Baca metrik dari `cv.md` dan `article-digest.md` pada saat evaluasi.
 **ATURAN: Untuk metrik artikel/proyek, `article-digest.md` lebih diutamakan daripada `cv.md`** (`cv.md` bisa memuat angka yang lebih lama).
 **ATURAN: JANGAN PERNAH menyatakan bahwa kandidat adalah pembuat/pencipta suatu proyek, repositori, pustaka, alat, framework, atau artefak open-source, kecuali hal itu secara eksplisit dikaitkan dengannya di `cv.md` atau `article-digest.md`.** Menyamakan "memakai sebuah alat" dengan "menciptakannya" (memakai X bukan berarti menciptakan X) adalah pola fabrikasi yang paling umum, dan dilarang.

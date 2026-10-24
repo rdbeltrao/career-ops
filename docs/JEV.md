@@ -58,6 +58,34 @@ jev-score: modes/_context.md not found, using cv.md + profile.yml
 Descriptions longer than `max_description_chars` (6000) are cut with
 `[truncated]` before they are sent.
 
+## Score variance
+
+The A-H evaluation is a judgement by a language model, and the same posting
+evaluated twice does not always get the same Global score. Measured on one
+posting (n8n, Engineering Manager) with the Claude CLI at the standard tier,
+three unattended runs with no Jev gate and no web research scored 4.0, 4.0 and
+3.6, and the decision moved from Apply to Research first with the score.
+
+What code removes: every automated evaluator (`openai-eval.mjs`,
+`gemini-eval.mjs`, `ollama-eval.mjs`, `openrouter-runner.mjs`,
+`batch-evaluate-gemini.mjs`) sends temperature 0 and a fixed seed
+(`lib/sampling.mjs`), and runs the Jev pre-screen before the request whenever
+`jev-score.mjs` and an OpenRouter key are present, so the deterministic
+segment anchors the report. `claude -p` exposes neither temperature nor seed,
+so the interactive and web paths get the anchor and the note only.
+`CAREER_OPS_JEV=off` skips the pre-screen (the report says
+`not run: disabled (CAREER_OPS_JEV=off)`); the test suite sets it so no
+fixture ever scores for real, and an offline run can set it too.
+
+What remains is model noise, and the report says when it is larger than
+usual: the header's `**Scoring note:**` line reads `none` when the Jev gate
+ran and Block D and G research happened, and otherwise names what was
+missing (`no Jev gate`, `no web research`). Read the `**Jev:**` segment as the
+number that stays put between runs; read the Global score as a judgement
+whose second decimal is not information. When two runs disagree on the
+decision, the Jev verdict and the Block B table are what to compare, not the
+scores.
+
 ## `jev-score.mjs`: one job
 
 ```bash

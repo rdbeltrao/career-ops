@@ -54,7 +54,7 @@ else fail(`expected /api/chat, got ${captured.path}`);
 const opts = captured.body?.options ?? {};
 if (opts.num_ctx === 32768) pass('sends options.num_ctx = 32768');
 else fail(`options.num_ctx missing/wrong: ${JSON.stringify(opts)}`);
-if (opts.temperature === 0.4) pass('sends options.temperature = 0.4');
+if (opts.temperature === 0 && opts.seed === 42) pass('sends options.temperature = 0 and options.seed = 42 (lib/sampling.mjs)');
 else fail(`options.temperature missing/wrong: ${JSON.stringify(opts)}`);
 
 if (/VERDICT:\s*4\/5/.test(stdout + stderr)) pass('parses the native {message:{content}} response');
