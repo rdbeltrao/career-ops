@@ -104,8 +104,26 @@ function safeCvTemplate(value) {
     : BASE_CV_TEMPLATE;
 }
 
-export function buildPrompt({ kind, input, memory, today, postedAt, lang, cvTemplate, reportFile, coverBrief, profile = DEFAULT_PROFILE_REF }) {
-  const profileLine = profileNote(profile);
+/**
+ * The paragraph a worker needs when the user layer lives outside the checkout
+ * (the #524 split layout: a `.career-ops-data` marker or CAREER_OPS_DATA_DIR).
+ * Mirrors batch/batch-runner.sh's "Runtime paths" block: the worker runs in the
+ * checkout, where modes/ and the scripts are, and reads or writes the user's
+ * files under the data root. Empty when the two roots are the same directory.
+ *
+ * @param {string | undefined} dataRoot - absolute data root, or undefined/"" for the default layout
+ * @returns {string}
+ */
+export function dataRootPreamble(dataRoot) {
+  if (!dataRoot) return "";
+  return `RUNTIME PATHS: this install keeps the user layer in a separate data root: ${dataRoot}
+Your working directory is the career-ops checkout, where modes/, templates/ and the .mjs scripts live. Resolve these user files under the data root instead: cv.md, article-digest.md, config/profile.yml, modes/_profile.md, modes/_custom.md, modes/_context.md, modes/_brief.md, voice-dna.md, writing-samples/, interview-prep/, reports/, output/, data/ (pipeline.md, applications.md, blacklist.md), batch/tracker-additions/. Write any report, PDF or tracker TSV under the data root. Markdown links inside a report keep the relative form the mode shows (reports/...).
+
+`;
+}
+
+export function buildPrompt({ kind, input, memory, today, postedAt, lang, cvTemplate, reportFile, coverBrief, profile = DEFAULT_PROFILE_REF, dataRoot }) {
+  const profileLine = dataRootPreamble(dataRoot) + profileNote(profile);
   // AGENTS.md's "Output Language vs Market Modes" composition rule. The CLI
   // picks this up by reading AGENTS.md interactively; a one-shot headless
   // prompt has no such chance, so the rule has to be stated in the prompt or a

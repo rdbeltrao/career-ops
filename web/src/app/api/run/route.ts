@@ -10,6 +10,7 @@ import { localISODate } from "@/lib/followups";
 import { accumulateTokens, createAgentTextJoiner, isFatalGenericStderr, killMsForKind, timeoutMessage } from "@/lib/run-cli-support.mjs";
 import { spawnHeadlessCli } from "@/lib/spawn-cli.mjs";
 import { careerOpsRoot, readMemory, findReportFile, readInbox, readScanDates, readLanguageConfig } from "@/lib/career-ops";
+import { resolveCodeRoot } from "@/lib/core/code-root.mjs";
 import { resolvePdfPaths, type PdfPaths } from "@/lib/pdf-paths.mjs";
 import { renderAndMarkPdf, writeCvHtml, pdfRunOutcome } from "@/lib/pdf-render.mjs";
 import { createCvEnvelopeFilter, type CvEnvelope } from "@/lib/cv-envelope.mjs";
@@ -66,13 +67,19 @@ export async function POST(req: Request) {
   const required = needsScript[kind];
   // CAREER_OPS_ROOT is runtime user data, not a build input. Tracing this
   // dynamic path would copy the whole web project into every server bundle.
+  // Modes and scripts live in the checkout, user files in the data root. Under the
+  // #524 split layout the two differ, so the precondition looks where the file
+  // really is, the worker runs in the checkout, and the prompt names the data root.
+  const codeRoot = resolveCodeRoot(process.cwd(), process.env);
+  const dataRoot = careerOpsRoot();
+  const splitLayout = path.resolve(codeRoot) !== path.resolve(dataRoot);
   const requiredPath = required
-    ? path.join(/* turbopackIgnore: true */ careerOpsRoot(), required)
+    ? path.join(/* turbopackIgnore: true */ codeRoot, required)
     : "";
   if (required && !fs.existsSync(/* turbopackIgnore: true */ requiredPath)) {
     return new Response(
       JSON.stringify({
-        error: `This needs a complete career-ops checkout (${required}). CAREER_OPS_ROOT has data only — point it at a full checkout.`,
+        error: `This needs a complete career-ops checkout (${required}). The checkout at ${codeRoot} does not have it — set CAREER_OPS_CODE_ROOT to a full checkout.`,
       }),
       { status: 400, headers: { "Content-Type": "application/json" } },
     );
@@ -153,6 +160,7 @@ export async function POST(req: Request) {
     reportFile: pdfPaths?.reportFile ?? (coverRequest?.ok ? coverRequest.reportFile : undefined),
     coverBrief: coverRequest?.ok ? coverRequest.brief : undefined,
     profile: profileRef(careerOpsRoot()),
+    dataRoot: splitLayout ? dataRoot : undefined,
   });
 
   const isClaude = cliId === "claude";
@@ -190,7 +198,8 @@ export async function POST(req: Request) {
     child = spawnHeadlessCli(
       binPath,
       args,
-      { cwd: careerOpsRoot(), env: process.env },
+      // The checkout: modes/ and scripts resolve there; the prompt carries the data root.
+      { cwd: codeRoot, env: process.env },
       { cliId, capabilities },
     );
   } catch (e) {

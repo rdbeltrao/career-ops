@@ -550,3 +550,13 @@ test("buildPrompt: cover does not wait on questions nobody is present to answer"
   assert.match(prompt, /unattended run/i);
   assert.match(prompt, /option b/i, "an unanswered gap defaults to not mentioning it, the only option that claims nothing");
 });
+
+test("buildPrompt: a split data root is named up front; the default layout adds nothing", () => {
+  const split = buildPrompt({ kind: "evaluate", ...ARGS, dataRoot: "/Users/me/my-data" });
+  assert.ok(split.startsWith("RUNTIME PATHS: this install keeps the user layer in a separate data root: /Users/me/my-data"));
+  assert.match(split, /modes\/_context\.md/);
+  assert.match(split, /reports\/, output\/, data\//);
+  const plain = buildPrompt({ kind: "evaluate", ...ARGS });
+  assert.equal(plain.includes("RUNTIME PATHS"), false);
+  assert.equal(buildPrompt({ kind: "evaluate", ...ARGS, dataRoot: "" }).includes("RUNTIME PATHS"), false);
+});
