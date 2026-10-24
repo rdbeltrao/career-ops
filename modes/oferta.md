@@ -810,6 +810,8 @@ By default this scans the base `cv.md` — read it as a **pre-tailoring gap list
 
 **ALWAYS** record the evaluation in the tracker, as a tracker-addition TSV that `node merge-tracker.mjs` merges. Never append or edit a row in `data/applications.md` yourself: a hand-written row skips the tracker lock the other writers share and the merge's duplicate check. Rule 9 in `modes/_shared.md` says where the TSV goes; AGENTS.md, "TSV Format for Tracker Additions", defines its header row and fields. Write one TSV for this evaluation, then run `node merge-tracker.mjs` (once, after the last evaluation, when several run as a batch).
 
+The merge also moves the posting's `data/pipeline.md` row from Pending to Processed (matched by posting URL, with the report link and score), so a row you evaluated never comes back in the next pipeline run or the web INBOX; never edit `data/pipeline.md` by hand for that, and run `node reconcile-pipeline.mjs` when a row is still pending after a merge.
+
 If this company+role is already in the tracker, never hand-write a second row. The merge matches a re-evaluation to the existing row instead of adding another, and a status or notes change on an existing row goes through `node set-status.mjs`.
 
 The TSV carries:

@@ -117,7 +117,7 @@ Run `npm run merge` manually if you need to merge outside of a batch run.
 
 Batch mode reads offers from `batch-input.tsv`, but the `data/pipeline.md` inbox is a separate list. Without reconciliation, an offer evaluated by a batch run stays in the pipeline "Pendientes" section and gets surfaced again on the next scan or `/career-ops pipeline` run -- producing duplicate reports.
 
-`reconcile-pipeline.mjs` (run as `npm run reconcile`) closes that gap: after the tracker merge, every `completed` or `skipped` offer in `batch-state.tsv` whose URL is still in pipeline "Pendientes" is moved to "Procesadas" with its report link and score (entries without a report file on disk are left in place). It is idempotent -- safe to run after every batch, or manually.
+`reconcile-pipeline.mjs` (run as `npm run reconcile`) closes that gap: after the tracker merge, every `completed` or `skipped` offer in `batch-state.tsv` whose URL is still in pipeline "Pendientes" is moved to "Procesadas" with its report link and score (entries without a report file on disk are left in place). It also reads `reports/` and the tracker, so a report written by the interactive mode, the web action or the OpenRouter runner moves its row too, matched by posting URL (`url-key.mjs`: tracking parameters, trailing slashes and http/https do not leave a second copy), and a report with no tracker row gets one from its header through `merge-tracker.mjs`. It is idempotent -- safe to run after every batch, after every scan, or once as a backfill (`--dry-run` shows the counts first). The merge itself already moves the rows of the additions it merged (`lib/pipeline-processed.mjs`), so the reconcile is the safety net, not the only writer.
 
 ## Resumability
 

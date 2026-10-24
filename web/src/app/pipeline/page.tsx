@@ -1,5 +1,5 @@
 import { Suspense } from "react";
-import { pipelineSummary } from "@/lib/career-ops";
+import { evaluatedPostingKeys, pipelineSummary } from "@/lib/career-ops";
 import { pendingInbox } from "@/lib/inbox-pending.mjs";
 import { PipelineView } from "@/components/pipeline-view";
 import { pipelineTab } from "@/lib/pipeline-navigation.mjs";
@@ -12,7 +12,9 @@ export default async function PipelinePage({ searchParams }: { searchParams: Pro
   const { tab } = await searchParams;
   const onInbox = pipelineTab(tab) === "INBOX";
   const { inbox, applications } = pipelineSummary();
-  const pending = pendingInbox(inbox);
+  // Pending rows that already have a report (by posting key) are not inbox
+  // work: reconcile-pipeline.mjs moves them, and until it runs they stay out.
+  const pending = pendingInbox(inbox, evaluatedPostingKeys(applications));
   return (
     <Suspense>
       <PipelineView applications={applications} inbox={onInbox ? pending : null} inboxCount={pending.length} />

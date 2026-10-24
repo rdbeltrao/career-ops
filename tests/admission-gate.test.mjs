@@ -223,12 +223,17 @@ test('openrouter-runner marks the row whose URL matches exactly, not a prefix of
       await markPipelineDone('https://x.test/jobs/404', { pipelinePath: ${JSON.stringify(pipelinePath)} });
     `);
     assert.equal(r.status, 0, `child failed:\n${r.stdout}\n${r.stderr}`);
-    const lines = readFileSync(pipelinePath, 'utf8').split('\n').filter(l => l.startsWith('- ['));
+    // The row moves under a Processed heading (lib/pipeline-processed.mjs)
+    // in the reconcile shape; `?gh_jid=9` is a functional parameter, so that
+    // row is a different posting and stays pending, as does jobs/12.
+    const text = readFileSync(pipelinePath, 'utf8');
+    const lines = text.split('\n').filter(l => l.startsWith('- ['));
     assert.deepEqual(lines, [
       '- [ ] https://x.test/jobs/12 | A | Role',
-      '- [x] https://x.test/jobs/1 | B | Role',
       '- [ ] https://x.test/jobs/1?gh_jid=9 | C | Role',
+      '- [x] - | https://x.test/jobs/1 | B | Role | N/A | PDF ❌',
     ]);
+    assert.ok(text.indexOf('## Processed') > text.indexOf('## Pending'), 'the Processed heading is created after Pending');
   } finally {
     rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }

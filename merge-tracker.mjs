@@ -43,6 +43,10 @@ import { validateFlags } from './lib/cli-flags.mjs';
 import { isMainModule } from './lib/is-main-module.mjs';
 import { syncTrackerPdfFlags } from './sync-pdf-flags.mjs';
 import { withPipelineLock } from './pipeline-lock.mjs';
+// After a merge, every merged addition's posting leaves pipeline.md Pending
+// through the one helper the other evaluator paths share (#limbo): matched by
+// posting key, written under the pipeline lock.
+import { markPipelineProcessed, resolvePipelinePath } from './lib/pipeline-processed.mjs';
 
 const MERGE_TRACKER_USAGE = `Usage: node merge-tracker.mjs [options]
 
@@ -1748,6 +1752,9 @@ export async function mergeTracker(options = {}) {
       return false;
     }
 
+    // Every addition that reaches the tracker also names a posting that is no
+    // longer pending; collected here, applied to pipeline.md after the write.
+    const pipelineRows = [];
     for (const file of tsvFiles) {
       // NOT trimmed here: a trailing tab is the row's final empty cell, and
       // parseTsvContent needs to see it. It trims internally for the legacy path.
@@ -1784,6 +1791,7 @@ export async function mergeTracker(options = {}) {
       // would populate the column while leaving Pass 0 nothing to match on, which is
       // the original bug with extra steps.
       if (!addition.url) addition.url = resolveReportUrl(addition.report).url;
+      if (addition.url) pipelineRows.push({ file, url: addition.url, reportLink: addition.report, score: addition.score, pdf: addition.pdf });
 
       // Check for duplicate by:
       // 0. Exact normalized posting URL (deterministic, authoritative)
@@ -2321,6 +2329,23 @@ export async function mergeTracker(options = {}) {
     if (missingReports > 0) console.log(`⚠️  ${missingReports} row(s) link to a report that is not on disk (see warnings above)`);
     if (DRY_RUN) console.log('(dry-run — no changes written)');
     trackerLock.release();
+
+    // Move the merged postings' pipeline rows under Processed. Best effort: the
+    // tracker is already written, so a pipeline problem is a warning, and
+    // reconcile-pipeline.mjs catches up on the next run.
+    if (!DRY_RUN && pipelineRows.length) {
+      const merged = pipelineRows.filter((r) => !failedAdditions.includes(r.file));
+      const pipelinePath = resolvePipelinePath(options.dataRoot ?? dirname(dirname(APPS_FILE)));
+      if (merged.length && existsSync(pipelinePath)) {
+        try {
+          const entries = merged.map((r) => ({ url: r.url, reportLink: normalizeLink(r.reportLink, dirname(pipelinePath), options.dataRoot ?? dirname(dirname(APPS_FILE))), score: looksLikeScoreCell(r.score) ? r.score : 'N/A', pdf: r.pdf === '✅' ? '✅' : '❌' }));
+          const moved = await markPipelineProcessed(pipelinePath, entries);
+          if (moved.moved.length || moved.dropped.length) console.log(`📋 pipeline.md: ${moved.moved.length} row(s) moved to Processed${moved.dropped.length ? `, ${moved.dropped.length} stale pending row(s) dropped` : ''}`);
+        } catch (err) {
+          console.warn(`⚠️  pipeline.md was not updated (${err.message}); run node reconcile-pipeline.mjs to catch up.`);
+        }
+      }
+    }
 
     // Sync PDF flags (idempotent; takes the tracker lock again in its own
     // transaction). In-process since #4758: it used to be a sync-pdf-flags.mjs

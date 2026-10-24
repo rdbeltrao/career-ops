@@ -10,6 +10,12 @@
  * This script does neither. It writes under the process cwd, which the
  * caller sets to the data root.
  *
+ * After a successful write the CLI moves the posting's data/pipeline.md row
+ * from Pending to Processed (lib/pipeline-processed.mjs, matched by posting
+ * key, under the pipeline lock), so a report never leaves its row in the web
+ * INBOX. That step is best effort: a pipeline problem is a warning on stderr,
+ * never a failed persist, because the report is already on disk.
+ *
  * Success prints {"ok":true} and exits 0. Failure prints on stderr and
  * exits 1. A failed write removes only files this call created.
  */
@@ -17,6 +23,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { isMainModule } from "./lib/is-main-module.mjs";
 import { isPostingUrl, trackerTsvLine } from "./lib/tracker-addition.mjs";
+import { markPipelineProcessed, resolvePipelinePath } from "./lib/pipeline-processed.mjs";
+import { normalizeReportLink } from "./tracker-links.mjs";
 
 const ISO_DATE_RE = /^20\d{2}-\d{2}-\d{2}$/;
 const NUM_RE = /^\d{3,}$/;
@@ -123,6 +131,30 @@ function cleanupNew(fsImpl, attempted) {
   return problems.join("; ");
 }
 
+/**
+ * Move the posting's pipeline row under Processed, with the report link and
+ * score this report carries. Returns what moved, or null when the payload has
+ * no URL or the data root has no pipeline file. Never throws.
+ *
+ * @param {string} root
+ * @param {{url?: string, num: string, reportFile: string, score: string}} payload
+ * @returns {Promise<{moved: number, dropped: number} | null>}
+ */
+export async function markReportPipelineRow(root, payload) {
+  const url = payload?.url == null ? "" : String(payload.url);
+  if (!url) return null;
+  const pipelinePath = resolvePipelinePath(root);
+  if (!fs.existsSync(pipelinePath)) return null;
+  try {
+    const reportLink = normalizeReportLink(`[${payload.num}](reports/${payload.reportFile})`, path.dirname(pipelinePath), root);
+    const result = await markPipelineProcessed(pipelinePath, [{ url, reportLink, score: payload.score, pdf: "❌" }]);
+    return { moved: result.moved.length, dropped: result.dropped.length };
+  } catch (err) {
+    process.stderr.write(`warning: the report was saved but its pipeline row was not moved to Processed: ${err instanceof Error ? err.message : String(err)}\n`);
+    return null;
+  }
+}
+
 function readStdin() {
   return new Promise((resolve, reject) => {
     const chunks = [];
@@ -167,7 +199,8 @@ async function main() {
     process.exitCode = 1;
     return;
   }
-  process.stdout.write(`${JSON.stringify({ ok: true })}\n`);
+  const pipeline = await markReportPipelineRow(process.cwd(), payload);
+  process.stdout.write(`${JSON.stringify({ ok: true, ...(pipeline ? { pipeline } : {}) })}\n`);
 }
 
 if (isMainModule(import.meta.url)) {

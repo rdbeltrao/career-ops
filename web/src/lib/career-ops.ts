@@ -14,7 +14,8 @@ import { parseInbox, splitLines } from "@/lib/pipeline-table.mjs";
 // One definition of the `{n}-RESERVED.md` convention, shared with
 // run-cli-support.mjs — see report-files.mjs for why it lives there.
 import { isReservedReportFile } from "@/lib/report-files.mjs";
-import { firstMarkdownLinkTarget } from "@/lib/posting-url.mjs";
+import { firstMarkdownLinkTarget, postingHref } from "@/lib/posting-url.mjs";
+import { inboxKey } from "@/lib/inbox-pending.mjs";
 import { resolvePdfIndexPath } from "@/lib/core/pdf-index";
 // Pure parser, no I/O — shared with the apply flow's CV resolver so the two
 // don't drift into two different definitions of "which report does this
@@ -351,6 +352,34 @@ export type PipelineSummary = {
   inbox: InboxJob[];
   applications: Application[];
 };
+
+/**
+ * Posting keys of every evaluated posting: the `**URL:**` header of each
+ * report under reports/ plus the URL cell of each tracker row that links a
+ * report. The pipeline page subtracts them from the inbox, so a Pending row
+ * whose posting already has a report is not shown as work to do.
+ */
+export function evaluatedPostingKeys(applications: Application[] = readApplications()): Set<string> {
+  const keys = new Set<string>();
+  const root = careerOpsRoot();
+  let files: string[] = [];
+  try {
+    files = fs.readdirSync(path.join(root, "reports")).filter((f) => f.endsWith(".md") && !isReservedReportFile(f));
+  } catch {
+    files = [];
+  }
+  for (const f of files) {
+    const head = read(path.join("reports", f));
+    const m = head?.match(/^\*\*URL:\*\*[ \t]*(\S+)/m);
+    if (m && /^https?:\/\//i.test(m[1])) keys.add(inboxKey(m[1]));
+  }
+  for (const app of applications) {
+    if (!app.report || app.report === "-") continue;
+    const url = postingHref(app.url);
+    if (url) keys.add(inboxKey(url));
+  }
+  return keys;
+}
 
 export function pipelineSummary(): PipelineSummary {
   const root = careerOpsRoot();
