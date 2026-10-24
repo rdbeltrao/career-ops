@@ -4,6 +4,7 @@ import path from "node:path";
 import { careerOpsRoot } from "@/lib/career-ops";
 import { setInboxSkip } from "@/lib/inbox-skip.mjs";
 import { readJsonObject } from "@/lib/json-body";
+import { resolveCodeRoot } from "@/lib/core/code-root.mjs";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -38,7 +39,10 @@ export async function POST(req: Request) {
 
   const root = careerOpsRoot();
   const file = path.join(root, "data", "pipeline.md");
-  const lockModule = path.join(root, "pipeline-lock.mjs");
+  // The lock helper is engine code: it lives in the checkout, not in a data
+  // root kept elsewhere (CAREER_OPS_DATA_DIR / .career-ops-data), so look for
+  // it next to the other root scripts rather than next to the user's data.
+  const lockModule = path.join(resolveCodeRoot(process.cwd()), "pipeline-lock.mjs");
   if (!fs.existsSync(lockModule)) {
     return NextResponse.json(
       { error: "inbox skip needs the career-ops scripts; this root has data only", code: "core-script-missing" },
