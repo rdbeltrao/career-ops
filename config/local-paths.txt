@@ -1,0 +1,23 @@
+# local-paths.txt — files this fork owns that upstream career-ops does not ship.
+# One repo-relative path per line; a trailing slash covers a directory.
+docs/superpowers/
+jev-score.mjs
+jev-rank.mjs
+render-context.mjs
+notion-sync-apply.mjs
+network-plan.mjs
+lib/openrouter-key.mjs
+lib/jev-criteria.mjs
+lib/jd-store.mjs
+modes/notion-sync.md
+modes/network.md
+modes/engage.md
+modes/_context.template.md
+templates/outreach.md
+templates/posts.md
+data-static/ats-notes.md
+docs/JEV.md
+docs/LINKEDIN.md
+config/jev-criteria.example.yml
+config/notion-map.example.yml
+tests/fixtures/jev/
