@@ -164,7 +164,12 @@ test('jevPrescreen degrades to "not run" without the module, a key or a working 
     scoreJob: async (args) => ({ ...SCORED, _seen: args }),
     formatPrescreenMarkdown: (r) => `## Calibrated pre-screen (Jev)\n\nfit: ${r.fit} verdict: ${r.verdict}`,
   };
-  const noKey = await or.jevPrescreen(JOB, { jev: fake, env: {}, loadCriteria: () => ({}) });
+  // An empty data root and the Keychain skip keep a developer's real key out of
+  // the "no key" case: resolveOpenRouterKey would otherwise read it from the
+  // data root's .env or the macOS Keychain.
+  const emptyRoot = mkdtempSync(join(tmpdir(), 'ctx-nokey-'));
+  const noKeyEnv = { CAREER_OPS_SKIP_KEYCHAIN: '1' };
+  const noKey = await or.jevPrescreen(JOB, { jev: fake, env: noKeyEnv, dataRoot: emptyRoot, loadCriteria: () => ({}) });
   assert.match(noKey.block, /^## Calibrated pre-screen \(Jev\)\n\nnot run: .*OPENROUTER_API_KEY/s);
   assert.equal(noKey.result, null);
 
