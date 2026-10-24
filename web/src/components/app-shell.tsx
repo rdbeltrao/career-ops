@@ -13,7 +13,6 @@ import { PipelineProvider } from "@/components/pipeline/pipeline-provider";
 import { ApplyProvider } from "@/components/apply/apply-provider";
 import { ExploreProvider } from "@/components/explore/explore-provider";
 import { FirstScoreView } from "@/components/explore/first-score-view";
-import { BetaBanner } from "@/components/beta/beta-banner";
 import { WorkerPills } from "@/components/jobs/worker-pills";
 import { UsageMeter } from "@/components/usage-meter";
 import { instrumentSerif } from "@/lib/fonts";
@@ -81,7 +80,7 @@ export function AppShell({ children, followupsEnabled }: { children: React.React
         <AssistantConsole />
         <BackToTop />
         <FirstScoreView />
-        <BetaBanner />
+        {/* Fork: the pre-release pill and bug-report button stay off; report upstream bugs from the fork's repository. */}
       </div>
       </ExploreProvider>
       </ApplyProvider>
