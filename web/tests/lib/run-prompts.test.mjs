@@ -552,8 +552,8 @@ test("buildPrompt: cover does not wait on questions nobody is present to answer"
 });
 
 test("buildPrompt: a split data root is named up front; the default layout adds nothing", () => {
-  const split = buildPrompt({ kind: "evaluate", ...ARGS, dataRoot: "/Users/me/my-data" });
-  assert.ok(split.startsWith("RUNTIME PATHS: this install keeps the user layer in a separate data root: /Users/me/my-data"));
+  const split = buildPrompt({ kind: "evaluate", ...ARGS, dataRoot: "/home/me/my-data" });
+  assert.ok(split.startsWith("RUNTIME PATHS: this install keeps the user layer in a separate data root: /home/me/my-data"));
   assert.match(split, /modes\/_context\.md/);
   assert.match(split, /reports\/, output\/, data\//);
   const plain = buildPrompt({ kind: "evaluate", ...ARGS });
