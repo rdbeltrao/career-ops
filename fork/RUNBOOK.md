@@ -93,6 +93,21 @@ Run these in order. Each step is safe to repeat; nothing here spends agent token
 
    The batch runner starts the agent CLI with `--dangerously-skip-permissions` on fetched posting text. Run it in a shell you are watching, not unattended.
 
+## Scheduled run and dashboard service
+
+Two launchd agents in `~/Library/LaunchAgents` (installed 2026-10-25):
+
+- `com.rdbeltrao.career-ops-daily` runs `fork/scripts/daily.sh` at 07:30 every day: scan, jev-rank, batch through the Claude subscription (`--skip-jev-verdict skip --skip-pdf --parallel 2`), tracker sync, data-root commit. Log: `job-hunt-private/output/logs/daily-YYYY-MM-DD.log`. If the Mac is asleep at 07:30, launchd runs it at the next wake. A LinkedIn login wall stops only the LinkedIn targets; run `node linkedin-login.mjs` and the next day picks them up.
+- `com.rdbeltrao.career-ops-ui` keeps the dashboard at http://localhost:3000 alive (`node scripts/ui-server.mjs`, KeepAlive, starts at login). Logs: `output/logs/ui.out` and `ui.err`.
+
+```bash
+launchctl kickstart -k gui/501/com.rdbeltrao.career-ops-daily   # run the daily job now
+launchctl bootout gui/501/com.rdbeltrao.career-ops-ui            # stop the dashboard service
+launchctl bootstrap gui/501 ~/Library/LaunchAgents/com.rdbeltrao.career-ops-ui.plist   # start it again
+```
+
+The batch runner starts `claude -p --dangerously-skip-permissions` workers on fetched posting text; the scheduled run is unattended by design, so keep `data/blacklist.md` and the dealbreakers current and read the daily log.
+
 ## Per application
 
 In a `claude` session inside `~/Projects/career-ops`:
