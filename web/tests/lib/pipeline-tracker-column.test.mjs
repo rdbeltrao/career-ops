@@ -15,7 +15,7 @@ test("tracker identifiers sort numerically rather than lexicographically", () =>
 });
 
 test("Tracker is the first sortable Pipeline column", () => {
-  assert.match(source, /const SORT_KEYS = \["tracker", "company", "role", "score", "status", "date"\]/);
+  assert.match(source, /const SORT_KEYS = \["tracker", "company", "role", "score", "jev", "status", "date"\]/);
 });
 
 test("sortable Pipeline headers use native keyboard-operable buttons", () => {

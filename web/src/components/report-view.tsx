@@ -3,6 +3,8 @@ import { ArrowLeft, FileText, ExternalLink, ChevronDown } from "lucide-react";
 import type { Application } from "@/lib/career-ops";
 import { Badge } from "@/components/ui/badge";
 import { scoreTone, legitimacyTone, parseReport } from "@/lib/format";
+import { jevTone, jevLabel } from "@/lib/jev-presentation";
+import { parseJevField } from "@/lib/report-jev.mjs";
 import {
   APPLY_LINE,
   applyCtaQuiet,
@@ -79,6 +81,10 @@ export function ReportView({
   const archetype = field("Archetype");
   const url = field("URL");
   const decision = field("Decision");
+  // Jev is the pre-screen every posting passed before an agent read it: the
+  // tracker row carries it when the page resolved one, else the header line.
+  const headerJev = parseJevField(field("Jev"));
+  const jev = app?.jev ?? (headerJev ? { ...headerJev, reasons: "" } : null);
   const line = applyLineLabel(score ?? "", meta?.legitimacy);
   const recommended = line === "Recommended";
   const quietApply = applyCtaQuiet({ score, legitimacy: meta?.legitimacy });
@@ -184,10 +190,16 @@ export function ReportView({
                 </div>
                 <div className="mt-3 flex flex-wrap items-center gap-2">
                   {score && <Badge tone={scoreTone(score)}>{score}</Badge>}
+                  {jev && (
+                    <Badge tone={jevTone(jev.verdict)}>
+                      <span title={jev.reasons || "Jev pre-screen: the typed decision model's verdict and fit"}>{jevLabel(jev)}</span>
+                    </Badge>
+                  )}
                   {line && <Badge tone={recommended ? "good" : line === "Below the apply line" ? "muted" : "warn"}>{line}</Badge>}
                   {decision && <Badge tone="info">{decision}</Badge>}
                   {meta?.legitimacy && <Badge tone={legitimacyTone(meta.legitimacy)}>{meta.legitimacy}</Badge>}
                 </div>
+                {jev?.reasons && <p className="mt-2 text-xs text-muted">Jev: {jev.reasons}</p>}
                 {reason && <p className="mt-4 text-[15px] font-medium leading-relaxed text-foreground">{reason}</p>}
                 <div className="mt-4">
                   <ApplyButton

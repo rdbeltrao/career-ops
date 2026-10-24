@@ -5,6 +5,7 @@ const FIELD_KEYS = {
   archetype: "Archetype",
   arquetipo: "Archetype",
   score: "Score",
+  jev: "Jev",
   legitimacy: "Legitimacy",
   legitimidad: "Legitimacy",
   pdf: "PDF",

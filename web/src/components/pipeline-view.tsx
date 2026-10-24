@@ -6,6 +6,7 @@ import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { Search, ChevronsUpDown, X, Compass, ArrowRight, ExternalLink, Download } from "lucide-react";
 import type { Application, InboxJob } from "@/lib/career-ops";
 import { Badge } from "@/components/ui/badge";
+import { jevTone, jevLabel } from "@/lib/jev-presentation";
 import { CompanyLogo } from "@/components/company-logo";
 import { CANONICAL_STATES, canonStatus, scoreNum, scoreTone } from "@/lib/format";
 import { StatusSelect } from "@/components/status-select";
@@ -24,7 +25,7 @@ import { trackerCsv, trackerCsvFilename } from "@/lib/tracker-csv.mjs";
 
 type Tab = (typeof PIPELINE_TABS)[number];
 
-const SORT_KEYS = ["tracker", "company", "role", "score", "status", "date"] as const;
+const SORT_KEYS = ["tracker", "company", "role", "score", "jev", "status", "date"] as const;
 type SortKey = (typeof SORT_KEYS)[number];
 
 export function PipelineView({
@@ -395,6 +396,15 @@ export function PipelineView({
                   </td>
                   <td className="px-4 py-3">
                     <Badge tone={scoreTone(r.score)}>{r.score || "—"}</Badge>
+                  </td>
+                  <td className="whitespace-nowrap px-4 py-3">
+                    {r.jev ? (
+                      <Badge tone={jevTone(r.jev.verdict)}>
+                        <span title={r.jev.reasons || undefined}>{jevLabel(r.jev)}</span>
+                      </Badge>
+                    ) : (
+                      <span className="text-faint">—</span>
+                    )}
                   </td>
                   <td className="whitespace-nowrap px-4 py-3 text-muted">
                     <StatusSelect

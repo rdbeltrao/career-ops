@@ -48,6 +48,12 @@ export function sortRows(rows, sort, scoreOf, companyLabel = (row) => String(row
     return Number.isNaN(value) ? -Infinity : value;
   };
 
+  /** A row's Jev fit, or -Infinity when the row has no readable Jev. */
+  const jevKey = (row) => {
+    const fit = row.jev && typeof row.jev.fit === 'number' ? row.jev.fit : NaN;
+    return Number.isNaN(fit) ? -Infinity : fit;
+  };
+
   /** The primary-key comparison, direction-signed. Equal keys return 0, and a
    *  row with no usable n compares equal to every other row under the tracker
    *  key, which is what keeps it out of the ordering below. */
@@ -64,6 +70,13 @@ export function sortRows(rows, sort, scoreOf, companyLabel = (row) => String(row
       // Compared before subtracting: -Infinity minus -Infinity is NaN, and a NaN
       // comparator result is not a "less than", so two unusable scores would
       // never reach the row-number tie-break below.
+      return av === bv ? 0 : (av - bv) * dir;
+    }
+    if (sort.key === 'jev') {
+      // The Jev pre-screen fit (0-100) joined onto the row by career-ops.ts;
+      // a row with no readable Jev sorts after every scored one, like a blank score.
+      const av = jevKey(a);
+      const bv = jevKey(b);
       return av === bv ? 0 : (av - bv) * dir;
     }
     const aValue = sort.key === 'company' ? companyLabel(a) : a[sort.key] || '';
