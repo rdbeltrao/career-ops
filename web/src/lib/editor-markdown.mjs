@@ -6,6 +6,7 @@ import { CodeNode, CodeHighlightNode } from '@lexical/code';
 import { $createHorizontalRuleNode, $isHorizontalRuleNode, HorizontalRuleNode } from '@lexical/extension';
 import { $convertFromMarkdownString, $convertToMarkdownString, TRANSFORMERS } from '@lexical/markdown';
 import { fromMarkdown } from 'mdast-util-from-markdown';
+import { isNotionUrl } from './workspace-links.mjs';
 
 export const EDITOR_NODES = [HeadingNode, QuoteNode, ListNode, ListItemNode, LinkNode, CodeNode, CodeHighlightNode, HorizontalRuleNode];
 
@@ -69,11 +70,23 @@ export function $removeSlashQuery() {
 /** Only protocols that are useful in a career document may become active links. */
 export function safeLinkUrl(value) {
   if (typeof value !== 'string' || /[\u0000-\u0020\u007f\\]/.test(value)) return false;
+  if (isNotionUrl(value)) return false;
   if (value.startsWith('#')) return true;
   if (value.startsWith('/')) return !value.startsWith('//');
   if (!/^[a-z][a-z\d+.-]*:/i.test(value)) return /^[\w.~/-]+(?:[?#][^\s]*)?$/.test(value);
   try { return ['https:', 'http:', 'mailto:'].includes(new URL(value).protocol); }
   catch { return false; }
+}
+
+/** Preserve pasted content while removing destinations this workspace disallows. */
+export function registerAllowedLinkTransform(editor) {
+  // LinkPlugin validates link commands, but HTML paste imports LinkNodes
+  // directly. Transforms run before rendering and before the change listener.
+  return editor.registerNodeTransform(LinkNode, (node) => {
+    if (safeLinkUrl(node.getURL())) return;
+    for (const child of node.getChildren()) node.insertBefore(child);
+    node.remove();
+  });
 }
 
 /** EVIDENCE: Lexical supports rootless state operations; no DOM emulator is needed. */

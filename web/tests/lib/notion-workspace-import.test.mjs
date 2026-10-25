@@ -24,12 +24,13 @@ test('plans the exact true page hierarchy and archives untouched connector text'
   assert.deepEqual(JSON.parse(plan.files.find((f) => f.path === 'index.json').content), plan.manifest);
 });
 
-test('renders child pages and mentions as internal links without inventing pages', () => {
+test('renders known pages internally and keeps unknown reference labels without external links', () => {
   const source = { version: 1, rootId: ROOT, pages: [page(ROOT, `<page url="${url(CHILD)}">Child &amp; notes</page>\n<mention url="${url(CHILD)}">Same page</mention> and <mention-page url="${url(OTHER)}">External reference</mention-page>`, null, [CHILD]), page(CHILD, 'Child.', ROOT)] };
   const markdown = bodyOf(planImport(source));
   assert.match(markdown, new RegExp(`\\[Child & notes\\]\\(/context\\?document=source-${CHILD}\\)`));
   assert.match(markdown, new RegExp(`\\[Same page\\]\\(/context\\?document=source-${CHILD}\\)`));
-  assert.match(markdown, new RegExp(`\\[External reference\\]\\(https://app.notion.com/p/${OTHER}\\)`));
+  assert.match(markdown, /and External reference/);
+  assert.doesNotMatch(markdown, /https:\/\/app\.notion\.com/);
   assert.doesNotMatch(markdown, /<page|<mention|ancestor-path|properties/);
 });
 
@@ -105,7 +106,9 @@ test('supports connector legacy tags, nested lists and private media references'
   assert.match(markdown, /- First item\n\n  - Nested item\n- Second item/);
   assert.match(markdown, /1\. One\n2\. Two/);
   assert.match(markdown, /### A question\n\nAn answer\./);
-  assert.match(markdown, new RegExp(`\\[Image: Source image caption \\(view in Notion\\)\\]\\(https://app.notion.com/p/${ROOT}\\)`));
+  assert.match(markdown, /Image: Source image caption/);
+  assert.doesNotMatch(markdown, /view in Notion|https:\/\/app\.notion\.com/);
+  assert.ok(plan.warnings.flatMap((entry) => entry.warnings).every((warning) => !/Notion/.test(warning)));
   assert.match(markdown, /\[Bookmark\]\(https:\/\/example.com\)/);
   assert.doesNotMatch(markdown, /&lt;(?:date|code|ul|li|ol|toggle|image|table-of-contents)/);
 });
