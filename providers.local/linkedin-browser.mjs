@@ -16,6 +16,7 @@
  *       search_url: "https://www.linkedin.com/jobs/search/?f_TPR=r604800&geoId=101282230&keywords=Engineering%20Manager&sortBy=DD"
  *       max_pages: 3        # optional, 25 cards per page, default 3
  *       resolve_apply_url: true  # optional, default true (see below)
+ *       max_apply_lookups: 25    # optional, posting pages opened per search, default 25
  *       enabled: true
  *
  * Apply links: the pane says whether a posting is Easy Apply or applied "on
@@ -25,7 +26,7 @@
  * its LinkedIn `url` and `externalId` and gains `applyUrl` / `applyKind`; the
  * JD capture gains `apply_url`; {DATA_ROOT}/data/linkedin-apply.json keeps
  * id, board link and employer URL together for the web Apply button.
- * `resolve_apply_url: false` skips the extra page.
+ * `resolve_apply_url: false` skips the extra page; `max_apply_lookups` caps it.
  *
  * The browser is a persistent Chromium profile at LINKEDIN_PROFILE_DIR or
  * ~/.job-hunt/browser-profile (sign in once with `node linkedin-login.mjs`),
@@ -71,7 +72,9 @@ const LOGGED_IN_SELECTOR = '#global-nav, .global-nav__me, #global-nav-typeahead'
 // serves instead of redirecting to /login.
 const LOGGED_OUT_SELECTOR = "a.nav__button-secondary[href*='login'], .base-search-card, .authwall-join-form, form.join-form";
 const LOGGED_IN_HTML_RE = /id="global-nav"|global-nav__me|id="global-nav-typeahead"/;
-const LOGGED_OUT_HTML_RE = /authwall-join-form|class="[^"]*\bjoin-form\b|base-search-card|nav__button-secondary[^>]*href="[^"]*login/;
+// contextual-sign-in-modal: the signed-out posting page, which LinkedIn serves at
+// /jobs/view/{id}/ without any redirect, with Apply wired to a sign-in modal.
+const LOGGED_OUT_HTML_RE = /authwall-join-form|class="[^"]*\bjoin-form\b|base-search-card|nav__button-secondary[^>]*href="[^"]*login|contextual-sign-in-modal/;
 
 // Selectors for the result list cards; all are tried, matches merge on the job id.
 export const CARD_SELECTORS = [
@@ -873,6 +876,22 @@ export function requireSearchUrl(entry) {
 }
 
 /** `max_pages` as a positive integer; DEFAULT_MAX_PAGES when absent or unusable. */
+// JUDGMENT: 25 is one result page of new offsite postings. Each lookup is one
+// more page view on the user's real account; postings past the cap keep their
+// kind and can still be looked up one at a time from the web Apply button.
+export const DEFAULT_MAX_APPLY_LOOKUPS = 25;
+
+/**
+ * How many posting pages one search may open to read employer apply URLs:
+ * `max_apply_lookups` (0 turns it off), and 0 when `resolve_apply_url: false`.
+ * @param {{ max_apply_lookups?: unknown, resolve_apply_url?: unknown }} entry
+ */
+export function resolveApplyLookups(entry) {
+  if (entry?.resolve_apply_url === false) return 0;
+  const n = Number(entry?.max_apply_lookups);
+  return Number.isInteger(n) && n >= 0 ? n : DEFAULT_MAX_APPLY_LOOKUPS;
+}
+
 export function resolveMaxPages(entry) {
   const n = Number(entry?.max_pages);
   return Number.isInteger(n) && n >= 1 ? n : DEFAULT_MAX_PAGES;
@@ -1062,13 +1081,15 @@ const POSTING_APPLY_SELECTOR = [
 export async function readPostingApply(context, jobId) {
   const page = await context.newPage();
   try {
-    await page.goto(canonicalJobUrl(jobId), { waitUntil: 'domcontentloaded' });
+    await page.goto(canonicalJobUrl(jobId), { waitUntil: 'domcontentloaded', timeout: 20_000 });
     if (isLoginWall(page.url())) throw halt(page.url());
     await page.waitForSelector(POSTING_APPLY_SELECTOR, { timeout: 8000 }).catch(() => {});
     await page.waitForTimeout(Math.round(randomBetween(400, 900)));
-    if (isLoginWall(page.url())) throw halt(page.url());
     const html = await page.content();
     dump(`posting-${jobId}.html`, html);
+    // A signed-out session gets the public posting page at the same URL, so
+    // the URL alone cannot tell; the page's own markup does.
+    if (isLoginWall(page.url(), html)) throw halt(page.url());
     return { applyUrl: offsiteApplyUrlFromHtml(html), applyKind: applyKindFromHtml(html) };
   } finally {
     await page.close().catch(() => {});
@@ -1090,9 +1111,8 @@ function dump(name, html) {
  */
 async function walkSearch(page, { entry, searchUrl, maxPages, seenPath, dryRun, applyRoot = getCareerOpsRoot() }) {
   const name = String(entry.name ?? '');
-  // `resolve_apply_url: false` on the portals.yml entry skips the posting-page
-  // visit that reads an offsite employer URL.
-  const resolveApplyUrl = entry.resolve_apply_url !== false;
+  // Posting-page visits that read an offsite employer URL, per search.
+  let applyLookupsLeft = resolveApplyLookups(entry);
   const seen = loadSeen(seenPath);
   const seenThisRun = new Set();
   /** @type {Job[]} */
@@ -1136,11 +1156,14 @@ async function walkSearch(page, { entry, searchUrl, maxPages, seenPath, dryRun, 
       }
       // The pane says "on company website" but carries no URL; the posting page
       // does. One more page, paced like the cards, only for offsite postings.
-      if (apply.applyKind === 'offsite' && resolveApplyUrl) {
+      if (apply.applyKind === 'offsite' && applyLookupsLeft > 0) {
+        applyLookupsLeft -= 1;
         await sleepRandom(CARD_WAIT_MS);
         try {
           const read = await readPostingApply(page.context(), card.id);
-          apply = { applyUrl: read.applyUrl, applyKind: read.applyKind || apply.applyKind };
+          // The pane's kind wins: it describes this posting alone, while the
+          // posting page also lists other jobs and their apply buttons.
+          apply = { applyUrl: read.applyUrl, applyKind: apply.applyKind || read.applyKind };
           if (!read.applyUrl) log(`no employer apply link found for ${card.id}`);
         } catch (err) {
           if (err instanceof LoginRequiredError) throw err;

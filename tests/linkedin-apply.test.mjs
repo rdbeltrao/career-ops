@@ -140,3 +140,55 @@ test('linkedin-apply.mjs: usage errors exit 2 before any browser starts', () => 
   assert.equal(help.status, 0);
   assert.match(help.stdout, /--resolve/);
 });
+
+// ── Review findings: only the top-card control counts ────────────────────────
+
+const EASY_PAGE_WITH_DESCRIPTION_LINK = `
+<div class="top-card">
+  <button aria-label="Easy Apply to Staff Engineer at Acme" id="jobs-apply-button-id" class="jobs-apply-button">Easy Apply</button>
+</div>
+<div id="job-details">
+  <p>Questions? <a href="https://www.linkedin.com/safety/go/?url=https%3A%2F%2Facme.com%2Fcareers%2Fapply&amp;urlhash=1">Apply here: acme.com/careers/apply</a></p>
+  <a href="https://www.linkedin.com/redir/redirect/?url=https%3A%2F%2Facme.com%2Fjobs" aria-label="Apply now">Apply now</a>
+</div>`;
+
+const ABOUT_COMPANY_LINK = `
+<section class="about-company">
+  <a href="https://www.linkedin.com/safety/go/?url=https%3A%2F%2Facme.com&amp;urlhash=2" aria-label="Company website">acme.com</a>
+</section>`;
+
+test('offsiteApplyUrlFromHtml: a link in the description is never the apply URL, even one that says apply', () => {
+  assert.equal(offsiteApplyUrlFromHtml(EASY_PAGE_WITH_DESCRIPTION_LINK), null);
+  assert.equal(offsiteApplyUrlFromHtml(ABOUT_COMPANY_LINK), null, 'the company website link is not the apply control');
+});
+
+test('offsiteApplyUrlFromHtml: the top-card control is found by its apply-on-company-website label or its apply-button class', () => {
+  const byClass = `<a class="jobs-apply-button artdeco-button" href="https://www.linkedin.com/safety/go/?url=https%3A%2F%2Fjobs.lever.co%2Facme%2F1">Apply</a>`;
+  assert.equal(offsiteApplyUrlFromHtml(byClass), 'https://jobs.lever.co/acme/1');
+  assert.equal(offsiteApplyUrlFromHtml(DIRECT_PAGE), ASHBY);
+});
+
+test('applyKindFromHtml: "company website" wins when a stray Easy Apply label appears elsewhere on the page', () => {
+  const both = `${PANE_OFFSITE}<aside><button aria-label="Easy Apply to Another Job at Other Co">Easy Apply</button></aside>`;
+  assert.equal(applyKindFromHtml(both), 'offsite');
+  assert.equal(applyKindFromHtml(EASY_PAGE_WITH_DESCRIPTION_LINK), 'easy-apply');
+});
+
+test('store: an Easy Apply posting never keeps an employer URL', () => {
+  const root = mkdtempSync(join(tmpdir(), 'linkedin-apply-'));
+  recordApply(root, { id: '9', applyUrl: ASHBY, kind: 'easy-apply' });
+  assert.equal(loadApplyStore(root)['9'].applyUrl, '');
+  recordApply(root, { id: '10', applyUrl: ASHBY, kind: 'offsite' });
+  recordApply(root, { id: '10', applyUrl: '', kind: 'easy-apply' });
+  assert.equal(loadApplyStore(root)['10'].applyUrl, '', 'a posting that became Easy Apply drops the old URL');
+});
+
+test('store: an unreadable store file is refused, never overwritten with one entry', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'linkedin-apply-'));
+  const { mkdirSync, writeFileSync } = await import('node:fs');
+  mkdirSync(join(root, 'data'), { recursive: true });
+  writeFileSync(applyStorePath(root), '{ "1": { "applyUrl": "https://a.example" }, oops');
+  assert.throws(() => recordApply(root, { id: '2', applyUrl: ASHBY, kind: 'offsite' }), /could not be read/);
+  assert.match(readFileSync(applyStorePath(root), 'utf8'), /oops/, 'the file is left as it was');
+  assert.deepEqual(loadApplyStore(root), {}, 'lookups treat it as empty');
+});

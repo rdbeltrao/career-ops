@@ -32,6 +32,7 @@ import provider, {
   profileDir,
   requireSearchUrl,
   resolveMaxPages,
+  resolveApplyLookups,
   saveSeen,
   seenStorePath,
   selectAll,
@@ -479,4 +480,19 @@ test('buildJob keeps the LinkedIn link and id beside the employer apply URL the 
 
   const plain = buildJob(card, detail, { name: 's' });
   assert.equal('applyUrl' in plain || 'applyKind' in plain, false, 'a job read without the apply step is unchanged');
+});
+
+test('isLoginWall: the signed-out posting page (a sign-in modal, no redirect) is a wall', () => {
+  const guest = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'fixtures', 'linkedin-guest-live-modal.html'), 'utf8');
+  assert.equal(isLoginWall('https://www.linkedin.com/jobs/view/4480683016/', guest), true);
+  assert.equal(isLoginWall('https://www.linkedin.com/jobs/view/4480683016/', '<header id="global-nav"></header><div class="contextual-sign-in-modal"></div>'), false, 'the signed-in navigation always wins');
+});
+
+test('resolveApplyLookups: posting-page visits per search, capped by default and off when asked', () => {
+  assert.equal(resolveApplyLookups({}), 25);
+  assert.equal(resolveApplyLookups({ max_apply_lookups: 5 }), 5);
+  assert.equal(resolveApplyLookups({ max_apply_lookups: 0 }), 0);
+  assert.equal(resolveApplyLookups({ max_apply_lookups: -1 }), 25);
+  assert.equal(resolveApplyLookups({ max_apply_lookups: 'lots' }), 25);
+  assert.equal(resolveApplyLookups({ resolve_apply_url: false, max_apply_lookups: 9 }), 0);
 });
