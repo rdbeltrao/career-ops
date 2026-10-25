@@ -118,6 +118,14 @@ export function buildScanCommand(job) {
       args: ["--since", String(sinceDays), "--quiet"],
     };
   }
+  // The LinkedIn searches alone (the linkedin-browser entries of portals.yml),
+  // read through the signed-in crawl profile.
+  if (job.engine === "linkedin") {
+    return {
+      script: "scan.mjs",
+      args: ["--since", String(sinceDays), "--quiet", "--provider", "linkedin-browser"],
+    };
+  }
 
   const ats = Array.isArray(filters.ats) && filters.ats.length
     ? filters.ats.join(",")

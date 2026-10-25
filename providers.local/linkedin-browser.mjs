@@ -47,11 +47,11 @@
  */
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { decodeEntities } from '../providers/_html-entities.mjs';
 import { getCareerOpsRoot } from '../path-resolver.mjs';
 import { applyKindFromHtml, offsiteApplyUrlFromHtml, recordApply } from '../lib/linkedin-apply.mjs';
+import { profileDir as sessionProfileDir, recordCrawlStatus } from '../lib/linkedin-session.mjs';
 
 export const SOURCE = 'linkedin-browser';
 export const PAGE_SIZE = 25;
@@ -907,10 +907,22 @@ export class LoginRequiredError extends Error {
   }
 }
 
-/** The persistent Chromium profile: LINKEDIN_PROFILE_DIR, else ~/.job-hunt/browser-profile. */
+/** The persistent Chromium profile: LINKEDIN_PROFILE_DIR, else ~/.job-hunt/browser-profile (lib/linkedin-session.mjs). */
 export function profileDir() {
-  const env = process.env.LINKEDIN_PROFILE_DIR?.trim();
-  return env || join(homedir(), '.job-hunt', 'browser-profile');
+  return sessionProfileDir();
+}
+
+/**
+ * Record one search's outcome for the web LinkedIn page (lib/linkedin-session.mjs).
+ * Never on a dry run, and a failed write never fails the scan.
+ */
+function noteCrawl(ctx, status) {
+  if (ctx?.dryRun === true) return;
+  try {
+    recordCrawlStatus(getCareerOpsRoot(), status);
+  } catch (err) {
+    log(`could not record the crawl status: ${err.message}`);
+  }
 }
 
 /**
@@ -1207,18 +1219,30 @@ export default {
     if (halted) throw halted;
     return withBrowserLock(async () => {
       if (halted) throw halted;
-      const context = await openProfile({ headed: process.env.LINKEDIN_HEADED === '1' });
+      // Launched inside the try: a launch that fails (profile in use, browser
+      // missing) is recorded as this search's result like any other failure.
+      let context;
       try {
+        context = await openProfile({ headed: process.env.LINKEDIN_HEADED === '1' });
         const page = context.pages()[0] ?? await context.newPage();
-        return await walkSearch(page, {
+        const jobs = await walkSearch(page, {
           entry,
           searchUrl,
           maxPages,
           seenPath: seenStorePath(),
           dryRun: ctx?.dryRun === true,
         });
+        noteCrawl(ctx, { result: 'ok', search: String(entry.name ?? ''), jobs: jobs.length });
+        return jobs;
+      } catch (err) {
+        noteCrawl(ctx, {
+          result: err instanceof LoginRequiredError ? 'login-required' : 'error',
+          search: String(entry.name ?? ''),
+          message: err.message,
+        });
+        throw err;
       } finally {
-        await context.close().catch(() => {});
+        await context?.close().catch(() => {});
       }
     });
   },

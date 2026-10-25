@@ -136,7 +136,7 @@ export function JobCard({
             )}
           >
             {isFull ? <Globe className="size-3" /> : <Zap className="size-3" />}
-            {isFull ? "Full ATS Sweep" : "Zero-Token Portals"}
+            {isFull ? "Full ATS Sweep" : job.engine === "linkedin" ? "LinkedIn Searches" : "Zero-Token Portals"}
           </span>
 
           <span

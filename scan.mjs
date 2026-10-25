@@ -4052,7 +4052,7 @@ function guardStatusFor(code) {
 // via lib/cli-flags.mjs's validateFlags() (#2775).
 const KNOWN_FLAGS = [
   '--dry-run', '--verify', '--headed-fallback', '--throttle', '--rediscover-404',
-  '--include-blacklisted', '--company', '--posted-after', '--posted-before',
+  '--include-blacklisted', '--company', '--provider', '--posted-after', '--posted-before',
   '--since', '--quiet', '--json', '--help', '-h',
 ];
 
@@ -4060,12 +4060,13 @@ const KNOWN_FLAGS = [
 // form is self-contained and never needs this). --throttle is deliberately
 // excluded: only its bare and `--throttle=<ms>` forms are read below, so a
 // following token is never its value.
-const VALUE_FLAGS = ['--company', '--posted-after', '--posted-before', '--since'];
+const VALUE_FLAGS = ['--company', '--provider', '--posted-after', '--posted-before', '--since'];
 
 const USAGE = `Usage:
   node scan.mjs                              # scan all enabled companies
   node scan.mjs --dry-run                    # preview without writing files
   node scan.mjs --company Cohere             # scan a single company
+  node scan.mjs --provider linkedin-browser  # scan only the targets of one provider
   node scan.mjs --verify                     # API-first liveness check; use Playwright when inconclusive
   node scan.mjs --verify --headed-fallback   # retry anti-bot-blocked URLs in a headed browser (needs a display)
   node scan.mjs --verify --throttle          # jittered ~5-10s gap between browser checks
@@ -4120,6 +4121,9 @@ async function main() {
     return value;
   };
   const filterCompany = requireValue('--company')?.toLowerCase() ?? null;
+  // --provider <id>: only the targets whose resolved provider has this id (the
+  // web schedules run the LinkedIn searches alone with linkedin-browser).
+  const filterProvider = requireValue('--provider')?.trim() || null;
   // --posted-after / --posted-before <YYYY-MM-DD>: absolute-date bounds on the
   // employer's real posting date (job.postedAt), gated against a typo since a
   // silently-ignored bound would look like "no jobs matched" instead of an error.
@@ -4171,6 +4175,10 @@ async function main() {
   await mergeProviderPlugins(providers, { root: path.dirname(PROVIDERS_DIR), dataRoot: DATA_ROOT });
   if (providers.size === 0) {
     console.error('Error: no providers loaded from providers/');
+    process.exit(1);
+  }
+  if (filterProvider && !providers.has(filterProvider)) {
+    console.error(`Error: --provider ${filterProvider} matches no loaded provider. Known: ${[...providers.keys()].sort().join(', ')}`);
     process.exit(1);
   }
 
@@ -4240,8 +4248,14 @@ async function main() {
         continue;
       }
       if (filterCompany && !entry.name.toLowerCase().includes(filterCompany)) continue;
+      // --provider: an entry that names another provider is not part of this run.
+      if (filterProvider && entry.provider && entry.provider !== filterProvider) continue;
 
       const resolved = resolveProvider(entry, providers);
+      // An entry resolved to another provider is dropped before any bookkeeping,
+      // so a LinkedIn-only run reports no skips, errors or hand-offs for the rest.
+      // One that names this provider keeps its skip/error report.
+      if (filterProvider && entry.provider !== filterProvider && resolved?.provider?.id !== filterProvider) continue;
       if (!resolved) {
         skippedCount++;
         if (entry.scan_method === 'websearch') {
