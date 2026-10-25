@@ -42,7 +42,8 @@ import { getCareerOpsRoot, resolveTrackerPath } from './path-resolver.mjs';
 import { flagValue, validateFlags } from './lib/cli-flags.mjs';
 import { LockTimeoutError } from './pipeline-lock.mjs';
 import { sectionKind } from './lib/pipeline-sections.mjs';
-import { markPipelineProcessed, rowKey, PENDING_ITEM_RE } from './lib/pipeline-processed.mjs';
+import { markPipelineProcessed, rowKey, pendingRowFields, PENDING_ITEM_RE } from './lib/pipeline-processed.mjs';
+import { companyRoleDedupKey, requisitionIdsForDedup } from './scan.mjs';
 import { resolveColumns, parseTrackerRow, extractTrackerReportNumbers, extractCellUrl } from './tracker-parse.mjs';
 import { trackerTsvLine, normalizedTrackerScore, isPostingUrl } from './lib/tracker-addition.mjs';
 
@@ -53,7 +54,8 @@ const KNOWN_FLAGS = ['--dry-run', '--no-tracker', '--pipeline', '--state', '--he
 const VALUE_FLAGS = ['--pipeline', '--state'];
 const USAGE = `Usage: node reconcile-pipeline.mjs [--dry-run] [--no-tracker] [--state <path>] [--pipeline <path>]
   Moves evaluated offers out of pipeline.md "Pendientes" into "Procesadas", matched by
-  posting URL against batch-state.tsv, reports/ and the tracker; creates a tracker
+  posting URL against batch-state.tsv, reports/ and the tracker, or by company and
+  role against an evaluation report written for another URL; creates a tracker
   row for a report that has none (--no-tracker skips that step).`;
 
 // An unrecognized flag (typo'd --dry-run, say) used to be silently ignored
@@ -306,6 +308,39 @@ if (existsSync(TRACKER_FILE)) {
   }
 }
 
+// ---- source 4: company and role ----
+// The same role often reaches the pipeline under two URLs: a LinkedIn search
+// and the employer's own Ashby or Greenhouse board. Once one copy is
+// evaluated, the other is not a new posting, so a pending row whose company
+// and role match an evaluation report moves to Processed with that report's
+// link. The key is scan.mjs's company+role dedup key, the one the scanners use
+// to refuse such a row at ingestion. Two postings that name different
+// requisition IDs stay distinct, as they do there.
+const evaluatedRoles = new Map(); // company+role key -> { file, url }
+for (const [, file] of [...reportsByNumber.entries()].sort((a, b) => b[0] - a[0])) {
+  const title = reportTitle(file);
+  if (!title || title.company === '?') continue;
+  const key = companyRoleDedupKey(title.company, title.role);
+  if (!evaluatedRoles.has(key)) evaluatedRoles.set(key, { file, url: readReportUrl(file) || '' });
+}
+const requisitionForms = (url, role) => {
+  const forms = requisitionIdsForDedup({ url, text: role });
+  return (Array.isArray(forms) ? forms : [forms]).filter(Boolean);
+};
+if (evaluatedRoles.size && existsSync(PIPELINE_FILE)) {
+  for (const line of readFileSync(PIPELINE_FILE, 'utf-8').split(/\r?\n/)) {
+    if (!PENDING_ITEM_RE.test(line)) continue;
+    const { url, company, role } = pendingRowFields(line);
+    if (!url || !company || !role || entriesByKey.has(rowKey(url))) continue;
+    const hit = evaluatedRoles.get(companyRoleDedupKey(company, role));
+    if (!hit) continue;
+    const mine = requisitionForms(url, role);
+    const theirs = requisitionForms(hit.url, role);
+    if (mine.length && theirs.length && !mine.some((form) => theirs.includes(form))) continue;
+    addEntry({ url, reportLink: reportLinkFor(hit.file), score: resolveScore(null, hit.file), pdf: resolvePdf(hit.file) }, { source: 'company-role' });
+  }
+}
+
 // ---- reports with no tracker row ----
 // A report whose addition merge-tracker.mjs has already seen is covered, even
 // when no row links it: the merge may have folded it into an existing row as
@@ -354,7 +389,7 @@ console.log('=== Reconcile pipeline.md ===');
 for (const s of skippedNoReport) {
   console.warn(`⚠️  ${s.url} — batch reports report #${s.reportNum} but no reports/${s.reportNum}-*.md found; left in Pendientes.`);
 }
-console.log(`Sources: ${entries.filter(e => e.source === 'batch-state').length} batch-state, ${entries.filter(e => e.source === 'reports').length} reports, ${entries.filter(e => e.source === 'tracker').length} tracker (${entries.length} distinct postings)`);
+console.log(`Sources: ${entries.filter(e => e.source === 'batch-state').length} batch-state, ${entries.filter(e => e.source === 'reports').length} reports, ${entries.filter(e => e.source === 'tracker').length} tracker, ${entries.filter(e => e.source === 'company-role').length} same company and role (${entries.length} distinct postings)`);
 
 let result;
 try {

@@ -14,14 +14,12 @@ import { ShortlistTray, type ShortItem } from "./shortlist-tray";
 import { cn } from "@/lib/cn";
 import { estimateRunCost } from "@/lib/run-cost-estimate.mjs";
 import { createInboxSkipActions, queueInboxSkip } from "@/lib/inbox-skip-client.mjs";
+import { JEV_FACETS, jevFacetOf, passesJevFacet, type JevFacet } from "@/lib/inbox-jev-facet.mjs";
 
 const SHORTLIST_KEY = "career-ops:shortlist";
 const HIDDEN_KEY = "career-ops:hidden";
 const CONFIG_KEY = "career-ops:config";
 const BATCH = 20;
-type JevFacet = "apply" | "maybe" | "unscored";
-const JEV_FACETS: JevFacet[] = ["apply", "maybe", "unscored"];
-const jevFacetOf = (job: InboxJob): JevFacet => (job.jev ? (job.jev.verdict === "apply" ? "apply" : "maybe") : "unscored");
 type UndoNotice = { label: string; fn: () => Promise<void>; busy?: boolean; error?: string };
 
 // The inbox as a TRIAGE surface: Abundance → Triage → Shortlist → Opt-in Score.
@@ -149,7 +147,8 @@ export function InboxTriage({ inbox }: { inbox: InboxJob[] }) {
         if (seniorities.size && (!e.seniority || !seniorities.has(e.seniority))) return false;
         if (locQ.trim() && !(e.job.location || "").toLowerCase().includes(locQ.trim().toLowerCase())) return false;
         if (kw.trim() && !`${e.job.company} ${e.job.role}`.toLowerCase().includes(kw.trim().toLowerCase())) return false;
-        if (verdicts.size && !verdicts.has(jevFacetOf(e.job))) return false;
+        // Jev "skip" rows stay out of the list unless the skip chip is on.
+        if (!passesJevFacet(e.job, verdicts)) return false;
         return true;
       }),
     [enriched, hidden, within, sources, seniorities, locQ, kw, verdicts],
