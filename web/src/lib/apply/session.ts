@@ -11,6 +11,7 @@ import { resolveCli } from "../clis";
 import { fencingReport } from "../cli-fencing.mjs";
 import { CAPS } from "../worker-capabilities.mjs";
 import { assertSafeApplyUrl, installApplyEgressGuard, isUnsafeApplyUrlError, isBlockedNavigation, UnsafeApplyUrlError } from "./url-guard.mjs";
+import { isLoginWall, LOGIN_WALL_MESSAGE } from "./login-wall.mjs";
 
 type ApplyLaunch = { headless?: boolean; channel?: string; args?: string[] };
 
@@ -186,6 +187,24 @@ async function nudgeScroll(page: Page): Promise<void> {
   await page.evaluate(() => window.scrollTo(0, 0)).catch(() => {});
 }
 
+/** Is the page a sign-in wall? Checked in every frame (login forms are often an
+ *  embedded iframe) and against the URL the browser actually ended on, which is
+ *  not the URL we opened once an "Apply" click has redirected to a login page. */
+export async function loginWallOnPage(page: Page, fields: ApplyField[] = []): Promise<boolean> {
+  let hasPassword = false;
+  for (const fr of page.frames()) {
+    try {
+      if (await fr.evaluate(() => !!document.querySelector('input[type="password"]'))) {
+        hasPassword = true;
+        break;
+      }
+    } catch {
+      /* detached / cross-origin frame → skip */
+    }
+  }
+  return isLoginWall({ url: page.url(), hasPassword, fields });
+}
+
 export async function openSession(url: string, cliId?: string, forceAgent?: boolean, noApplyBtn?: boolean): Promise<{ id: string; title: string; fields: ApplyField[]; shots: string[]; issues: ApplyIssue[]; needsDrive?: boolean }> {
   // Refuse before launching any navigation, so an obviously-internal target
   // never reaches Playwright at all.
@@ -256,6 +275,12 @@ export async function openSession(url: string, cliId?: string, forceAgent?: bool
     ({ frame, form } = await pickFormFrame(page));
     await snap();
   }
+  // A sign-in form has an email field, which is enough for the form heuristic, so
+  // the login check has to run before anything claims this page as an
+  // application. Without it a LinkedIn posting (whose "Apply" leads to the
+  // LinkedIn login when signed out) was re-rendered as a login form and handed to
+  // the planner to pre-fill.
+  if (await loginWallOnPage(page, form.fields)) return abort(LOGIN_WALL_MESSAGE);
   await enrichFromAts(url, form.fields); // clean labels + real options for known ATS (Greenhouse)
   await snap();
 
@@ -367,6 +392,8 @@ export async function finalizeDrivenSession(id: string, cliId?: string): Promise
   const s = SESSIONS.get(id);
   if (!s) return null;
   let { frame, form } = await pickFormFrame(s.page);
+  // Same rule as openSession: a login form reached by the drive is not a form.
+  if (await loginWallOnPage(s.page, form.fields)) return null;
   await enrichFromAts(s.url, form.fields);
   let aiInterpreted = false;
   let agentSpawned = false; // see openSession: launch, not result

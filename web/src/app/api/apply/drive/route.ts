@@ -1,4 +1,5 @@
-import { getSession, finalizeDrivenSession, extractCurrent, isApplicationFormFn, handoffSession } from "@/lib/apply/session";
+import { getSession, finalizeDrivenSession, extractCurrent, isApplicationFormFn, handoffSession, loginWallOnPage } from "@/lib/apply/session";
+import { LOGIN_WALL_MESSAGE } from "@/lib/apply/login-wall.mjs";
 import { driveSession } from "@/lib/apply/drive";
 import { classifyEmpty } from "@/lib/apply/diagnose";
 import { resolveCliOrFallback } from "@/lib/clis";
@@ -35,7 +36,10 @@ export async function POST(req: Request) {
         const page = s.page;
         const isFormReady = async () => {
           try {
-            return isApplicationFormFn((await extractCurrent(page, s.url)).form);
+            const { form } = await extractCurrent(page, s.url);
+            // A sign-in form is never "the form": the agent must not report it reached.
+            if (await loginWallOnPage(page, form.fields)) return false;
+            return isApplicationFormFn(form);
           } catch {
             return false;
           }
@@ -58,7 +62,13 @@ export async function POST(req: Request) {
             return;
           }
         }
-        // Didn't reach a real form → classify why for a clear message.
+        // Didn't reach a real form → classify why for a clear message. A login
+        // wall is named first: the agent's own "stuck" detail tends to describe the
+        // sign-in page rather than say what the user should do.
+        if (await loginWallOnPage(page).catch(() => false)) {
+          emit({ t: "error", reason: "login-wall", message: LOGIN_WALL_MESSAGE });
+          return;
+        }
         const why = await classifyEmpty(page, s.url).catch(() => ({ message: "Couldn't reach a fillable form on this page." }));
         emit({ t: "error", reason: result.reason, message: result.reason === "stuck" ? result.steps.at(-1)?.detail || why.message : why.message });
       } catch (e) {
