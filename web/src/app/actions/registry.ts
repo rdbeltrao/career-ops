@@ -14,6 +14,8 @@ import { normalizeTextKey } from "@/lib/core/normalize-text-key.mjs";
 import { normalizeMemoryFact } from "@/lib/memory-fact.mjs";
 import { coercePersonalization, SECTIONS } from "@/lib/personalization.mjs";
 import { formatBatchSpendConfirmation, requiresBatchSpendConfirmation } from "@/lib/run-cost-estimate.mjs";
+import { editorLinks } from "@/lib/document-editing.mjs";
+import type { AssistantDocument, AssistantTrashDocument } from "@/lib/assistant-documents.mjs";
 
 /** Tracker numbers compare numerically, so "007" finds row 7. */
 function applicationByNumber<T extends { n: string }>(apps: T[], n: string): T | undefined {
@@ -58,6 +60,10 @@ export type ActionCtx = {
   writeProfile?: (patch: Record<string, unknown>) => Promise<string | null>; // merge-safe config/profile.yml write
   writePortals?: (roles: string[], location?: string[]) => Promise<string | null>; // merge-safe portals.yml title_filter write
   writePersonalization?: (patch: Record<string, unknown>) => void; // section-safe modes/_profile.md write
+  documents?: AssistantDocument[]; // server metadata captured before the model reply
+  documentTrash?: AssistantTrashDocument[];
+  trashDocument?: (document: AssistantDocument) => Promise<string | null>;
+  restoreDocument?: (document: AssistantTrashDocument) => Promise<string | null>;
 };
 
 export type ProfilePatch = {
@@ -113,6 +119,8 @@ function isAllowedPath(p: string): boolean {
   // The apply checklist is the one two-segment route. A wider pattern would
   // also allow /explore/:x/apply and similar paths this app does not have.
   if (/^\/pipeline\/[^/]+\/apply$/.test(path)) return true;
+  if (/^\/pipeline\/\d+\/(cv-studio|cv-visual)$/.test(path)) return true;
+  if (path === "/documents" || /^\/documents\/[A-Za-z0-9_-]+\/edit$/.test(path)) return true;
   return /^\/(explore|pipeline|portals|analytics|cv|config|apply|jobs)(\/[^/]+)?$/.test(path);
 }
 
@@ -269,6 +277,49 @@ const ACTIONS: Record<string, ActionDef> = {
       const app = applicationByNumber(ctx.applications, n);
       const id = ctx.startJob({ title: `CV PDF · ${app?.company ?? `#${n}`}`, subtitle: "tailored CV", kind: "pdf", input: n, page: `/pipeline/${n}` });
       return { status: "done", jobIds: id ? [id] : [] };
+    },
+  },
+
+  editDocument: {
+    sideEffect: "none",
+    run: (raw, ctx) => {
+      const document = ctx.documents?.find((item) => item.id === raw.id);
+      if (!document || (raw.editor !== "classic" && raw.editor !== "visual")) {
+        return { status: "ignored", note: "Choose a listed document and its classic or visual editor." };
+      }
+      const path = editorLinks(document)[raw.editor];
+      if (!path) return { status: "ignored", note: "The classic editor is unavailable for this document. Choose its visual editor." };
+      ctx.push(path);
+      return { status: "done" };
+    },
+  },
+
+  trashDocument: {
+    sideEffect: "write",
+    run: (raw, ctx) => {
+      const document = ctx.documents?.find((item) => item.id === raw.id);
+      if (!document || !ctx.trashDocument) return { status: "ignored", note: "Document removal is unavailable for this identity. Open Documents to choose the file." };
+      // Capture the reviewed version now; a later save must fail If-Match, not delete newer work.
+      const captured = { ...document };
+      return {
+        status: "confirm",
+        summary: `Move “${captured.filename}” to Trash? (version ${captured.revision.slice(0, 12)}) You can restore it later.`,
+        run: () => ({ failure: ctx.trashDocument!(captured) }),
+      };
+    },
+  },
+
+  restoreDocument: {
+    sideEffect: "write",
+    run: (raw, ctx) => {
+      const document = ctx.documentTrash?.find((item) => item.id === raw.id && item.restoreToken === raw.restoreToken);
+      if (!document || !ctx.restoreDocument) return { status: "ignored", note: "That recovery copy is unavailable. Open Documents and check Trash." };
+      const captured = { ...document };
+      return {
+        status: "confirm",
+        summary: `Restore “${captured.filename}” from Trash? An existing file with the same name will not be overwritten.`,
+        run: () => ({ failure: ctx.restoreDocument!(captured) }),
+      };
     },
   },
 

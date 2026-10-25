@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 
 // THE one place every user-layer write goes through. The core's #1 historical
 // pain was data-loss (#649/#704/#920/#958); these guards make a web write
@@ -22,13 +22,20 @@ import { randomUUID } from "node:crypto";
 // the event loop for every other request. Adopting it here wants an async
 // atomicWrite rather than a copy of the sync one.
 
-export function atomicWrite(file: string, content: string): void {
+export function atomicWrite(file: string, content: string | Uint8Array): void {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   // Same shape as the core's writeFileAtomic (tracker-utils.mjs): dot-prefixed,
   // in the destination's own directory, `.tmp` suffixed. It used to be
   // `${file}.tmp-${pid}-${uuid}`, a SECOND shape that .gitignore's atomic-write
   // rule then had to cover separately — and did not.
-  const tmp = path.join(path.dirname(file), `.${path.basename(file)}.${process.pid}.${Date.now()}.${randomUUID()}.tmp`);
+  const basename = path.basename(file);
+  // A valid long filename can exceed a filesystem's component limit after
+  // adding the uniqueness suffix. Hash only long names; keep the temp beside
+  // its target and retain the ignored .tmp suffix and failure cleanup below.
+  const tempStem = Buffer.byteLength(basename) > 128
+    ? createHash("sha256").update(basename).digest("hex").slice(0, 32)
+    : basename;
+  const tmp = path.join(path.dirname(file), `.${tempStem}.${process.pid}.${Date.now()}.${randomUUID()}.tmp`);
   try {
     fs.writeFileSync(tmp, content, "utf8");
     fs.renameSync(tmp, file);
