@@ -39,3 +39,20 @@ test('AI proposal cannot replace another paragraph or a changed version of the s
   assert.equal(proposalMatches(proposal,{paragraphId:'0:1',text:'Edited'}),false);
   assert.equal(proposalMatches(proposal,null),false);
 });
+
+test('inline drafts and section selections have bounded identities and content', () => {
+  const source = {};
+  const context = {source,origin:'http://localhost:3000',session:'s'};
+  const valid = data => isEditorMessage({source,origin:context.origin,data:{channel:'career-ops-pdf-editor',session:'s',...data}},context);
+  const draft = {type:'draft',paragraphId:'0:2',pageIndex:0,original:'Original words',text:'Revised words',inlineState:{runs:[{text:'Revised words',italic:true,size:10.5}],format:{align:0}}};
+  assert.equal(valid(draft),true);
+  assert.equal(valid({...draft,original:42}),false);
+  assert.equal(valid({...draft,paragraphId:'arbitrary'}),false);
+  assert.equal(valid({...draft,inlineState:{runs:[{text:42}]}}),false);
+  const section = {type:'section-selection',sectionId:'section-1',title:'Education',targets:[{paragraphId:'0:2',text:'Education',pageIndex:0},{paragraphId:'1:0',text:'Fictional study',pageIndex:1}]};
+  assert.equal(valid(section),true);
+  assert.equal(valid({...section,targets:[...section.targets,section.targets[0]]}),false);
+  assert.equal(valid({...section,targets:[]}),false);
+  assert.equal(valid({...section,targets:[{paragraphId:'1:0',text:'a'.repeat(24001),pageIndex:1}]}),false);
+  assert.equal(valid({type:'previewed'}),true);
+});

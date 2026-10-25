@@ -1,4 +1,5 @@
 import { reportNumberFromCell } from './apply/cv-selection.mjs';
+import { copyInlineState, validPdfTargets } from './pdf-editor-state.mjs';
 
 /** @param {{reportId?:string|null}} document @param {{n:string,report:string}[]} applications */
 export function applicationIdForDocument(document, applications) {
@@ -28,9 +29,16 @@ export function isEditorMessage(event, expected) {
   const d = /** @type {Record<string,any>} */ (data);
   if (d.channel !== 'career-ops-pdf-editor' || d.session !== expected.session) return false;
   if (d.type === 'selection') return typeof d.paragraphId === 'string' && typeof d.text === 'string' && Number.isInteger(d.pageIndex) && d.pageIndex >= 0;
+  if (d.type === 'draft') {
+    if (!/^\d+:\d+$/.test(d.paragraphId) || typeof d.original !== 'string' || d.original.length > 12000 ||
+      typeof d.text !== 'string' || d.text.length > 12000 || !Number.isInteger(d.pageIndex) || d.pageIndex < 0 || d.pageIndex >= 20) return false;
+    try { copyInlineState(d.inlineState); return true; } catch { return false; }
+  }
+  if (d.type === 'section-selection') return typeof d.sectionId === 'string' && d.sectionId.length <= 200 &&
+    typeof d.title === 'string' && d.title.length <= 200 && validPdfTargets(d.targets);
   if (d.type === 'exported') return d.bytes instanceof ArrayBuffer;
   if (d.type === 'error') return typeof d.message === 'string';
-  return ['ready','loaded','changed','selected'].includes(d.type);
+  return ['ready','loaded','changed','selected','previewed'].includes(d.type);
 }
 
 /** @param {{paragraphId:string,original:string}} proposal

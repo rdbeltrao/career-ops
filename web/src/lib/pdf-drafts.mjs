@@ -4,11 +4,12 @@
  * 20 MiB every time a user types another character in the paragraph field.
  *
  * @typedef {{revision:string, bytes:ArrayBuffer, pdfDirty:boolean,
- * selection:{paragraphId:string,text:string,pageIndex:number}|null, draft:string}} PdfDraft
+ * selection:{paragraphId:string,text:string,pageIndex:number}|null, draft:string, inlineState?:{runs:object[],format?:object}}} PdfDraft
  * @typedef {{persistent:boolean, superseded?:boolean}} PersistenceResult
  */
 
 const MAX_BYTES = 20 * 1024 * 1024;
+import { copyInlineState } from './pdf-editor-state.mjs';
 
 function assertId(id) {
   if (typeof id !== 'string' || !/^[A-Za-z0-9_-]{1,700}$/.test(id)) throw new Error('Invalid PDF draft identifier.');
@@ -26,7 +27,8 @@ function copyDraft(value) {
     throw new Error('Invalid PDF draft.');
   }
   return { revision: record.revision, bytes: record.bytes, pdfDirty: record.pdfDirty,
-    selection: selection ? { ...selection } : null, draft: record.draft };
+    selection: selection ? { ...selection } : null, draft: record.draft,
+    ...(record.inlineState ? {inlineState:copyInlineState(record.inlineState)} : {}) };
 }
 
 /**

@@ -154,3 +154,24 @@ test('default browser adapter falls back to memory when IndexedDB is unavailable
   assert.equal((await clearPdfDraft('node-only-fallback')).persistent, false);
   assert.equal(await readPdfDraft('node-only-fallback'), null);
 });
+
+test('inline recovery preserves styles without sharing mutable run objects', async () => {
+  const disk = adapter();
+  const store = createPdfDraftStore(disk);
+  const value = {...draft('Styled text'),inlineState:{runs:[{text:'Styled ',italic:true,size:10.5},{text:'text',bold:true,size:10.5}],format:{align:0,lineSpacing:1.55}}};
+  await store.write('inline',value);
+  value.inlineState.runs[0].italic=false;
+  const restored=await createPdfDraftStore(disk).read('inline');
+  assert.equal(restored.inlineState.runs[0].italic,true);
+  assert.equal(restored.inlineState.runs[1].bold,true);
+  assert.equal(restored.inlineState.format.lineSpacing,1.55);
+  restored.inlineState.runs[0].text='Caller mutation';
+  assert.equal((await store.read('inline')).inlineState.runs[0].text,'Styled ');
+});
+
+test('invalid or excessively large inline style state is rejected', () => {
+  const store=createPdfDraftStore(adapter());
+  for(const inlineState of [{runs:'bad'},{runs:[{text:42}]},{runs:[{text:'a'.repeat(12001)}]},{runs:[{text:'text',family:'a'.repeat(140000)}]}]) {
+    assert.throws(()=>store.write('inline',{...draft(),inlineState}),/Invalid PDF/);
+  }
+});
