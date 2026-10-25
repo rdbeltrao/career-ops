@@ -135,14 +135,27 @@ async function changed(requestId) {
   send('changed', { bytes, revision, canUndo: undo.length > 0, canRedo: redo.length > 0 }, requestId);
 }
 
-function restoreFailedMutation(bytes, previousUndo, previousRedo) {
+function captureSelection() {
+  const paragraph = selectedParagraph();
+  return paragraph ? { ...selection, text: paragraphText(paragraph), box: { ...paragraph.box } } : null;
+}
+
+function restoreFailedMutation(bytes, previousUndo, previousRedo, previousSelection) {
   undo = previousUndo;
   redo = previousRedo;
   selection = null;
   try {
     engine.open(bytes);
     render();
-    notifySelection();
+    if (previousSelection) {
+      const matches = paragraphsByPage[previousSelection.pageIndex]?.map((paragraph, index) => ({ paragraph, index }))
+        .filter(({ paragraph }) => paragraphText(paragraph) === previousSelection.text &&
+          Math.abs(paragraph.box.x - previousSelection.box.x) < 0.5 && Math.abs(paragraph.box.top - previousSelection.box.top) < 0.5) ?? [];
+      if (matches.length === 1) selection = { pageIndex: previousSelection.pageIndex, index: matches[0].index };
+      updateSelectionStyles();
+    }
+    // A failed command is not a user selection change. Keep the host's pending
+    // text and recovery cache untouched; only the error reply should be emitted.
   } catch {
     loaded = false;
     pages.replaceChildren();
@@ -204,6 +217,7 @@ async function handle(message) {
     const previous = await snapshot();
     const previousUndo = [...undo];
     const previousRedo = [...redo];
+    const previousSelection = captureSelection();
     try {
       const result = engine.editStep('Update paragraph', () => engine.commitParagraph(id, runs, paragraph.format));
       if (!result) throw new Error('Could not apply this text change.');
@@ -219,7 +233,7 @@ async function handle(message) {
       updateSelectionStyles();
       await changed(requestId);
     } catch (error) {
-      restoreFailedMutation(previous, previousUndo, previousRedo);
+      restoreFailedMutation(previous, previousUndo, previousRedo, previousSelection);
       throw error;
     }
     notifySelection();
@@ -234,6 +248,7 @@ async function handle(message) {
     const current = await snapshot();
     const previousUndo = [...undo];
     const previousRedo = [...redo];
+    const previousSelection = captureSelection();
     try {
       engine.open(from.at(-1));
       from.pop();
@@ -242,7 +257,7 @@ async function handle(message) {
       render();
       await changed(requestId);
     } catch (error) {
-      restoreFailedMutation(current, previousUndo, previousRedo);
+      restoreFailedMutation(current, previousUndo, previousRedo, previousSelection);
       throw error;
     }
     notifySelection();

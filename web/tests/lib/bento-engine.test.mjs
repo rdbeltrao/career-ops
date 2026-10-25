@@ -93,9 +93,13 @@ test('BentoPDF iframe loads local assets, selects, rewrites, exports and undoes 
     } catch { res.statusCode = 404; res.end('not found'); }
   });
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
-  t.after(() => new Promise((resolve) => server.close(resolve)));
-  const browser = await chromium.launch({ channel: 'chrome', headless: true });
-  t.after(() => browser.close());
+  let browser;
+  t.after(async () => {
+    await browser?.close();
+    server.closeAllConnections();
+    await new Promise((resolve) => server.close(resolve));
+  });
+  browser = await chromium.launch({ channel: 'chrome', headless: true });
   const page = await browser.newPage({ viewport: { width: 1200, height: 1000 } });
   const requests = [];
   const errors = [];
@@ -113,22 +117,29 @@ test('BentoPDF iframe loads local assets, selects, rewrites, exports and undoes 
   const stale = await page.evaluate((paragraphId) => command('replace', { paragraphId, expectedText: 'stale', text: 'Bad replacement.' }), selected.paragraphId);
   assert.equal(stale.type, 'error');
   assert.match(stale.message, /changed/);
-  await page.frames().find((frame) => frame.url().includes('/pdf-editor/')).evaluate(async () => {
-    const { PdfEngine } = await import('/vendor/bentopdf/core.js');
-    const original = PdfEngine.prototype.saveSpliced;
-    let calls = 0;
-    PdfEngine.prototype.saveSpliced = async function (...args) {
-      if (++calls === 2) {
-        PdfEngine.prototype.saveSpliced = original;
-        throw new Error('Injected snapshot failure');
-      }
-      return original.apply(this, args);
-    };
-  });
+  async function failNextChangedSnapshot() {
+    await page.frames().find((frame) => frame.url().includes('/pdf-editor/')).evaluate(async () => {
+      const { PdfEngine } = await import('/vendor/bentopdf/core.js');
+      const original = PdfEngine.prototype.saveSpliced;
+      let calls = 0;
+      PdfEngine.prototype.saveSpliced = async function (...args) {
+        if (++calls === 2) {
+          PdfEngine.prototype.saveSpliced = original;
+          throw new Error('Injected snapshot failure');
+        }
+        return original.apply(this, args);
+      };
+    });
+  }
+  const selectionCount = () => page.evaluate(() => window.messages.filter((message) => message.type === 'selection').length);
+  const beforeFailureSelectionCount = await selectionCount();
+  await failNextChangedSnapshot();
   const failedSnapshot = await page.evaluate((paragraphId) => command('replace', { paragraphId, expectedText: 'Original profile sentence.', text: 'Unrecoverable edit sentence.' }), selected.paragraphId);
   assert.equal(failedSnapshot.type, 'error');
   assert.equal(failedSnapshot.message, 'Injected snapshot failure');
   assert.equal(await page.frameLocator('iframe').getByRole('button', { name: 'Edit paragraph: Original profile sentence.', exact: true }).count(), 1, 'Failed post-edit snapshot restores the previous PDF');
+  assert.equal(await selectionCount(), beforeFailureSelectionCount, 'Failed replacement must not erase the host text draft with a selection event');
+  assert.equal(await page.frameLocator('iframe').getByRole('button', { name: 'Edit paragraph: Original profile sentence.', exact: true, pressed: true }).count(), 1, 'Failed replacement keeps the visual selection');
   const replaced = await page.evaluate(async (paragraphId) => {
     const reply = await command('replace', { paragraphId, expectedText: 'Original profile sentence.', text: 'Updated profile sentence.' });
     return { ...reply, bytes: Array.from(new Uint8Array(reply.bytes)) };
@@ -150,6 +161,14 @@ test('BentoPDF iframe loads local assets, selects, rewrites, exports and undoes 
     assert.match(text, /Updated profile sentence/);
     assert.doesNotMatch(text, /Original profile sentence/);
     assert.match(text, /Untouched experience sentence/);
+    const beforeUndoFailureSelectionCount = await selectionCount();
+    await failNextChangedSnapshot();
+    assert.equal((await page.evaluate(() => command('undo'))).type, 'error');
+    assert.equal(await selectionCount(), beforeUndoFailureSelectionCount, 'Failed undo must not erase the host draft');
+    assert.equal(await page.frameLocator('iframe').getByRole('button', { name: 'Edit paragraph: Updated profile sentence.', exact: true, pressed: true }).count(), 1);
+    const failedUndoBytes = await page.evaluate(async () => Array.from(new Uint8Array((await command('export')).bytes)));
+    engine.open(new Uint8Array(failedUndoBytes));
+    assert.match(engine.buildModel().map(paragraphText).join('\n'), /Updated profile sentence/);
     const undoReply = await page.evaluate(async () => {
       const reply = await command('undo');
       return { ...reply, bytes: Array.from(new Uint8Array(reply.bytes)) };
@@ -159,6 +178,16 @@ test('BentoPDF iframe loads local assets, selects, rewrites, exports and undoes 
     assert.match(engine.buildModel().map(paragraphText).join('\n'), /Original profile sentence/);
     const undone = await page.evaluate(async () => Array.from(new Uint8Array((await command('export')).bytes)));
     engine.open(new Uint8Array(undone));
+    assert.match(engine.buildModel().map(paragraphText).join('\n'), /Original profile sentence/);
+    await page.frameLocator('iframe').getByRole('button', { name: 'Edit paragraph: Original profile sentence.', exact: true }).click();
+    await page.waitForFunction(() => window.messages.filter((message) => message.type === 'selection').at(-1)?.text === 'Original profile sentence.');
+    const beforeRedoFailureSelectionCount = await selectionCount();
+    await failNextChangedSnapshot();
+    assert.equal((await page.evaluate(() => command('redo'))).type, 'error');
+    assert.equal(await selectionCount(), beforeRedoFailureSelectionCount, 'Failed redo must not erase the host draft');
+    assert.equal(await page.frameLocator('iframe').getByRole('button', { name: 'Edit paragraph: Original profile sentence.', exact: true, pressed: true }).count(), 1);
+    const failedRedoBytes = await page.evaluate(async () => Array.from(new Uint8Array((await command('export')).bytes)));
+    engine.open(new Uint8Array(failedRedoBytes));
     assert.match(engine.buildModel().map(paragraphText).join('\n'), /Original profile sentence/);
     assert.equal((await page.evaluate(() => command('redo'))).type, 'changed');
     assert.equal(await page.frameLocator('iframe').getByRole('button', { name: 'Edit paragraph: Updated profile sentence.', exact: true }).count(), 1);
