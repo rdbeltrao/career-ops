@@ -104,6 +104,23 @@ expectCause(
 }
 
 expectCause(
+  'colored call-log stderr survives Playwright replacing the sandbox browser-log section',
+  [
+    'browserType.launch: Target page, context or browser has been closed',
+    'Browser logs:',
+    'Chromium sandboxing failed!',
+    '================================',
+    'Configure your environment to support sandboxing',
+    '================================',
+    '',
+    'Call log:',
+    '\u001b[2m  - <launching> /pw/chrome-headless-shell --no-sandbox\u001b[22m',
+    '\u001b[2m  - [pid=9][err] [1021/101010.000:FATAL:zygote_host_impl_linux.cc(127)] No usable sandbox!\u001b[22m',
+  ].join('\n'),
+  { kind: 'launch-failed', detail: '[1021/101010.000:FATAL:zygote_host_impl_linux.cc(127)] No usable sandbox!' },
+);
+
+expectCause(
   'a failure without browser logs falls back to the first line of the message',
   'browserType.launch: Timeout 180000ms exceeded.\nCall log:\n  - <launching>',
   { kind: 'launch-failed', detail: 'Timeout 180000ms exceeded.' },

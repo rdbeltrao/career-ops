@@ -38,16 +38,10 @@ const TEXT_EXTENSIONS = new Set([
   '.json', '.yml', '.yaml', '.tsv', '.cff', '.mod', '.sum', '.example', '.lock',
 ]);
 
-// Vendored third-party bundles are kept byte-identical to their upstream
-// release so they can be replaced wholesale on update. Their bytes are not
-// ours to escape; a NUL inside one is upstream's choice.
-const VENDORED_PREFIXES = ['web/public/vendor/'];
-
 function trackedTextFiles() {
   const out = execFileSync('git', ['ls-files', '-z'], { cwd: ROOT, encoding: 'utf-8' });
   return out.split('\0').filter(Boolean)
-    .filter((f) => TEXT_EXTENSIONS.has(extname(f).toLowerCase()))
-    .filter((f) => !VENDORED_PREFIXES.some((prefix) => f.startsWith(prefix)));
+    .filter((f) => TEXT_EXTENSIONS.has(extname(f).toLowerCase()));
 }
 
 test('no tracked text file contains a raw NUL byte', () => {
