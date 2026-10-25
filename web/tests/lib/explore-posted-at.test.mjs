@@ -62,17 +62,18 @@ test('Explore add preserves a valid posting date in pipeline and scan history', 
   process.env.CAREER_OPS_TRACKER = path.join(tmp, 'data', 'applications.md');
   process.env.CAREER_OPS_PORTALS = path.join(tmp, 'portals.yml');
 
-  // pipeline.ts currently imports localToday from careerOpsRoot()/lib. Stage
-  // that system module inside the throwaway root (independent of PR #4430).
-  fs.mkdirSync(path.join(tmp, 'lib'), { recursive: true });
-  fs.copyFileSync(todayPath, path.join(tmp, 'lib', 'local-today.mjs'));
+  // pipeline.ts imports localToday from the code checkout (careerOpsCodeRoot()),
+  // which the shim below points at this repository, so nothing is staged here.
 
   const original = fs.readFileSync(sourcePath, 'utf8');
-  const alias = 'import { careerOpsRoot, rootScript } from "@/lib/career-ops";';
+  const alias = 'import { careerOpsRoot, rootScript, careerOpsCodeRoot } from "@/lib/career-ops";';
   assert.equal(original.split(alias).length - 1, 1,
     'The web writer import changed; update this test rather than testing a mock');
   assert.match(original, /export function addOffersToPipeline\(/);
+  // Data root: the throwaway folder. Code root: this repository, where the
+  // engine scripts the writer loads (scan.mjs, lib/local-today.mjs) live.
   const shim = `const careerOpsRoot = () => ${JSON.stringify(tmp)};\n`
+    + `const careerOpsCodeRoot = () => ${JSON.stringify(repo)};\n`
     + `const rootScript = (name) => {\n`
     + `  if (name !== "scan") throw new Error("Unexpected script name: " + name);\n`
     + `  return ${JSON.stringify(scanPath)};\n};`;

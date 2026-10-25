@@ -16,7 +16,7 @@ const RECENCY = [
   { label: "30d", days: 30 },
 ];
 
-const STYLE = `
+export const STYLE = `
 .co-fb__chip{display:inline-flex;align-items:center;gap:.3rem;border-radius:999px;padding:.2rem .5rem .2rem .6rem;font-size:12.5px;line-height:1.2;border:1px solid transparent}
 .co-fb__chip button{display:inline-flex;opacity:.6;transition:opacity .15s}
 .co-fb__chip button:hover{opacity:1}
@@ -28,7 +28,7 @@ html.dark .co-fb__chip.inc{color:hsl(26 86% 70%);background:hsl(26 80% 55% / .14
 @media (max-width:639px){.co-fb__chip button{min-width:44px;min-height:44px;justify-content:center}.co-fb__chip{min-height:44px}.co-fb__field{min-height:44px}.co-fb__field input{min-height:32px}}
 `;
 
-function KeywordField({
+export function KeywordField({
   values,
   tone,
   placeholder,
@@ -95,7 +95,7 @@ function KeywordField({
   );
 }
 
-function Label({ children, hint }: { children: React.ReactNode; hint?: string }) {
+export function Label({ children, hint }: { children: React.ReactNode; hint?: string }) {
   return (
     <div className="mb-1.5 flex items-baseline justify-between gap-4">
       <span className="text-[13px] font-medium text-foreground">{children}</span>

@@ -35,6 +35,10 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { register } from 'node:module';
 
 const WEB_SRC = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'src');
+// The checkout this test file lives in. The code root is otherwise guessed as
+// the parent of the working directory, which is right from web/ and one folder
+// too high from the repository root, where the root test runner starts it.
+const CHECKOUT = join(WEB_SRC, '..', '..');
 const ALIAS_EXTS = ['.ts', '.tsx', '.mjs', '.js', '.mts'];
 const loaderSrc = [
   "import { existsSync } from 'node:fs';",
@@ -79,13 +83,16 @@ async function withFixture(files, fn) {
       utimesSync(p, t, t);
     }
   }
-  const prev = process.env.CAREER_OPS_ROOT;
+  const prev = { CAREER_OPS_ROOT: process.env.CAREER_OPS_ROOT, CAREER_OPS_CODE_ROOT: process.env.CAREER_OPS_CODE_ROOT };
   process.env.CAREER_OPS_ROOT = root;
+  process.env.CAREER_OPS_CODE_ROOT = CHECKOUT;
   try {
     return await fn(outputDir);
   } finally {
-    if (prev === undefined) delete process.env.CAREER_OPS_ROOT;
-    else process.env.CAREER_OPS_ROOT = prev;
+    for (const [key, value] of Object.entries(prev)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
     rmSync(root, { recursive: true, force: true });
   }
 }
