@@ -113,21 +113,50 @@ test('BentoPDF iframe loads local assets, selects, rewrites, exports and undoes 
   const stale = await page.evaluate((paragraphId) => command('replace', { paragraphId, expectedText: 'stale', text: 'Bad replacement.' }), selected.paragraphId);
   assert.equal(stale.type, 'error');
   assert.match(stale.message, /changed/);
-  const replaced = await page.evaluate((paragraphId) => command('replace', { paragraphId, expectedText: 'Original profile sentence.', text: 'Updated profile sentence.' }), selected.paragraphId);
+  await page.frames().find((frame) => frame.url().includes('/pdf-editor/')).evaluate(async () => {
+    const { PdfEngine } = await import('/vendor/bentopdf/core.js');
+    const original = PdfEngine.prototype.saveSpliced;
+    let calls = 0;
+    PdfEngine.prototype.saveSpliced = async function (...args) {
+      if (++calls === 2) {
+        PdfEngine.prototype.saveSpliced = original;
+        throw new Error('Injected snapshot failure');
+      }
+      return original.apply(this, args);
+    };
+  });
+  const failedSnapshot = await page.evaluate((paragraphId) => command('replace', { paragraphId, expectedText: 'Original profile sentence.', text: 'Unrecoverable edit sentence.' }), selected.paragraphId);
+  assert.equal(failedSnapshot.type, 'error');
+  assert.equal(failedSnapshot.message, 'Injected snapshot failure');
+  assert.equal(await page.frameLocator('iframe').getByRole('button', { name: 'Edit paragraph: Original profile sentence.', exact: true }).count(), 1, 'Failed post-edit snapshot restores the previous PDF');
+  const replaced = await page.evaluate(async (paragraphId) => {
+    const reply = await command('replace', { paragraphId, expectedText: 'Original profile sentence.', text: 'Updated profile sentence.' });
+    return { ...reply, bytes: Array.from(new Uint8Array(reply.bytes)) };
+  }, selected.paragraphId);
   assert.equal(replaced.type, 'changed', replaced.message);
   assert.equal(replaced.canUndo, true);
+  assert.ok(replaced.bytes.length > 0, 'Mutation reply carries a durable PDF snapshot before resolving');
+  await page.waitForFunction(() => window.messages.filter((message) => message.type === 'selection').at(-1)?.text === 'Updated profile sentence.');
   const overflow = await page.evaluate((paragraphId) => command('replace', { paragraphId, expectedText: 'Updated profile sentence.', text: 'Longer text '.repeat(500) }), selected.paragraphId);
   assert.equal(overflow.type, 'error');
   assert.match(overflow.message, /page|overlap/);
   const exported = await page.evaluate(async () => Array.from(new Uint8Array((await command('export')).bytes)));
   const engine = await PdfEngine.create();
   try {
+    engine.open(new Uint8Array(replaced.bytes));
+    assert.match(engine.buildModel().map(paragraphText).join('\n'), /Updated profile sentence/);
     engine.open(new Uint8Array(exported));
     const text = engine.buildModel().map(paragraphText).join('\n');
     assert.match(text, /Updated profile sentence/);
     assert.doesNotMatch(text, /Original profile sentence/);
     assert.match(text, /Untouched experience sentence/);
-    assert.equal((await page.evaluate(() => command('undo'))).type, 'changed');
+    const undoReply = await page.evaluate(async () => {
+      const reply = await command('undo');
+      return { ...reply, bytes: Array.from(new Uint8Array(reply.bytes)) };
+    });
+    assert.equal(undoReply.type, 'changed');
+    engine.open(new Uint8Array(undoReply.bytes));
+    assert.match(engine.buildModel().map(paragraphText).join('\n'), /Original profile sentence/);
     const undone = await page.evaluate(async () => Array.from(new Uint8Array((await command('export')).bytes)));
     engine.open(new Uint8Array(undone));
     assert.match(engine.buildModel().map(paragraphText).join('\n'), /Original profile sentence/);

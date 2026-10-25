@@ -54,10 +54,15 @@ function select(paragraphId, requestId) {
     throw new Error('This text block cannot be edited in the visual editor.');
   }
   selection = { pageIndex, index };
+  updateSelectionStyles();
+  notifySelection(requestId);
+}
+
+function updateSelectionStyles() {
+  const paragraphId = selection ? `${selection.pageIndex}:${selection.index}` : '';
   for (const button of pages.querySelectorAll('.paragraph')) {
     button.setAttribute('aria-pressed', String(button.dataset.paragraphId === paragraphId));
   }
-  notifySelection(requestId);
 }
 
 function render() {
@@ -121,9 +126,28 @@ function pushHistory(stack, bytes) {
   while (stack.length > 10 || (stack.length > 1 && stack.reduce((sum, entry) => sum + entry.byteLength, 0) > MAX_HISTORY_BYTES)) stack.shift();
 }
 
-function changed(requestId) {
+async function changed(requestId) {
+  // The host persists this exact snapshot before resolving the mutation command,
+  // so router navigation can recover every successfully applied visual edit.
+  const snapshotBytes = await snapshot();
+  const bytes = snapshotBytes.buffer.slice(snapshotBytes.byteOffset, snapshotBytes.byteOffset + snapshotBytes.byteLength);
   revision++;
-  send('changed', { revision, canUndo: undo.length > 0, canRedo: redo.length > 0 }, requestId);
+  send('changed', { bytes, revision, canUndo: undo.length > 0, canRedo: redo.length > 0 }, requestId);
+}
+
+function restoreFailedMutation(bytes, previousUndo, previousRedo) {
+  undo = previousUndo;
+  redo = previousRedo;
+  selection = null;
+  try {
+    engine.open(bytes);
+    render();
+    notifySelection();
+  } catch {
+    loaded = false;
+    pages.replaceChildren();
+    throw new Error('The PDF editor could not restore the previous version. Reload to recover your last saved draft.');
+  }
 }
 
 async function handle(message) {
@@ -171,20 +195,33 @@ async function handle(message) {
     const runs = replacementRuns(paragraph, message.text);
     if (message.text === message.expectedText) {
       selection = { pageIndex, index };
-      changed(requestId);
+      await changed(requestId);
       notifySelection();
       return;
     }
     const preview = engine.previewParagraph(id, runs, paragraph.format);
     assertReplacementFits(paragraph, preview, paragraphs, engine.pageWidth, engine.pageHeight);
     const previous = await snapshot();
-    const result = engine.editStep('Update paragraph', () => engine.commitParagraph(id, runs, paragraph.format));
-    if (!result) throw new Error('Could not apply this text change.');
-    pushHistory(undo, previous);
-    redo = [];
-    selection = { pageIndex, index };
-    render();
-    changed(requestId);
+    const previousUndo = [...undo];
+    const previousRedo = [...redo];
+    try {
+      const result = engine.editStep('Update paragraph', () => engine.commitParagraph(id, runs, paragraph.format));
+      if (!result) throw new Error('Could not apply this text change.');
+      pushHistory(undo, previous);
+      redo = [];
+      selection = null;
+      render();
+      // A changed layout can reorder or split blocks. Select only the uniquely
+      // matching updated paragraph; never reuse a positional index blindly.
+      const updated = paragraphsByPage[pageIndex].map((candidate, updatedIndex) => ({ candidate, updatedIndex }))
+        .filter(({ candidate }) => paragraphText(candidate) === message.text && Math.abs(candidate.box.x - paragraph.box.x) < 0.5 && Math.abs(candidate.box.top - paragraph.box.top) < 0.5);
+      if (updated.length === 1) selection = { pageIndex, index: updated[0].updatedIndex };
+      updateSelectionStyles();
+      await changed(requestId);
+    } catch (error) {
+      restoreFailedMutation(previous, previousUndo, previousRedo);
+      throw error;
+    }
     notifySelection();
   } else if (type === 'export') {
     const bytes = await snapshot();
@@ -195,12 +232,19 @@ async function handle(message) {
     const to = type === 'undo' ? redo : undo;
     if (!from.length) throw new Error(`Nothing to ${type}.`);
     const current = await snapshot();
-    engine.open(from.at(-1));
-    from.pop();
-    pushHistory(to, current);
-    selection = null;
-    render();
-    changed(requestId);
+    const previousUndo = [...undo];
+    const previousRedo = [...redo];
+    try {
+      engine.open(from.at(-1));
+      from.pop();
+      pushHistory(to, current);
+      selection = null;
+      render();
+      await changed(requestId);
+    } catch (error) {
+      restoreFailedMutation(current, previousUndo, previousRedo);
+      throw error;
+    }
     notifySelection();
   }
 }
