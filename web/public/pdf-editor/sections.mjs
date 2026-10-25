@@ -41,8 +41,30 @@ function union(boxes) {
   const top = Math.max(...boxes.map((box) => box.top));
   return { x, top, w: Math.max(...boxes.map((box) => box.x + box.w)) - x, h: top - Math.min(...boxes.map(bottom)) };
 }
-function pageBackground(object, page) {
-  return [2, 3, 4].includes(object.type) && object.box && object.box.w >= page.width * 0.95 && object.box.h >= page.height * 0.95;
+/**
+ * JUDGMENT: generated CVs paint a white rectangle inside the page margins before
+ * their text. Keep that native underlay stationary; size alone is never proof.
+ * isRect must come from closed axis-aligned native path/matrix inspection, not
+ * from its bounding box or segment count. Unknown metadata fails closed.
+ */
+export function isPageUnderlay(object, page) {
+  const box = rectangle(object.box);
+  const color = object.fillColor;
+  if (object.type !== 2 || object.isRect !== true || ![4, 5].includes(object.segmentCount) ||
+      object.pathStyle?.fill !== true || object.pathStyle.stroke !== false ||
+      !color || ![color.r, color.g, color.b, color.a].every((value) => Number.isFinite(value) && value >= 0 && value <= 255) ||
+      !(color.a === 0 || (color.r === 255 && color.g === 255 && color.b === 255)) ||
+      !box || box.w < page.width * 0.6 || box.h < page.height * 0.6 ||
+      box.x < -EPSILON || bottom(box) < -EPSILON || box.x + box.w > page.width + EPSILON || box.top > page.height + EPSILON) return false;
+  const textObjects = (page.objects ?? []).filter((item) => item.type === 1);
+  if (!Number.isInteger(object.index) || !textObjects.length || textObjects.some((item) => !Number.isInteger(item.index) || item.index <= object.index)) return false;
+  const content = (page.paragraphs ?? []).filter((paragraph) => !paragraph.invisible &&
+    (paragraph.text ?? paragraphText(paragraph)).trim()).map((paragraph) => rectangle(paragraph.box));
+  if (content.some((item) => !item)) return false;
+  // Running page numbers and marginal headers do not define the body underlay.
+  const body = content.filter((item) => item.top > 36 && bottom(item) < page.height - 24);
+  return body.length > 0 && body.every((item) => item.x >= box.x - EPSILON && item.x + item.w <= box.x + box.w + EPSILON &&
+    item.top <= box.top + EPSILON && bottom(item) >= bottom(box) - EPSILON);
 }
 function reason(section, message) { if (!section.reasons.includes(message)) section.reasons.push(message); }
 
@@ -110,7 +132,7 @@ function analyze(pages) {
     // JUDGMENT: an artwork-only continuation cannot be segmented from the
     // paragraph model. Refuse a partial move instead of leaving that page behind.
     if (!page.fragments.length && page.continuation && page.objects.some((object) =>
-      !object.box || (!pageBackground(object, page) && object.box.top > 45 && bottom(object.box) < page.height - 65))) {
+      !object.box || (!isPageUnderlay(object, page) && object.box.top > 45 && bottom(object.box) < page.height - 65))) {
       reason(page.continuation, 'This section has an artwork-only continuation page that cannot be grouped safely.');
     }
     if (page.paragraphs.some((paragraph) => !paragraph.box && !paragraph.invisible && paragraph.text.trim())) {
@@ -139,7 +161,7 @@ function analyze(pages) {
         continue;
       }
       indices.add(object.index);
-      if (pageBackground(object, page) && !explicitlyOwned.has(object.index)) { page.ignoredObjects.add(object.index); continue; }
+      if (isPageUnderlay(object, page) && !explicitlyOwned.has(object.index)) { page.ignoredObjects.add(object.index); continue; }
       let owners = [...(explicitlyOwned.get(object.index) ?? [])];
       if (!owners.length) {
         owners = page.fragments.filter((fragment) => verticalOverlap(object.box, fragment.coreBox));

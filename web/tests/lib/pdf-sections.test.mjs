@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { analyzeCvSections, planSectionReorder } from '../../public/pdf-editor/sections.mjs';
+import { analyzeCvSections, isPageUnderlay, planSectionReorder } from '../../public/pdf-editor/sections.mjs';
 import { PdfEngine } from '../../public/vendor/bentopdf/core.js';
 
 const paragraph = (id, text, top, h = 18, x = 50, w = 480) => ({ id, runs: [{ text, size: 12 }], box: { x, top, w, h }, editable: true });
@@ -21,6 +21,11 @@ function singlePage() {
     { box: { x: 40, top: 635, w: 530, h: 90 } },
     { box: { x: 35, top: 451, w: 5, h: 8 } },
   ])];
+}
+
+function underlay(box, overrides = {}) {
+  return { index: 0, handle: 999, type: 2, box, fillColor: { r: 255, g: 255, b: 255, a: 255 },
+    pathStyle: { fill: true, stroke: false }, segmentCount: 5, isRect: true, ...overrides };
 }
 
 test('main headings group complete sections, bullets, dividers and background objects', () => {
@@ -111,11 +116,46 @@ test('unknown object bounds and section links cannot be silently left behind', (
 
 test('whole-page background stays fixed while section background travels', () => {
   const pages = singlePage();
-  pages[0].objects.push({ index: 99, handle: 999, type: 2, box: { x: 0, y: 0, w: 612, h: 792 } });
+  pages[0].objects = [underlay({ x: 0, y: 0, w: 612, h: 792 }), ...pages[0].objects.map((object) => ({ ...object, index: object.index + 1 }))];
   const { sections } = analyzeCvSections(pages);
   assert.ok(sections.every((section) => section.movable));
-  assert.ok(sections.every((section) => section.fragments.every((fragment) => !fragment.objectIndices.includes(99))));
-  assert.ok(sections[1].fragments[0].objectIndices.includes(11));
+  assert.ok(sections.every((section) => section.fragments.every((fragment) => !fragment.objectIndices.includes(0))));
+  assert.ok(sections[1].fragments[0].objectIndices.includes(12));
+});
+
+test('generated white content-area underlay stays fixed while real CV sections can move', () => {
+  const p = page(0, [
+    paragraph(1, 'Fictional Candidate', 780), paragraph(2, 'Summary', 720), paragraph(3, 'Builds reliable software.', 680),
+    paragraph(4, 'Skills', 600), paragraph(5, 'Engineering and mentoring.', 560),
+  ]);
+  p.width = 594.96; p.height = 841.92;
+  const background = underlay({ x: 43.5, y: 43.17, w: 509.25, h: 755.25 });
+  p.objects = [background, ...p.objects.map((object) => ({ ...object, index: object.index + 1 }))];
+  assert.equal(isPageUnderlay(background, p), true);
+  assert.equal(isPageUnderlay({ ...background, fillColor: { r: 10, g: 90, b: 180, a: 0 } }, p), true);
+  const sections = analyzeCvSections([p]).sections;
+  assert.ok(sections.every((section) => section.movable));
+  const plan = planSectionReorder([p], sections[1].id, sections[0].id);
+  assert.ok(plan.moves.every((move) => !move.objectIndices.includes(0)));
+});
+
+test('large meaningful artwork and unproved rectangles are never treated as page underlays', () => {
+  const p = singlePage()[0];
+  const background = underlay({ x: 0, y: 0, w: 612, h: 792 });
+  p.objects = [background, ...p.objects.map((object) => ({ ...object, index: object.index + 1 }))];
+  const cases = [
+    { fillColor: { r: 40, g: 80, b: 160, a: 255 } }, { pathStyle: { fill: true, stroke: true } },
+    { type: 3 }, { isRect: undefined }, { index: 50 }, { isRect: false }, { segmentCount: 7 },
+    { box: { x: 100, y: 0, w: 512, h: 792 } },
+  ];
+  for (const change of cases) {
+    const object = { ...background, ...change };
+    assert.equal(isPageUnderlay(object, p), false, JSON.stringify(change));
+    const analysis = analyzeCvSections([{ ...p, objects: [object, ...p.objects.slice(1)] }]);
+    assert.ok(analysis.sections.some((section) => !section.movable));
+  }
+  assert.equal(isPageUnderlay({ ...background, box: { x: 40, top: 635, w: 530, h: 90 } }, p), false, 'A white section background is still owned by its section');
+  assert.equal(isPageUnderlay(background, { ...p, objects: [] }), false, 'Missing paint-order evidence fails closed');
 });
 
 test('section artwork below its last paragraph travels, but a footer rule stays fixed', () => {
