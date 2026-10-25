@@ -91,3 +91,28 @@ this change.
   invalid libraries and local link titles. Rich/source switching and edit/undo
   preserve original source bytes without an automatic save. At 1280 px both
   move buttons remain together and the page has no horizontal overflow.
+
+## Follow-up regression repair
+
+- Chromium diagnostics now remove terminal control sequences before parsing the
+  browser's stderr. The colored Playwright call-log regression and real stub
+  browser checks pass without relaxing their expected diagnostic.
+- The PDF font helper now spells its raw NUL as `\u0000`; all 65,536 UTF-16 code
+  units retain identical font-embedding decisions. Source notes and asset hashes
+  were updated. The NUL check again covers all tracked text, including vendor
+  files, rather than excluding a directory containing locally adapted code.
+- Renaming the document store's internal replacement function avoids the
+  recursive-walker detector confusing it with a filename's string replacement;
+  revision checks, backups, restoration and actual directory traversal remain
+  unchanged and covered by their existing tests.
+- Review of the remaining configuration editor found draft loss after browser
+  Back/Forward. Explicit in-tab recovery now preserves original content and
+  revision, isolated by resolved file path and ID. Pending recovery also warns
+  before reload/close. Fictional browser tests cover stale-save refusal, failed
+  save recovery, root isolation and explicit discard without writing user data.
+- Full core verification: 17,663 passed, zero failures, 13 warnings. The warnings
+  concern upstream-author references, opt-in live-service tests, intentional
+  agent-only scan entries and an unavailable Git-identity test condition.
+- Final web verification: 2,212 passed, zero failures and 38 opt-in skips.
+  Production build and typecheck passed; the new mocked browser regression also
+  passed independently. Final review found no remaining actionable issues.

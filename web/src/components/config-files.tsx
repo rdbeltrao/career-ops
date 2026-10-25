@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { FileCode2, Loader2, RefreshCw, Save } from "lucide-react";
+import { configDrafts, type ConfigDraft } from "@/lib/config-drafts.mjs";
 
 type ConfigInfo = { id: string; name: string; description: string };
 type ConfigFile = ConfigInfo & { path: string; content: string; exists: boolean; revision: string; warning: string | null };
@@ -11,6 +12,7 @@ export function ConfigFiles() {
   const [selected, setSelected] = useState("portals");
   const [current, setCurrent] = useState<ConfigFile | null>(null);
   const [draft, setDraft] = useState("");
+  const [recovered, setRecovered] = useState<ConfigDraft | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
@@ -23,6 +25,7 @@ export function ConfigFiles() {
     setLoading(true);
     setError("");
     setStatus("");
+    setRecovered(null);
     try {
       const response = await fetch(`/api/config-files?file=${encodeURIComponent(id)}`, { cache: "no-store" });
       const data = await response.json();
@@ -30,6 +33,7 @@ export function ConfigFiles() {
       if (request !== requestId.current) return;
       setCurrent(data);
       setDraft(data.content);
+      setRecovered(configDrafts.read(data));
     } catch (cause) {
       if (request !== requestId.current) return;
       setCurrent(null);
@@ -65,12 +69,13 @@ export function ConfigFiles() {
         window.history.replaceState(window.history.state, "", `#yaml-${selected}`);
         return;
       }
+      if (dirty && current) configDrafts.clear(current);
       setSelected(id);
       void load(id);
     }
     window.addEventListener("hashchange", followFileLink);
     return () => window.removeEventListener("hashchange", followFileLink);
-  }, [files, selected, saving, dirty, load]);
+  }, [files, selected, saving, dirty, current, load]);
 
   useEffect(() => {
     if (!loading && current && window.location.hash.startsWith("#yaml-")) {
@@ -79,31 +84,33 @@ export function ConfigFiles() {
   }, [loading, current]);
 
   useEffect(() => {
-    if (!dirty && !saving) return;
+    if (!dirty && !saving && !recovered) return;
     function beforeUnload(event: BeforeUnloadEvent) { event.preventDefault(); event.returnValue = ""; }
     function clickedLink(event: MouseEvent) {
+      if (!dirty && !saving) return;
       if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
       const anchor = (event.target instanceof Element ? event.target : null)?.closest("a[href]") as HTMLAnchorElement | null;
       if (!anchor || anchor.target === "_blank" || anchor.hasAttribute("download") || anchor.href.startsWith(`${window.location.href.split("#")[0]}#`)) return;
       if (saving || !window.confirm("Discard unsaved YAML changes and leave Config?")) {
         event.preventDefault();
         event.stopPropagation();
-      }
+      } else if (current) configDrafts.clear(current);
     }
     window.addEventListener("beforeunload", beforeUnload);
     document.addEventListener("click", clickedLink, true);
     return () => { window.removeEventListener("beforeunload", beforeUnload); document.removeEventListener("click", clickedLink, true); };
-  }, [dirty, saving]);
+  }, [dirty, saving, recovered, current]);
 
   function select(id: string) {
     if (dirty && !window.confirm("Discard unsaved YAML changes and open another file?")) return;
+    if (dirty && current) configDrafts.clear(current);
     setSelected(id);
     window.history.replaceState(window.history.state, "", `#yaml-${id}`);
     void load(id);
   }
 
   async function save() {
-    if (!current || loading || saving) return;
+    if (!current || loading || saving || recovered) return;
     setSaving(true);
     setError("");
     setStatus("");
@@ -114,6 +121,7 @@ export function ConfigFiles() {
       });
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || "Could not save this file.");
+      configDrafts.clear(current);
       setCurrent(data);
       setDraft(data.content);
       setStatus(data.backedUp ? "Saved. A backup of the previous file was kept." : "Saved.");
@@ -135,17 +143,28 @@ export function ConfigFiles() {
           <p className="mt-3 break-all font-mono text-[11px] text-faint">{current.path}</p>
           {!current.exists && <p className="mt-3 text-sm text-muted">This file does not exist yet. Saving will create it.</p>}
           {current.warning && <p className="mt-3 text-sm text-amber-700 dark:text-amber-400">{current.warning} You can repair it below.</p>}
+          {recovered && <div className="mt-4 rounded-lg border border-border p-3 text-sm">
+            <p role="status">An unsaved YAML draft from your last visit is available.{recovered.revision !== current.revision && " The saved file has changed since that draft began."}</p>
+            <div className="mt-2 flex flex-wrap gap-3">
+              <button type="button" onClick={() => {
+                setCurrent({ ...current, content: recovered.original, revision: recovered.revision, exists: recovered.exists });
+                setDraft(recovered.content);
+                setRecovered(null);
+              }} className="min-h-11 rounded-full border border-border px-4 py-2">Restore YAML draft</button>
+              <button type="button" onClick={() => { configDrafts.clear(current); setRecovered(null); }} className="min-h-11 rounded-full border border-border px-4 py-2">Discard YAML draft</button>
+            </div>
+          </div>}
           <label htmlFor="yaml-content" className="mt-4 mb-2 block text-sm font-medium">YAML content</label>
-          <textarea id="yaml-content" value={draft} disabled={saving} onChange={(event) => { setDraft(event.target.value); setStatus(""); setError(""); }} spellCheck={false} autoCapitalize="off" autoCorrect="off" rows={18} className="w-full resize-y rounded-xl border border-border bg-surface/50 p-3 font-mono text-xs leading-6 text-foreground focus:border-brand focus:outline-none focus:ring-1 focus:ring-brand" />
+          <textarea id="yaml-content" value={draft} disabled={saving || !!recovered} onChange={(event) => { configDrafts.write(current, event.target.value); setDraft(event.target.value); setStatus(""); setError(""); }} spellCheck={false} autoCapitalize="off" autoCorrect="off" rows={18} className="w-full resize-y rounded-xl border border-border bg-surface/50 p-3 font-mono text-xs leading-6 text-foreground focus:border-brand focus:outline-none focus:ring-1 focus:ring-brand" />
           <p className="mt-2 text-xs text-faint">YAML syntax is checked before saving. Comments and formatting are preserved.</p>
         </>
       )}
       {error && <p role="alert" className="mt-3 text-sm text-rose-600 dark:text-rose-400">{error}</p>}
       <div className="mt-4 flex flex-wrap items-center gap-3">
-        <button type="button" onClick={() => void save()} disabled={loading || saving || !current || (!dirty && current.exists)} className="inline-flex min-h-11 items-center gap-2 rounded-full bg-brand px-4 py-2 text-sm font-medium text-brand-foreground disabled:opacity-50">
+        <button type="button" onClick={() => void save()} disabled={loading || saving || !!recovered || !current || (!dirty && current.exists)} className="inline-flex min-h-11 items-center gap-2 rounded-full bg-brand px-4 py-2 text-sm font-medium text-brand-foreground disabled:opacity-50">
           {saving ? <Loader2 className="size-4 animate-spin" /> : <Save className="size-4" />}{saving ? "Saving…" : "Save YAML"}
         </button>
-        <button type="button" disabled={loading || saving || !files.length} onClick={() => { if (!dirty || window.confirm("Discard unsaved YAML changes and reload from disk?")) void load(selected); }} className="inline-flex min-h-11 items-center gap-2 rounded-full border border-border px-4 py-2 text-sm text-muted disabled:opacity-50"><RefreshCw className="size-4" /> Reload file</button>
+        <button type="button" disabled={loading || saving || !!recovered || !files.length} onClick={() => { if (!dirty || window.confirm("Discard unsaved YAML changes and reload from disk?")) { if (current) configDrafts.clear(current); void load(selected); } }} className="inline-flex min-h-11 items-center gap-2 rounded-full border border-border px-4 py-2 text-sm text-muted disabled:opacity-50"><RefreshCw className="size-4" /> Reload file</button>
         <span role="status" aria-label="YAML save status" className="text-xs text-muted">{status || (dirty ? "Unsaved changes" : "")}</span>
       </div>
     </section>

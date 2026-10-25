@@ -7,6 +7,91 @@ import { test } from 'node:test';
 const target = process.env.YAML_CONFIG_TEST_URL;
 const marker = '# Fictional YAML editor browser fixture.';
 
+// All API traffic is fictional and every write is intercepted, so this history
+// regression can safely run against a development server using another data root.
+test('Config recovers history drafts without rebasing their revision or crossing file roots', { skip: !process.env.YAML_CONFIG_MOCK_TEST_URL, timeout: 180_000 }, async () => {
+  const url = new URL(process.env.YAML_CONFIG_MOCK_TEST_URL);
+  assert.ok(['localhost', '127.0.0.1', '[::1]'].includes(url.hostname));
+  const { chromium } = await import('playwright-core');
+  const browser = await chromium.launch({ channel: 'chrome', headless: true });
+  const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
+  const original = '# Fictional history fixture\nvalue: original\n';
+  const unsaved = '# Fictional history draft\nvalue: edited\n';
+  let file = { id: 'portals', name: 'portals.yml', description: 'Fictional configuration', path: '/fictional/root-a/portals.yml', content: original, exists: true, revision: 'a'.repeat(64), warning: null };
+  const writes = [];
+  const errors = [];
+  let dialogs = 0;
+  page.on('pageerror', (error) => errors.push(error.message));
+  page.on('dialog', async (dialog) => { dialogs++; await dialog.dismiss(); });
+  await page.route('**/*', async (route) => {
+    const request = route.request();
+    const requestUrl = new URL(request.url());
+    if (!['GET', 'HEAD'].includes(request.method())) {
+      writes.push({ path: requestUrl.pathname, body: request.postDataJSON() });
+      return route.fulfill({ status: 409, json: { error: 'This file changed elsewhere. Your draft is still here.', code: 'stale' } });
+    }
+    if (requestUrl.pathname === '/api/config-files') return route.fulfill({ json: requestUrl.searchParams.has('file') ? file : { files: [file] } });
+    if (requestUrl.pathname === '/api/clis') return route.fulfill({ json: { clis: [] } });
+    if (requestUrl.pathname === '/api/workspace') return route.fulfill({ json: { documents: [], sourceRootDocumentId: null } });
+    if (requestUrl.pathname.startsWith('/api/')) return route.fulfill({ status: 404, json: {} });
+    return route.continue();
+  });
+  const editor = page.getByRole('textbox', { name: 'YAML content', exact: true });
+  const save = page.getByRole('button', { name: 'Save YAML', exact: true });
+  const restore = page.getByRole('button', { name: 'Restore YAML draft', exact: true });
+  async function revisit() {
+    await page.goBack();
+    await page.waitForURL('**/context');
+    await page.goForward();
+    await page.waitForURL('**/config');
+    await editor.waitFor();
+  }
+  try {
+    await page.goto(`${url.origin}/context`);
+    await page.getByRole('complementary', { name: 'App sidebar' }).getByRole('link', { name: 'Config', exact: true }).click();
+    await page.waitForURL('**/config');
+    await editor.waitFor();
+    await editor.fill(unsaved);
+    await page.getByRole('status', { name: 'YAML save status' }).filter({ hasText: 'Unsaved changes' }).waitFor();
+    await revisit();
+    await restore.waitFor({ timeout: 10_000 });
+    assert.equal(await page.evaluate(() => {
+      const event = new Event('beforeunload', { cancelable: true });
+      window.dispatchEvent(event);
+      return event.defaultPrevented;
+    }), true, 'a pending recovery draft also warns before reload or close');
+    assert.equal(await save.isDisabled(), true, 'recovery never saves automatically');
+    assert.equal(writes.length, 0);
+    await restore.click();
+    assert.equal(await editor.inputValue(), unsaved);
+
+    file = { ...file, content: '# Fictional external edit\nvalue: latest\n', revision: 'b'.repeat(64) };
+    await revisit();
+    await restore.click();
+    assert.equal(await editor.inputValue(), unsaved);
+    await save.click();
+    await page.getByRole('alert').filter({ hasText: 'changed elsewhere' }).waitFor();
+    assert.equal(writes.length, 1);
+    assert.deepEqual(writes[0], { path: '/api/config-files', body: { file: 'portals', content: unsaved, revision: 'a'.repeat(64) } }, 'restoring a stale draft retains its original revision');
+    assert.equal(await editor.inputValue(), unsaved, 'failed saves retain the draft');
+
+    const rootA = file;
+    file = { ...file, path: '/fictional/root-b/portals.yml', content: '# Fictional other root\nvalue: other\n' };
+    await revisit();
+    assert.equal(await editor.inputValue(), file.content);
+    assert.equal(await restore.count(), 0, 'a different data root cannot receive this draft');
+    file = rootA;
+    await revisit();
+    await page.getByRole('button', { name: 'Discard YAML draft', exact: true }).click();
+    assert.equal(await editor.inputValue(), file.content);
+    await revisit();
+    assert.equal(await restore.count(), 0, 'explicit discard removes recovery');
+    assert.equal(await editor.inputValue(), file.content);
+    assert.equal(dialogs, 0, 'history recovery does not depend on native confirmation dialogs');
+    assert.deepEqual(errors, []);
+  } finally { await browser.close(); }
+});
+
 test('Config edits YAML, protects drafts, and rejects invalid or stale saves', { skip: !target, timeout: 180_000 }, async () => {
   const url = new URL(target);
   assert.ok(['localhost', '127.0.0.1', '[::1]'].includes(url.hostname));
