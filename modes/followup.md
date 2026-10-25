@@ -20,7 +20,7 @@ elapsed-time cadence case — see `confirmed_time_noshow` in `modes/email.md`
 - `config/profile.yml` — User profile (name, identity)
 - `cv.md` — CV for proof points in drafts
 - `modes/_writing.md` — the writing layer for the Step 3 drafts (Voice DNA guardrail, Professional Writing rules, and the Outreach and comment rules for the LinkedIn follow-up: 90 to 140 words, one confirmed number at most, honest reason before facts, never a job ask)
-- `modes/_context.md` (if it exists) and `config/profile.yml` → `interests` — the "still interested because" line of a follow-up, as targeting only through `modes/_writing.md` → **Interests in candidate-facing text**: never a fact or a number for the draft, and when `interests.confirmed_on` is older than 90 days say so and ask before using it
+- `modes/_context.md` (if it exists) and `config/profile.yml` → `interests` — the "still interested because" line of a follow-up, through `modes/_writing.md` → **Interests in candidate-facing text**: the interests steer the line, an experience fact from `modes/_context.md` may appear as the file states it (never a figure it marks as held for confirmation), and when `interests.confirmed_on` is older than 90 days say so and ask before using it
 
 ## Step 0: Check that follow-ups are on
 

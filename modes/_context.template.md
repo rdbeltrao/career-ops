@@ -5,24 +5,29 @@
      and replace every section with your own facts. It is USER LAYER —
      never auto-updated by `node update-system.mjs`.
 
-     PURPOSE: the candidate context every evaluation reads as the CONTEXT
-     TIER (AGENTS.md, Source-of-Truth Boundary). Its qualitative facts
-     (roles, employers, domains, responsibilities, skills, practices,
-     languages, talks, publications) are evidence for the evaluation and
-     are cited as `_context.md:` next to `cv.md:` lines. Its numbers are
-     targeting only and are masked as [n] before an evaluator reads the
-     file (node context-evidence.mjs): a figure counts as evidence only
-     when cv.md or article-digest.md carries it. It is never a fact
-     source for a CV, a cover letter or a form answer: a number that exists
-     only here still fails the fact gate. The CV is what you send; this
-     file is what you have done. Keep them as two documents.
+     PURPOSE: the SOURCE OF TRUTH about you as a candidate (AGENTS.md,
+     Source-of-Truth Boundary → Context file), read first in every mode.
+     Every fact and figure in it — roles, employers, domains,
+     responsibilities, skills, practices, languages, talks, publications,
+     and the numbers, team sizes, durations and amounts — is evidence for
+     the evaluation, cited as `_context.md:` next to `cv.md:` lines, and
+     may back candidate-facing text (CV, cover letter, form answer):
+     verify-cv-facts.mjs reads it as a source. cv.md is one tailored
+     rendering of this file, never the authority: when the two disagree,
+     this file wins and cv.md is the one to fix. A figure you are not yet
+     sure of belongs here marked as such ("held for confirmation",
+     "approximate", "not a claim"); a figure so marked steers a score but
+     stays out of candidate-facing text.
 
      Readers: the Jev pre-screen (`node jev-score.mjs`, whole file as the
      profile text), modes/oferta.md and batch/batch-prompt.md, the OpenRouter
-     runner and the *-eval.mjs scripts, and the draft modes for "why this
-     role" material. Write it the way you would brief a recruiter: concrete,
-     factual, in English, one idea per line. Keep the headings: the Jev
-     criteria refer to them by name.
+     runner and the *-eval.mjs scripts, and the draft modes. The agents read
+     it through `node context-evidence.mjs`, which prints it as written
+     under a one-line notice; masking every quantity as [n] is an opt-in
+     (`--mask`, or CAREER_OPS_MASK_CONTEXT=1) for a file whose figures are
+     still unresolved. Write it the way you would brief a recruiter:
+     concrete, factual, in English, one idea per line. Keep the headings:
+     the Jev criteria refer to them by name.
      ============================================================ -->
 
 ## Target role

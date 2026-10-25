@@ -26,6 +26,12 @@
 // A gate that invents failures teaches the user to ignore it, which is worse
 // for a fabrication check than being absent.
 //
+// The defaults now resolve from the data root and read three sources:
+// modes/_context.md (the source of truth about the candidate), cv.md (a
+// tailored rendering of it) and article-digest.md. A claim that only the
+// context file carries passes the gate; a default source that is absent reads
+// as empty, so a data root without a context file is still checked.
+//
 // Run:  node --test tests/verify-cv-facts-data-root.test.mjs
 
 import { test } from 'node:test';
@@ -119,6 +125,25 @@ test('a genuinely fabricated claim is still caught', () => {
     const r = run(f);
     assert.match(r.all, /900 engineers/, `an invented figure passed the gate:\n${r.all.slice(0, 400)}`);
   } finally { cleanup(f); }
+});
+
+test('a claim carried only by modes/_context.md passes the gate', () => {
+  // The context file is a default source. The figure is in neither cv.md nor
+  // article-digest.md, so a gate that still read only those two would report it.
+  const f = fixture();
+  try {
+    mkdirSync(join(f.dataRoot, 'modes'), { recursive: true });
+    writeFileSync(join(f.dataRoot, 'modes', '_context.md'), '# Fit profile\n\n- Shipped to 1,000 stores.\n');
+    writeFileSync(join(f.dataRoot, 'generated.md'), '# Generated CV\n\n- Shipped to 1,000 stores.\n');
+    const r = run(f);
+    assert.doesNotMatch(r.all, /absent from sources/i, `the context file was not read as a source:\n${r.all.slice(0, 500)}`);
+    assert.match(r.all, /passed/i, `the check did not pass:\n${r.all.slice(0, 400)}`);
+  } finally { cleanup(f); }
+});
+
+test('--help names the three default sources', () => {
+  const r = spawnSync(process.execPath, [join(ROOT, 'verify-cv-facts.mjs'), '--help'], { encoding: 'utf-8', timeout: 60_000 });
+  assert.match(`${r.stdout}${r.stderr}`, /Default sources: modes\/_context\.md, cv\.md and article-digest\.md\./);
 });
 
 test('--source still overrides the default', () => {

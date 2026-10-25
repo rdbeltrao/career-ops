@@ -18,7 +18,7 @@ These files contain your personal data, customizations, and work product. Update
 | `modes/_profile.md` | Your archetypes, narrative, negotiation scripts |
 | `modes/_custom.md` | Your house rules, custom workflows & output preferences (procedural — survives updates) |
 | `modes/_brief.md` | Your compact profile brief (~1.5–2K tokens) read by the two-pass triage first pass |
-| `modes/_context.md` | Your fit profile (target role, location and language, preferences, deal-breakers, technical tiers, match signals) — the context tier of the Source-of-Truth Boundary (`AGENTS.md`): every evaluation reads its qualitative facts as evidence and its numbers masked as `[n]` (`node context-evidence.mjs`), drafts read it for framing only, and `verify-cv-facts.mjs` does not read it, so a number that exists only here still fails the fact gate. Seeded from `modes/_context.template.md`, or written by the `notion-sync` mode after a shown diff. Read whole by `node jev-score.mjs` as the profile text |
+| `modes/_context.md` | The source of truth about you as a candidate (target role, location and language, preferences, deal-breakers, experience, technical tiers, match signals) — `AGENTS.md` → Source-of-Truth Boundary → Context file: every mode reads it first, through `node context-evidence.mjs`, which prints it as written (masking figures as `[n]` is opt-in, `--mask` or `CAREER_OPS_MASK_CONTEXT=1`); every fact and figure in it is evidence cited as `_context.md:`, drafts may take facts from it, and `verify-cv-facts.mjs` reads it as a source. `cv.md` is a tailored rendering of it; when they disagree, this file wins. Seeded from `modes/_context.template.md`, or written by the `notion-sync` mode after a shown diff. Read whole by `node jev-score.mjs` as the profile text |
 | `config/jev-criteria.yml` | Your Jev pre-screen questions and wording (optional; copy `config/jev-criteria.example.yml` here and tune it — read by `node jev-score.mjs`; question keys and labels are the contract, the wording is yours) |
 | `config/notion-map.yml` | Your Notion page map for the `notion-sync` mode: root, the career-record pages, employer pages and example ids (optional; copy `config/notion-map.example.yml` here and fill in your own URLs — never written by any script) |
 | `voice-dna.md` | Your writing voice guardrail — banned words, anti-AI-slop rules, tone (optional) |
@@ -109,7 +109,7 @@ These files contain system logic, scripts, templates, and instructions that impr
 | `modes/_custom.template.md` | Template seed for the user's `modes/_custom.md` |
 | `modes/_profile.template.md` | Template seed for the user's `modes/_profile.md` |
 | `modes/_brief.template.md` | Template seed for the user's `modes/_brief.md` |
-| `modes/_context.template.md` | Template seed for the user's `modes/_context.md` (the fit profile; context tier: qualitative facts are evidence for the evaluation, never a source for candidate-facing text) |
+| `modes/_context.template.md` | Template seed for the user's `modes/_context.md` (the source of truth about the candidate: every fact and figure in it is evidence, and `cv.md` is a tailored rendering of it) |
 | `modes/oferta.md` | Evaluation mode instructions |
 | `modes/pdf.md` | PDF generation instructions |
 | `modes/cover.md` | Cover letter generation instructions |

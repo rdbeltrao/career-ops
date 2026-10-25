@@ -65,7 +65,7 @@ table in `AGENTS.md` (mirrored in `CLAUDE.md`).
 | `_profile.template.md` | Seed for your `modes/_profile.md` (archetypes, narrative, negotiation scripts) |
 | `_custom.template.md` | Seed for your `modes/_custom.md` (house rules, procedural preferences) |
 | `_brief.template.md` | Seed for your `modes/_brief.md` (compact context for `triage`) |
-| `_context.template.md` | Seed for your `modes/_context.md` (the fit profile every evaluation and draft reads as a targeting source, never evidence) |
+| `_context.template.md` | Seed for your `modes/_context.md` (the source of truth about you as a candidate, read first by every evaluation and draft; `cv.md` is a tailored rendering of it) |
 | `_writing.md` | Shared writing guidance (Voice DNA, writing style, ATS rules) loaded by modes that write candidate-facing prose |
 
 Your copies (`_profile.md`, `_custom.md`, `_brief.md`, `_context.md`) are user-layer files: gitignored

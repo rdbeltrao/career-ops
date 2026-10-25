@@ -256,17 +256,17 @@ const ofertaLogic   = readFile(PATHS.oferta,     'modes/oferta.md');
 const cvContent     = readFile(PATHS.cv,         'cv.md');
 const profileYml    = readFile(PATHS.profileYml, 'config/profile.yml');
 const profileContent = readFile(PATHS.profile,   'modes/_profile.md');
-// modes/_context.md is the candidate's fit profile, the context tier of the
-// Source-of-Truth Boundary (AGENTS.md): its qualitative facts are evidence for
-// the evaluation, its numbers are targeting only, and it is never a source for
-// candidate-facing text. Its numbers are masked before the model sees them
-// (lib/context-evidence.mjs), so no figure that lives only there can reach the
-// report. Folded into the _profile.md section so the token budget treats the
+// modes/_context.md is the source of truth about the candidate under the
+// Source-of-Truth Boundary (AGENTS.md): every fact and figure in it is
+// evidence, cited as _context.md:, and cv.md is a tailored rendering of it.
+// readMaskedContext returns the file as written (masked: false) unless the
+// user opts into masking with CAREER_OPS_MASK_CONTEXT=1 (lib/context-evidence.mjs).
+// Folded into the _profile.md section so the token budget treats the
 // two as one personalization block; absent, the prompt is exactly as before.
 const contextContent = readMaskedContext(DATA_ROOT)?.text ?? '';
 if (!contextContent) console.log('ℹ️   modes/_context.md not found — evaluating on cv.md and profile.yml only');
 const profileWithContext = contextContent
-  ? `${profileContent}\n\n--- CANDIDATE CONTEXT (modes/_context.md — context tier: qualitative facts are evidence for the evaluation, cite them as _context.md:; its numbers are masked as [n], so every figure you see came from cv.md or article-digest.md and a [n] is never written as a figure; never a source for the CV, a letter or a form answer) ---\n${contextContent}`
+  ? `${profileContent}\n\n--- CANDIDATE CONTEXT (modes/_context.md — the source of truth about the candidate, read first: every fact and figure in it is evidence, cite it as _context.md:; cv.md is a tailored rendering of it) ---\n${contextContent}`
   : profileContent;
 const languageInstruction = outputLanguageInstruction(parseOutputLanguage(profileYml));
 
