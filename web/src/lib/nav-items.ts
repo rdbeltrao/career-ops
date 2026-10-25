@@ -20,7 +20,7 @@ export const NAV_ITEMS: NavItem[] = [
   { href: "/linkedin", label: "LinkedIn", icon: Network },
   { href: "/analytics", label: "Analytics", icon: BarChart3 },
   { href: "/context", label: "Context", icon: BookOpen },
-  { href: "/cv", label: "CV", icon: FileText },
+  { href: "/cv", label: "CV draft", icon: FileText },
   { href: "/documents", label: "Documents", icon: Files },
   { href: "/config", label: "Config", icon: Settings },
 ];

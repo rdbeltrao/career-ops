@@ -57,7 +57,7 @@ test('career workspace edits canonical sections, guards drafts, and supports mob
     await page.screenshot({ path: path.join(process.env.CAREER_WORKSPACE_ARTIFACT_DIR, `${name}.png`), fullPage: true });
   }
   try {
-    await page.goto(`${origin}/context`);
+    await page.goto(`${origin}/context?document=context`);
     await page.getByRole('navigation', { name: 'Workspace pages' }).waitFor();
     await page.getByRole('button', { name: 'Save', exact: true }).waitFor();
     assert.equal(writes.length, 0, 'opening does not write');
@@ -114,6 +114,9 @@ test('career workspace edits canonical sections, guards drafts, and supports mob
 
     const achievements = documents.find((d) => d.id === 'achievements').title;
     await select(achievements);
+    await page.getByRole('article', { name: 'Formatted page' }).waitFor();
+    assert.equal(await page.getByRole('textbox', { name: 'Markdown source', exact: true }).count(), 0, 'complex pages open formatted');
+    await page.getByRole('button', { name: 'Source', exact: true }).click();
     const source = page.getByRole('textbox', { name: 'Markdown source', exact: true });
     await source.waitFor();
     const originalTable = await source.inputValue();
@@ -132,6 +135,8 @@ test('career workspace edits canonical sections, guards drafts, and supports mob
 
     await page.locator('aside nav').getByRole('link', { name: 'Context', exact: true }).last().click();
     await page.waitForURL(`${origin}/context`);
+    await page.getByRole('button', { name: 'App files', exact: true }).click();
+    await select(documents.find((d) => d.id === 'context').title);
     await select('Profile, Skills & Credentials');
     await editor.fill('Recover this draft after browser navigation.');
     await page.getByRole('status', { name: 'Page save status' }).filter({ hasText: 'Unsaved changes' }).waitFor();
@@ -140,11 +145,13 @@ test('career workspace edits canonical sections, guards drafts, and supports mob
     await page.waitForURL(`${origin}/cv`);
     await page.goForward();
     await page.waitForURL(`${origin}/context`);
+    await page.getByRole('button', { name: 'App files', exact: true }).click();
     await page.getByRole('button', { name: 'Restore draft', exact: true }).click();
     assert.match(await editor.innerText(), /Recover this draft/);
     assert.equal(writes.length, writesBeforeHistory, 'history recovery never writes the source file');
     page.once('dialog', (dialog) => dialog.accept());
     await page.reload();
+    await page.getByRole('button', { name: 'App files', exact: true }).click();
     await page.getByRole('button', { name: 'Restore draft', exact: true }).waitFor();
     const latest = await read();
     const changedWhileAway = await fetch(`${origin}/api/workspace`, {

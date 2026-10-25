@@ -1,7 +1,7 @@
 "use client";
 
 import { ChevronDown, ChevronRight, FileText, Search } from "lucide-react";
-import { visiblePageIds } from "@/lib/workspace-view.mjs";
+import { navigationSections, visiblePageIds } from "@/lib/workspace-view.mjs";
 import { cn } from "@/lib/cn";
 import type { PageSelection, WorkspaceDocumentSummary, WorkspaceSection } from "./types";
 
@@ -21,19 +21,19 @@ export function PageTree({ documents, selected, collapsed, query, busy, onQuery,
   const needle = query.trim().toLocaleLowerCase();
   let matches = 0;
 
-  function pages(document: WorkspaceDocumentSummary, parentId: string | null, visible: Set<string>, depth = 0) {
+  function pages(document: WorkspaceDocumentSummary, sections: WorkspaceSection[], parentId: string | null, visible: Set<string>, depth = 1) {
     if (depth > 6) return null;
-    const children = document.sections.filter((section) => section.parentId === parentId && visible.has(section.id));
+    const children = sections.filter((section) => section.parentId === parentId && visible.has(section.id));
     if (!children.length) return null;
     return (
-      <ul className="ml-3 space-y-0.5 border-l border-border/70 pl-2">
+      <ul className="space-y-0.5">
         {children.map((section: WorkspaceSection) => {
           const key = `${document.id}:${section.id}`;
-          const hasChildren = document.sections.some((page) => page.parentId === section.id && visible.has(page.id));
+          const hasChildren = sections.some((page) => page.parentId === section.id && visible.has(page.id));
           const expanded = Boolean(needle) || !collapsed.has(key);
           return (
             <li key={section.id}>
-              <div className="flex min-w-0 items-center gap-0.5">
+              <div className="flex min-w-0 items-center gap-0.5" style={{ paddingLeft: Math.min(depth, 3) * 12 }}>
                 {hasChildren ? (
                   <button type="button" aria-label={`${expanded ? "Collapse" : "Expand"} ${section.title}`} aria-expanded={expanded} onClick={() => onToggle(key)} className="flex size-7 shrink-0 items-center justify-center rounded text-muted hover:bg-surface-hover focus-visible:outline-2 focus-visible:outline-brand">
                     {expanded ? <ChevronDown className="size-3.5" /> : <ChevronRight className="size-3.5" />}
@@ -41,13 +41,14 @@ export function PageTree({ documents, selected, collapsed, query, busy, onQuery,
                 ) : <span className="flex size-7 shrink-0 items-center justify-center text-faint"><FileText className="size-3" /></span>}
                 <button
                   type="button"
+                  title={section.title}
                   disabled={busy}
                   aria-current={selected.document === document.id && selected.section === section.id ? "page" : undefined}
                   onClick={() => onSelect({ document: document.id, section: section.id })}
-                  className={cn("min-w-0 flex-1 rounded-md px-2 py-1.5 text-left text-sm break-words transition-colors hover:bg-surface-hover focus-visible:outline-2 focus-visible:outline-brand disabled:opacity-50", selected.document === document.id && selected.section === section.id ? "bg-brand/10 font-medium text-foreground" : "text-muted")}
+                  className={cn("min-w-0 flex-1 rounded-md px-2 py-2 text-left text-sm leading-5 break-words transition-colors hover:bg-surface-hover focus-visible:outline-2 focus-visible:outline-brand disabled:opacity-50", selected.document === document.id && selected.section === section.id ? "bg-brand/10 font-medium text-foreground" : "text-muted")}
                 >{section.title}</button>
               </div>
-              {hasChildren && expanded && pages(document, section.id, visible, depth + 1)}
+              {hasChildren && expanded && pages(document, sections, section.id, visible, depth + 1)}
             </li>
           );
         })}
@@ -57,23 +58,24 @@ export function PageTree({ documents, selected, collapsed, query, busy, onQuery,
 
   const lists = groups.map((group) => {
     const grouped = documents.filter((document) => document.group === group).flatMap((document) => {
-      const visible = visiblePageIds(document.sections, document.title.toLocaleLowerCase().includes(needle) ? "" : query) as Set<string>;
+      const sections = navigationSections(document.sections) as WorkspaceSection[];
+      const visible = visiblePageIds(sections, document.title.toLocaleLowerCase().includes(needle) ? "" : query) as Set<string>;
       if (needle && !document.title.toLocaleLowerCase().includes(needle) && visible.size === 0) return [];
       matches++;
       const expanded = Boolean(needle) || !collapsed.has(document.id);
       return [
         <li key={document.id}>
           <div className="flex min-w-0 items-center gap-0.5">
-            <button type="button" aria-label={`${expanded ? "Collapse" : "Expand"} ${document.title}`} aria-expanded={expanded} onClick={() => onToggle(document.id)} disabled={!document.sections.length} className="flex size-7 shrink-0 items-center justify-center rounded text-muted hover:bg-surface-hover focus-visible:outline-2 focus-visible:outline-brand disabled:opacity-30">
+            <button type="button" aria-label={`${expanded ? "Collapse" : "Expand"} ${document.title}`} aria-expanded={expanded} onClick={() => onToggle(document.id)} disabled={!sections.length} className="flex size-7 shrink-0 items-center justify-center rounded text-muted hover:bg-surface-hover focus-visible:outline-2 focus-visible:outline-brand disabled:opacity-30">
               {expanded ? <ChevronDown className="size-3.5" /> : <ChevronRight className="size-3.5" />}
             </button>
-            <button type="button" disabled={busy} aria-current={selected.document === document.id && !selected.section ? "page" : undefined} onClick={() => onSelect({ document: document.id, section: null })} className={cn("min-w-0 flex-1 rounded-md px-2 py-2 text-left text-sm font-medium break-words transition-colors hover:bg-surface-hover focus-visible:outline-2 focus-visible:outline-brand disabled:opacity-50", selected.document === document.id && !selected.section ? "bg-brand/10 text-foreground" : "text-muted")}>
+            <button type="button" title={document.title} disabled={busy} aria-current={selected.document === document.id && !selected.section ? "page" : undefined} onClick={() => onSelect({ document: document.id, section: null })} className={cn("min-w-0 flex-1 rounded-md px-2 py-2 text-left text-sm font-medium leading-5 break-words transition-colors hover:bg-surface-hover focus-visible:outline-2 focus-visible:outline-brand disabled:opacity-50", selected.document === document.id && !selected.section ? "bg-brand/10 text-foreground" : "text-muted")}>
               {document.title}
               {document.error && <span className="ml-1 text-xs text-red-700 dark:text-red-300">Unavailable</span>}
               {!document.exists && !document.error && <span className="ml-1 text-xs font-normal text-faint">Empty</span>}
             </button>
           </div>
-          {expanded && pages(document, null, visible)}
+          {expanded && pages(document, sections, null, visible)}
         </li>,
       ];
     });

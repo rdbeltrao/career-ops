@@ -18,12 +18,19 @@ export type WorkspaceDocumentSummary = {
   error?: string;
   outlineWarning?: string;
   workspaceId?: string;
+  kind?: "source" | "local";
+  parentDocumentId?: string | null;
+  sourceUrl?: string | null;
+  sourceEditedAt?: string | null;
+  importNotes?: string[];
+  order?: number;
 };
 
 export type WorkspaceDocument = WorkspaceDocumentSummary & {
   content: string;
   revision: string;
   selectedSection?: string | null;
+  selectedDocument?: string;
 };
 
 export type PageSelection = { document: string; section: string | null };

@@ -1,5 +1,74 @@
 /** @typedef {{id: string, title: string, parentId: string|null, level?: number, bodyStart?: number, end?: number}} PageSection */
 
+/** A sole H1 names the document already shown by the document button. Lift its
+ * children for navigation only; source sections, heading levels and offsets stay intact.
+ * @param {PageSection[]} sections
+ */
+export function navigationSections(sections) {
+  const roots = sections.filter((section) => section.parentId === null);
+  if (roots.length !== 1 || roots[0].level !== 1 || !sections.some((section) => section.parentId === roots[0].id)) return sections;
+  const wrapper = roots[0].id;
+  return sections.filter((section) => section.id !== wrapper).map((section) => section.parentId === wrapper ? { ...section, parentId: null } : section);
+}
+
+/** Keep inactive documents and branches compact while opening the selected path.
+ * @param {{id: string, sections: PageSection[]}[]} documents
+ * @param {{document: string, section: string|null}} selected
+ */
+export function collapsedPageKeys(documents, selected) {
+  const collapsed = new Set();
+  for (const document of documents) {
+    if (document.id !== selected.document) collapsed.add(document.id);
+    const sections = navigationSections(document.sections);
+    const open = new Set(document.id === selected.document ? pageBreadcrumbs(sections, selected.section).map((section) => section.id) : []);
+    for (const section of sections) {
+      if (sections.some((child) => child.parentId === section.id) && !open.has(section.id)) collapsed.add(`${document.id}:${section.id}`);
+    }
+  }
+  return collapsed;
+}
+
+/** @typedef {{id: string, title: string, kind?: string, parentDocumentId?: string|null, order?: number}} SourceDocument */
+
+/** Source pages are whole documents. Their Markdown headings never define the
+ * page hierarchy imported from Notion.
+ * @param {SourceDocument[]} documents
+ */
+function sourceTree(documents) {
+  return documents.filter((document) => document.kind === 'source').sort((a, b) => (a.order ?? 0) - (b.order ?? 0)).map((document) => ({ ...document, parentId: document.parentDocumentId ?? null }));
+}
+
+/** @param {SourceDocument[]} documents @param {string|null} selectedId */
+export function sourcePageBreadcrumbs(documents, selectedId) {
+  return pageBreadcrumbs(sourceTree(documents), selectedId);
+}
+
+/** @param {SourceDocument[]} documents @param {string} query */
+export function visibleSourcePageIds(documents, query) {
+  return visiblePageIds(sourceTree(documents), query);
+}
+
+/** @param {SourceDocument[]} documents @param {string} selectedId */
+export function sourcePageMovement(documents, selectedId) {
+  const pages = sourceTree(documents);
+  if (!pages.find((page) => page.id === selectedId)?.parentId) return { up: false, down: false };
+  return siblingAvailability(pages, selectedId);
+}
+
+/** @param {SourceDocument[]} documents @param {string|null} selectedId */
+export function collapsedSourcePageIds(documents, selectedId) {
+  const pages = sourceTree(documents);
+  const open = new Set(pageBreadcrumbs(pages, selectedId).map((page) => page.id));
+  return new Set(pages.filter((page) => !open.has(page.id) && pages.some((child) => child.parentId === page.id)).map((page) => page.id));
+}
+
+/** @param {SourceDocument[]} documents @param {'context'|'cv'} route @param {string|null} sourceRootId */
+export function initialWorkspaceDocument(documents, route, sourceRootId) {
+  if (route === 'cv') return 'cv';
+  const pages = sourceTree(documents);
+  return pages.find((page) => page.id === sourceRootId)?.id ?? pages.find((page) => page.parentId === null)?.id ?? null;
+}
+
 /** @param {PageSection[]} sections @param {string|null} selectedId */
 export function pageBreadcrumbs(sections, selectedId) {
   const byId = new Map(sections.map((section) => [section.id, section]));
