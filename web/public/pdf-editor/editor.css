@@ -16,3 +16,10 @@ footer{position:fixed;bottom:0;left:0;right:0;height:24px;display:flex;justify-c
 @media(max-width:600px){#career-toolbar{padding:7px}.career-controls{gap:4px;font-size:11px}.career-controls button{padding:5px}#text-editor-app #stage{padding:34px 8px 24px}.career-section{font-size:9px}}
 
 #career-destinations{display:none;gap:5px;flex-wrap:wrap;margin-top:8px}.moving-section #career-destinations{display:flex}#career-destinations button{border:2px dashed #3b82f6;background:#eff6ff;color:#1e40af;padding:6px;border-radius:5px;font-size:11px}#career-destinations button.over{background:#bfdbfe;border-style:solid}
+
+#career-pages-preview{position:absolute;inset:0 auto auto 0;pointer-events:none}.career-reflow-page{position:relative;margin-bottom:24px;background:white;box-shadow:0 2px 12px #0003}.career-reflow-page canvas{display:block}
+.live-reflow #page,.ai-preview #page{visibility:hidden}.live-reflow #overlay .para-layer,.live-reflow #overlay .sel-chrome,.live-reflow #overlay .edit-chrome,.live-reflow .career-section{visibility:hidden;pointer-events:none!important}
+.live-reflow .editor canvas{visibility:hidden}.live-reflow .editor [contenteditable],.live-reflow .editor [contenteditable] *{color:transparent!important;-webkit-text-fill-color:transparent!important;text-decoration-color:transparent!important;-webkit-text-stroke-color:transparent!important;caret-color:#111!important}.live-reflow .editor{overflow:visible!important}
+.career-visually-hidden{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:pre-wrap;border:0}
+
+.ai-preview #career-pages-preview{pointer-events:auto}

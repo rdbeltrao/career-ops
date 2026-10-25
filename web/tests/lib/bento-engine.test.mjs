@@ -123,10 +123,11 @@ test('BentoPDF iframe loads local assets, selects, rewrites, exports and undoes 
   async function failNextChangedSnapshot() {
     await page.frames().find((frame) => frame.url().includes('/pdf-editor/')).evaluate(async () => {
       const { PdfEngine } = await import('/vendor/bentopdf/core.js');
+      const {careerNative}=await import('/vendor/bentopdf/app.js');
       const original = PdfEngine.prototype.saveSpliced;
       let calls = 0;
       PdfEngine.prototype.saveSpliced = async function (...args) {
-        if (++calls === 2) {
+        if (this===careerNative.engine && ++calls === 2) {
           PdfEngine.prototype.saveSpliced = original;
           throw new Error('Injected snapshot failure');
         }
@@ -151,9 +152,9 @@ test('BentoPDF iframe loads local assets, selects, rewrites, exports and undoes 
   assert.equal(replaced.canUndo, true);
   assert.ok(replaced.bytes.length > 0, 'Mutation reply carries a durable PDF snapshot before resolving');
   await page.frameLocator('iframe').getByRole('button', { name: 'Edit paragraph: Updated profile sentence.', exact: true }).waitFor();
-  const overflow = await page.evaluate((paragraphId) => command('replace', { paragraphId, expectedText: 'Updated profile sentence.', text: 'Longer text '.repeat(500) }), selected.paragraphId);
+  const overflow = await page.evaluate((paragraphId) => command('replace', { paragraphId, expectedText: 'Updated profile sentence.', text: 'Longer text '.repeat(1500) }), selected.paragraphId);
   assert.equal(overflow.type, 'error');
-  assert.match(overflow.message, /page|overlap/);
+  assert.match(overflow.message, /12,000|12000|characters/);
   const exported = await page.evaluate(async () => Array.from(new Uint8Array((await command('export')).bytes)));
   const engine = await PdfEngine.create();
   try {
@@ -212,7 +213,7 @@ test('BentoPDF iframe loads local assets, selects, rewrites, exports and undoes 
     engine.open(new Uint8Array(finalBytes));
     assert.equal(engine.pageCount, 2);
     assert.match(engine.buildModel().map(paragraphText).join('\n'), /First page original sentence/);
-    engine.loadPage(1);
+    engine.loadPage(0);
     const finalText = engine.buildModel().map(paragraphText).join('\n');
     assert.match(finalText, /Second page résumé sentence/);
     assert.doesNotMatch(finalText, /Second page original sentence/);
@@ -230,7 +231,7 @@ test('BentoPDF iframe loads local assets, selects, rewrites, exports and undoes 
     assert.match(await page.frameLocator('iframe').getByRole('textbox', { name: 'Edit paragraph on page' }).innerText(), /Second page résumé sentence/, 'Responsive redraw retains the inline editor');
     const afterResize = await page.evaluate(async () => Array.from(new Uint8Array((await command('export')).bytes)));
     engine.open(new Uint8Array(afterResize));
-    engine.loadPage(1);
+    engine.loadPage(0);
     assert.match(engine.buildModel().map(paragraphText).join('\n'), /Second page résumé sentence/);
     await page.setViewportSize({ width: 1200, height: 1000 });
     await page.evaluate(async (bytes) => command('load', { bytes: new Uint8Array(bytes).buffer, filename: 'typing.pdf' }), Array.from(syntheticPdf()));
@@ -254,23 +255,23 @@ test('BentoPDF iframe loads local assets, selects, rewrites, exports and undoes 
     const beforePreviewChanges = await page.evaluate(() => window.messages.filter(message => message.type === 'changed').length);
     const proposal = { paragraphId: '0:0', expectedText: 'Original profile sentence.', text: 'Clear profile sentence.' };
     assert.equal((await page.evaluate(target => command('preview-many', { targets: [target] }), proposal)).type, 'previewed');
-    await iframe.getByRole('img', { name: 'AI preview: Clear profile sentence.', exact: true }).waitFor();
-    await iframe.locator('#page').click({position:{x:10,y:10}});
-    assert.equal(await iframe.getByRole('img', { name:'AI preview: Clear profile sentence.',exact:true }).count(),1,'Clicking the page cannot erase an active proposal');
+    await iframe.getByRole('region', { name: 'AI rewrite preview', exact: true }).waitFor();
+    await iframe.getByRole('img',{name:/PDF page 1 of/}).click({position:{x:10,y:10}});
+    assert.equal(await iframe.getByRole('region', { name:'AI rewrite preview',exact:true }).count(),1,'Clicking the page cannot erase an active proposal');
     const previewBytes = await page.evaluate(async () => Array.from(new Uint8Array((await command('export')).bytes)));
     assert.deepEqual(previewBytes, Array.from(syntheticPdf()));
     assert.equal(await page.evaluate(() => window.messages.filter(message => message.type === 'changed').length), beforePreviewChanges);
     assert.equal((await page.evaluate(() => command('clear-preview'))).type, 'previewed');
-    assert.equal(await iframe.getByRole('img', { name: 'AI preview: Clear profile sentence.', exact: true }).count(), 0);
+    assert.equal(await iframe.getByRole('region', { name: 'AI rewrite preview', exact: true }).count(), 0);
     await editorFrame.evaluate(async()=>{
-      const {PdfEngine}=await import('/vendor/bentopdf/core.js');const original=PdfEngine.prototype.renderParagraphLive;
-      PdfEngine.prototype.renderParagraphLive=function(...args){PdfEngine.prototype.renderParagraphLive=original;throw new Error('Injected preview failure');};
+      const {PdfEngine}=await import('/vendor/bentopdf/core.js');const original=PdfEngine.prototype.renderPage;
+      PdfEngine.prototype.renderPage=function(...args){PdfEngine.prototype.renderPage=original;throw new Error('Injected preview failure');};
     });
     const failedPreview=await page.evaluate(target=>command('preview-many',{targets:[target]}),proposal);
     assert.equal(failedPreview.type,'error');assert.equal(failedPreview.message,'Injected preview failure');
     assert.equal(await iframe.locator('.career-ai-preview').count(),0);
     assert.equal(await editorFrame.locator('body.ai-preview').count(),0,'Failed rendering exits preview mode');
-    const failedBatch = await page.evaluate(target => command('replace-many', { targets: [target, { paragraphId:'0:1',expectedText:'Untouched experience sentence.',text:'Overflow '.repeat(900) }] }), proposal);
+    const failedBatch = await page.evaluate(target => command('replace-many', { targets: [target, { paragraphId:'0:1',expectedText:'Untouched experience sentence.',text:'Overflow '.repeat(1500) }] }), proposal);
     assert.equal(failedBatch.type, 'error');
     assert.deepEqual(await page.evaluate(async () => Array.from(new Uint8Array((await command('export')).bytes))), Array.from(syntheticPdf()), 'A failed later paragraph restores the whole batch');
     assert.equal((await page.evaluate(target => command('replace-many', { targets:[target,{paragraphId:'0:1',expectedText:'Untouched experience sentence.',text:'Revised experience sentence.'}] }), proposal)).type, 'changed');
@@ -288,6 +289,22 @@ test('BentoPDF iframe loads local assets, selects, rewrites, exports and undoes 
     assert.equal(styleDraft.type,'draft');assert.equal(styleDraft.modified,true);
     engine.open(new Uint8Array(await page.evaluate(async()=>Array.from(new Uint8Array((await command('export')).bytes)))));
     assert.ok(engine.buildModel().find(paragraph=>paragraphText(paragraph)==='Original profile sentence.').runs.some(run=>run.bold),'Style-only recovered draft is committed');
+
+    // Keystrokes arriving during Save must be included instead of discarded.
+    await page.evaluate(async bytes=>command('load',{bytes:new Uint8Array(bytes).buffer,filename:'save-race.pdf'}),Array.from(syntheticPdf()));
+    await iframe.getByRole('button',{name:'Edit paragraph: Original profile sentence.',exact:true}).click();
+    await iframe.getByRole('textbox',{name:'Edit paragraph on page'}).fill('First accepted draft.');
+    await editorFrame.evaluate(async()=>{
+      const {PdfEngine}=await import('/vendor/bentopdf/core.js');const original=PdfEngine.create;
+      PdfEngine.create=async function(...args){PdfEngine.create=original;await new Promise(resolve=>{window.releaseScratch=resolve;});return original.apply(this,args);};
+    });
+    await page.evaluate(()=>{window.raceExport=command('export');});
+    await editorFrame.waitForFunction(()=>typeof window.releaseScratch==='function');
+    await iframe.getByRole('textbox',{name:'Edit paragraph on page'}).fill('Second draft typed while Save was working.');
+    await editorFrame.evaluate(()=>window.releaseScratch());
+    const raceReply=await page.evaluate(async()=>{const reply=await window.raceExport;return {...reply,bytes:Array.from(new Uint8Array(reply.bytes))};});
+    assert.equal(raceReply.type,'exported',raceReply.message);
+    engine.open(new Uint8Array(raceReply.bytes));assert.match(engine.buildModel().map(paragraphText).join(' '),/Second draft typed while Save was working/);
 
     const sectionProducer = await browser.newPage();
     await sectionProducer.setContent('<style>@page{size:letter;margin:50px}body{font:14px Arial}h2{font-size:20px;margin:0 0 14px}p{margin:0 0 42px}.next{break-before:page}hr{border:0;background:#0066dd;height:3px;margin:0 0 12px}</style><h2>Professional Summary</h2><p>Experienced product leader.</p><h2>Work Experience</h2><p>Delivered reliable services.</p><h2 class="next">Education</h2><hr><p>Computer science degree.</p>'+ '<div style="break-before:page;height:1px"></div>'.repeat(5));

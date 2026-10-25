@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { PdfEngine } from '../vendor/bentopdf/core.js';
-import { paragraphText, replacementRuns, readParagraphs, commitParagraphText, assertReplacementFits } from './model.mjs';
-import { analyzeCvSections, planSectionReorder } from './sections.mjs';
+import { paragraphText, replacementRuns, readParagraphs } from './model.mjs';
+import { reflowDocument, describePath } from './reflow.mjs';
+import { analyzeCvSections } from './sections.mjs';
 
 const channel = 'career-ops-pdf-editor';
 const session = new URLSearchParams(location.search).get('session');
@@ -23,6 +24,10 @@ let preview = null;
 let queue = Promise.resolve();
 let internal = false;
 let dragSection = null;
+let livePreview=null;
+let layoutGeneration=0;
+let layoutTimer;
+let previewPageIndex=0;
 
 function send(type, payload = {}, requestId) {
   parent.postMessage({ channel, session, type, ...payload, ...(requestId ? { requestId } : {}) }, origin);
@@ -61,7 +66,7 @@ function draft() {
   if(index<0) return null;
   return {paragraphId:`${engine.pageIndex}:${index}`,pageIndex:engine.pageIndex,text:active.runs.map(r=>r.text).join(''),original:paragraphText(active.para),modified:native.hasChanges(),inlineState:cleanInline(active.runs,active.format)};
 }
-function emitDraft(requestId) { const value=draft(); if(value) send('draft',value,requestId); }
+function emitDraft(requestId) { const value=draft(); if(value){send('draft',value,requestId);scheduleLiveLayout();} }
 function hasDraft() { return !!native?.hasChanges(); }
 function annotationBoxes() {
   const M=engine.M;
@@ -86,7 +91,7 @@ function inspectPages() {
     engine.loadPage(pageIndex);
     const paragraphs=readParagraphs(engine);
     const objects=Array.from({length:engine.objectCount()},(_,index)=>{
-      const object=engine.objectAt(index); return {...object,box:engine.objectBounds(object.handle)};
+      const object=engine.objectAt(index); return {...object,box:engine.objectBounds(object.handle),...(object.type===2?describePath(engine,object.handle):{})};
     });
     const byHandle=new Map(objects.map(object=>[object.handle,object.index]));
     for(const paragraph of paragraphs) paragraph.objectIndices=[...new Set([...engine.paragraphObjects(paragraph.id),...(paragraph.whitespaceObjects??[])])].map(handle=>byHandle.get(handle)).filter(index=>Number.isInteger(index));
@@ -129,7 +134,7 @@ function bindEditor(ed) {
   const observer=new MutationObserver(()=>{
     if(internal||preview||native.state.editing?.editable!==ed)return;
     const value=draft(),signature=JSON.stringify(value);
-    if(value&&signature!==lastDraft){lastDraft=signature;send('draft',value);}
+    if(value&&signature!==lastDraft){lastDraft=signature;send('draft',value);scheduleLiveLayout();}
   });
   observer.observe(ed,{subtree:true,childList:true,characterData:true,attributes:true});
   ed.addEventListener('blur',()=>{setTimeout(()=>{if(!internal&&!preview&&hasDraft()&&!document.activeElement?.closest('.editor'))enqueue(()=>flush());},0);});
@@ -168,7 +173,7 @@ async function rawSnapshot() {
 async function changed(requestId) {
   stableBytes=await rawSnapshot();
   revision++;
-  send('changed',{bytes:buffer(stableBytes),revision,canUndo:undo.length>0,canRedo:redo.length>0},requestId);
+  send('changed',{bytes:buffer(stableBytes),pageCount:engine.pageCount,revision,canUndo:undo.length>0,canRedo:redo.length>0},requestId);
   paintChrome();
 }
 async function restore(bytes,pageIndex=0) {
@@ -201,20 +206,20 @@ async function transaction(mutate,requestId,{pending=draft(),afterSelection=null
 }
 async function flush(requestId) {
   if(preview)throw new Error('Accept or reject the AI preview before saving.');
-  const active=native.draft(),pending=draft();
-  if(!active || !pending || !native.hasChanges()) {
-    if(active){internal=true;native.cancel();internal=false;}
-    return false;
+  for(let attempt=0;attempt<20;attempt++){
+    const active=native.draft(),pending=draft();
+    if(!active||!pending||!native.hasChanges()){
+      if(active){clearLiveLayout();internal=true;native.cancel();internal=false;}
+      return false;
+    }
+    const signature=JSON.stringify(pending),identity=describeTarget(pending.paragraphId,pending.original);
+    const result=await computeReflow({edits:[{identity,runs:active.runs,format:active.format}]});
+    if(JSON.stringify(draft())!==signature)continue;
+    clearLiveLayout();
+    await transaction(()=>{engine.open(result.bytes);engine.loadPage(Math.min(identity.pageIndex,engine.pageCount-1));},requestId,{pending});
+    return true;
   }
-  const identity=describeTarget(pending.paragraphId,pending.original);
-  await transaction(()=>{
-    const {paragraph,paragraphs}=freshTarget(identity);
-    const box=engine.previewParagraph(paragraph.id,active.runs,active.format);
-    assertReplacementFits(paragraph,box,paragraphs,engine.pageWidth,engine.pageHeight);
-    const result=engine.editStep('Edit CV text',()=>commitParagraphText(engine,paragraph,active.runs,active.format));
-    if(!result)throw new Error('Could not apply this text change.');
-  },requestId,{pending});
-  return true;
+  throw new Error('The text is still changing. Finish typing and save again; your draft is retained.');
 }
 function decorateParagraphs() {
   if(!native||!loaded)return;
@@ -230,7 +235,7 @@ function decorateParagraphs() {
 function requestOpen(paragraph,caret) {
   if(internal||preview||!paragraph)return;
   const identity={pageIndex:engine.pageIndex,text:paragraphText(paragraph),box:{...paragraph.box}};
-  enqueue(async()=>{await flush();openIdentity(identity,{caret});});
+  enqueue(async()=>{const changed=await flush();if(changed){const matches=pages.flatMap(page=>page.paragraphs.filter(p=>paragraphText(p)===identity.text).map(p=>({pageIndex:page.pageIndex,text:identity.text,box:p.box})));if(matches.length!==1)throw new Error('The page layout changed. Click the paragraph again.');openIdentity(matches[0],{caret});}else openIdentity(identity,{caret});});
 }
 function sectionSelection(section) {
   const targets=section.targets.map(identity=>{
@@ -243,9 +248,10 @@ function sectionSelection(section) {
 }
 function paintChrome() {
   if(!loaded||!native)return;
-  document.getElementById('career-page').textContent=`Page ${engine.pageIndex+1} of ${engine.pageCount}`;
-  document.getElementById('career-prev').disabled=engine.pageIndex===0;
-  document.getElementById('career-next').disabled=engine.pageIndex===engine.pageCount-1;
+  const layout=preview?.result??livePreview,count=layout?.pages.length??engine.pageCount,current=layout?previewPageIndex:engine.pageIndex;
+  document.getElementById('career-page').textContent=`Page ${current+1} of ${count}`;
+  document.getElementById('career-prev').disabled=current===0;
+  document.getElementById('career-next').disabled=current===count-1;
   document.getElementById('career-undo').disabled=!!preview||!undo.length;
   document.getElementById('career-redo').disabled=!!preview||!redo.length;
   decorateParagraphs();
@@ -318,25 +324,12 @@ async function reorder(sectionId,beforeSectionId,requestId) {
   const resolveAnchor=value=>sections.find(section=>section.title===value.title&&section.fragments[0].pageIndex===value.fragment.pageIndex&&Math.abs(section.fragments[0].box.top-value.fragment.box.top)<1)?.id;
   const movingId=resolveAnchor(movingAnchor),beforeId=beforeAnchor?resolveAnchor(beforeAnchor):null;
   if(!movingId||(beforeAnchor&&!beforeId))throw new Error('The section layout changed. Select the section again before moving it.');
-  const plan=planSectionReorder(pages,movingId,beforeId);
-  const selectionPage=engine.pageIndex;
-  await transaction(()=>{
-    const touched=new Set(plan.moves.flatMap(move=>[move.fromPage,move.toPage]));
-    const previousPins=engine.pinnedPages;
-    engine.pinnedPages=touched;
-    try {
-    // Loading all pages can evict native handles; resolve them again while every touched page is pinned.
-    const captured=plan.moves.map(move=>{engine.loadPage(move.fromPage);return {...move,handles:move.objectIndices.map(index=>engine.objectAt(index)?.handle)};});
-    const used=new Set();
-    for(const move of captured)for(const handle of move.handles){if(!handle||used.has(handle))throw new Error('A PDF object belongs to more than one section.');used.add(handle);}
-    // Detach every group before inserting any group: source indices and pages stay stable.
-    for(const move of captured){engine.loadPage(move.fromPage);for(const handle of move.handles)if(!engine.M._FPDFPage_RemoveObject(engine.page,handle))throw new Error('Could not move the complete section.');engine._pageDirty=true;if(!engine.generateContent())throw new Error('Could not rebuild the source page.');}
-    for(const move of captured){engine.loadPage(move.toPage);for(const handle of move.handles){engine.M._FPDFPage_InsertObject(engine.page,handle);engine.translateObject(handle,move.dx,move.dy);}if(!engine.generateContent())throw new Error('Could not rebuild the moved section.');}
-    engine._spliceOk=false;
-    engine.loadPage(selectionPage);
-    } finally {engine.pinnedPages=previousPins;}
-  },requestId);
-  document.getElementById('career-status').textContent='Whole section moved. Review the page layout before saving.';
+  const ordered=sections.filter(section=>section.id!==movingId);
+  const moving=sections.find(section=>section.id===movingId);
+  const at=beforeId?ordered.findIndex(section=>section.id===beforeId):ordered.length;ordered.splice(at,0,moving);
+  const result=await computeReflow({sectionOrder:ordered.map(section=>section.title)});
+  await transaction(()=>engine.open(result.bytes),requestId);
+  document.getElementById('career-status').textContent='Section moved. The PDF pages have adjusted automatically.';
 }
 
 function validatedTargets(targets) {
@@ -349,71 +342,85 @@ function validatedTargets(targets) {
     return {identity,text:target.text};
   });
 }
-function clearPreview() {
-  const wasPreview=!!preview;
-  preview=null;
-  document.body.classList.remove('ai-preview');
-  document.querySelectorAll('.career-ai-preview').forEach(element=>element.remove());
-  if(loaded&&wasPreview){native.cancel();native.refresh();paintChrome();}
+function removeLayoutCanvases() {
+  document.getElementById('career-pages-preview')?.remove();
+  document.getElementById('career-preview-description')?.remove();
+  document.body.classList.remove('live-reflow','ai-preview');
+  native.clearLayout();
 }
-function drawPreviewPage() {
-  if(!preview)return;
-  document.querySelectorAll('.career-ai-preview').forEach(element=>element.remove());
-  const targets=preview.filter(target=>target.identity.pageIndex===engine.pageIndex);
-  const paragraphs=readParagraphs(engine);
-  const prepared=targets.map(target=>{
-    const current=locate(engine.pageIndex,target.identity.text,target.identity.box,paragraphs);
-    if(!current)throw new Error('The AI preview no longer matches this page.');
-    const paragraph=current.paragraph,runs=replacementRuns(paragraph,target.text);
-    const pv=engine.previewParagraph(paragraph.id,runs,paragraph.format);
-    assertReplacementFits(paragraph,pv,paragraphs,engine.pageWidth,engine.pageHeight);
-    return {paragraph,runs,pv};
-  });
-  const zoom=native.zoomValue,scale=zoom*devicePixelRatio;
-  const handles=prepared.flatMap(({paragraph})=>[...engine.paragraphObjects(paragraph.id),...(paragraph.whitespaceObjects??[])]);
-  const base=engine.renderPage(scale,handles);
-  const canvas=document.getElementById('page');canvas.width=base.width;canvas.height=base.height;
-  canvas.getContext('2d').putImageData(new ImageData(base.data,base.width,base.height),0,0);
-  for(const {paragraph,runs,pv} of prepared) {
-    const bitmap=engine.renderParagraphLive(paragraph.id,runs,paragraph.format,scale,pv.x,engine.pageHeight-pv.top,pv.width,pv.height);
-    engine.renderParagraphLiveEnd();
-    if(!bitmap)throw new Error('Could not render the AI preview.');
-    const overlay=document.createElement('canvas');overlay.className='career-ai-preview';overlay.setAttribute('role','img');overlay.setAttribute('aria-label',`AI preview: ${runs.map(run=>run.text).join('')}`);
-    overlay.width=bitmap.width;overlay.height=bitmap.height;
-    Object.assign(overlay.style,{left:`${pv.x*zoom}px`,top:`${(engine.pageHeight-pv.top)*zoom}px`,width:`${pv.width*zoom}px`,height:`${pv.height*zoom}px`});
-    overlay.getContext('2d').putImageData(new ImageData(bitmap.data,bitmap.width,bitmap.height),0,0);
-    document.getElementById('overlay').append(overlay);
+function clearLiveLayout() {
+  clearTimeout(layoutTimer);layoutGeneration++;livePreview=null;
+  if(!preview)removeLayoutCanvases();
+}
+function clearPreview() {
+  const active=!!preview;preview=null;
+  if(active){removeLayoutCanvases();native.cancel();native.refresh();paintChrome();}
+}
+async function computeReflow(options) {
+  const scratch=await PdfEngine.create();
+  try {
+    scratch.open(stableBytes);
+    const result=await reflowDocument(scratch,options);
+    if(result.bytes.byteLength>MAX_BYTES)throw new Error('This edit would make the PDF larger than 20 MB.');
+    scratch.open(result.bytes);
+    result.rasters=[];
+    for(let index=0;index<scratch.pageCount;index++){scratch.loadPage(index);result.rasters.push(scratch.renderPage(native.zoomValue*devicePixelRatio));}
+    return result;
+  } finally {scratch.close();}
+}
+function displayLayout(result,kind,texts=[]) {
+  document.getElementById('career-pages-preview')?.remove();document.getElementById('career-preview-description')?.remove();
+  const container=document.createElement('div');container.id='career-pages-preview';
+  const offsets=[];let height=0;
+  for(const [index,page] of result.pages.entries()){
+    offsets.push(height);const wrapper=document.createElement('div');wrapper.className='career-reflow-page';wrapper.dataset.pageIndex=String(index);
+    wrapper.style.width=`${page.width*native.zoomValue}px`;wrapper.style.height=`${page.height*native.zoomValue}px`;
+    const bitmap=result.rasters[index],canvas=document.createElement('canvas');canvas.width=bitmap.width;canvas.height=bitmap.height;
+    canvas.style.width='100%';canvas.style.height='100%';canvas.setAttribute('role','img');canvas.setAttribute('aria-label',`PDF page ${index+1} of ${result.pages.length}`);
+    canvas.getContext('2d').putImageData(new ImageData(bitmap.data,bitmap.width,bitmap.height),0,0);wrapper.append(canvas);container.append(wrapper);
+    height+=page.height*native.zoomValue+24;
   }
+  const wrap=document.getElementById('pageWrap');wrap.prepend(container);wrap.style.height=`${height-24}px`;
+  document.body.classList.toggle('live-reflow',kind==='live');document.body.classList.toggle('ai-preview',kind==='ai');
+  if(kind==='live')native.mapLayout(result.liveLines,result.pages,offsets,height,result.editedLayouts[0]);
+  if(texts.length){const description=document.createElement('div');description.id='career-preview-description';description.className='career-visually-hidden';description.setAttribute('role','region');description.setAttribute('aria-label','AI rewrite preview');description.textContent=texts.join('\n\n');wrap.append(description);container.setAttribute('aria-describedby',description.id);}
+  paintChrome();
+}
+function scheduleLiveLayout() {
+  if(preview||internal||!loaded||!native.hasChanges())return;
+  clearTimeout(layoutTimer);const generation=++layoutGeneration;
+  layoutTimer=setTimeout(async()=>{
+    const pending=draft(),active=native.draft();if(!pending||!active)return;
+    try {
+      const identity=describeTarget(pending.paragraphId,pending.original);
+      const result=await computeReflow({edits:[{identity,runs:active.runs,format:active.format}]});
+      if(generation!==layoutGeneration||preview||!native.draft())return;
+      livePreview=result;previewPageIndex=Math.min(identity.pageIndex,result.pages.length-1);displayLayout(result,'live');
+      document.getElementById('career-status').textContent=`Text flows across ${result.pages.length} ${result.pages.length===1?'page':'pages'}. Keep typing; Escape finishes this paragraph.`;
+    } catch(error){if(generation===layoutGeneration)fail(error);}
+  },180);
 }
 async function showPreview(targets,requestId) {
   await flush();
-  const prepared=validatedTargets(targets),keepPage=engine.pageIndex;
+  const prepared=validatedTargets(targets);clearLiveLayout();
   try {
-    native.cancel();
-    for(const target of prepared){const {paragraph,paragraphs}=freshTarget(target.identity);const runs=replacementRuns(paragraph,target.text);assertReplacementFits(paragraph,engine.previewParagraph(paragraph.id,runs,paragraph.format),paragraphs,engine.pageWidth,engine.pageHeight);}
-    preview=prepared;document.body.classList.add('ai-preview');
-    native.page(keepPage);drawPreviewPage();paintChrome();
-    send('previewed',{},requestId);
-  } catch(error) {native.page(keepPage);clearPreview();throw error;}
+    const result=await computeReflow({edits:prepared.map(target=>({identity:target.identity,text:target.text}))});
+    preview={prepared,result};previewPageIndex=Math.min(engine.pageIndex,result.pages.length-1);native.cancel();
+    displayLayout(result,'ai',prepared.map(target=>target.text));send('previewed',{},requestId);
+  } catch(error){clearPreview();throw error;}
 }
 async function replaceTargets(targets,requestId) {
-  const prepared=validatedTargets(targets);
-  clearPreview();
-  await flush();
-  await transaction(()=>{
-    for(const target of prepared){
-      const {paragraph,paragraphs}=freshTarget(target.identity);
-      const runs=replacementRuns(paragraph,target.text);
-      assertReplacementFits(paragraph,engine.previewParagraph(paragraph.id,runs,paragraph.format),paragraphs,engine.pageWidth,engine.pageHeight);
-      if(!engine.editStep('Rewrite CV text',()=>commitParagraphText(engine,paragraph,runs,paragraph.format)))throw new Error('Could not apply the complete rewrite.');
-    }
-  },requestId);
+  const prepared=validatedTargets(targets);clearPreview();await flush();
+  const result=await computeReflow({edits:prepared.map(target=>({identity:target.identity,text:target.text}))});
+  await transaction(()=>engine.open(result.bytes),requestId);
 }
 async function goPage(index) {
+  const layout=preview?.result??livePreview;
+  if(layout){if(index<0||index>=layout.pages.length)return;previewPageIndex=index;document.querySelector(`.career-reflow-page[data-page-index="${index}"]`)?.scrollIntoView({block:'start'});paintChrome();return;}
   if(index<0||index>=engine.pageCount)return;
   if(!preview)await flush();
   native.page(index);pages[index].paragraphs=native.state.paragraphs;
-  if(!preview){selection=null;emitSelection();}else drawPreviewPage();
+  if(!preview){selection=null;emitSelection();}
   paintChrome();
 }
 async function history(type,requestId) {
@@ -434,7 +441,7 @@ async function handle(message) {
     if(!(message.bytes instanceof ArrayBuffer)||!message.bytes.byteLength||message.bytes.byteLength>MAX_BYTES)throw new Error('Choose a PDF smaller than 20 MB.');
     internal=true;
     try{
-      clearPreview();native.cancel();loaded=false;selection=null;
+      clearPreview();clearLiveLayout();native.cancel();loaded=false;selection=null;
       engine.open(new Uint8Array(message.bytes));
       if(!engine.pageCount||engine.pageCount>20)throw new Error('Visual editing supports PDFs with 1 to 20 pages.');
       if(engine.documentInfo()?.signatures>0)throw new Error('Signed PDFs cannot be edited because changes invalidate their signature.');
@@ -442,7 +449,7 @@ async function handle(message) {
       document.getElementById('empty').hidden=true;document.getElementById('pageWrap').hidden=false;
       inspectPages();native.fit();paintChrome();
       document.getElementById('career-status').textContent='Click text to type directly. Drag a section handle to reorder the complete section.';
-      send('loaded',{pageCount:engine.pageCount,warnings:['Text edits keep the existing page layout. Paragraph overflow is blocked; whole sections can move between pages when they fit.']},requestId);
+      send('loaded',{pageCount:engine.pageCount,warnings:['Text and sections flow across PDF pages automatically. The editor adds matching pages when needed.']},requestId);
     }finally{internal=false;}
     return;
   }
@@ -482,6 +489,7 @@ window.addEventListener('message',event=>{
 window.addEventListener('keydown',event=>{
   if(!loaded)return;
   const meta=event.ctrlKey||event.metaKey,key=event.key.toLowerCase();
+  if(native?.state.editing&&meta&&['arrowdown','arrowup','end','home'].includes(key)){event.preventDefault();event.stopImmediatePropagation();native.moveCaretBoundary(['arrowdown','end'].includes(key),event.shiftKey);return;}
   if(meta&&['s','z','y'].includes(key)){
     event.preventDefault();event.stopImmediatePropagation();
     if(key==='s')enqueue(async()=>{await flush();send('save-request');});
@@ -517,15 +525,26 @@ async function initialize() {
   if(!await module.engineReady)throw new Error('Could not initialize the PDF engine.');
   native=module.careerNative;engine=native.engine;
   native.configure({open:requestOpen,commit:()=>{if(!internal&&!preview)enqueue(()=>flush());}});
-  document.getElementById('career-prev').addEventListener('click',()=>enqueue(()=>goPage(engine.pageIndex-1)));
-  document.getElementById('career-next').addEventListener('click',()=>enqueue(()=>goPage(engine.pageIndex+1)));
+  document.getElementById('career-prev').addEventListener('click',()=>enqueue(()=>goPage((preview||livePreview?previewPageIndex:engine.pageIndex)-1)));
+  document.getElementById('career-next').addEventListener('click',()=>enqueue(()=>goPage((preview||livePreview?previewPageIndex:engine.pageIndex)+1)));
   for(const type of ['undo','redo'])document.getElementById(`career-${type}`).addEventListener('click',()=>enqueue(()=>history(type)));
-  document.getElementById('career-fit').addEventListener('click',()=>enqueue(async()=>{if(!preview)await flush();native.fit();if(preview)drawPreviewPage();paintChrome();}));
+  document.getElementById('career-fit').addEventListener('click',()=>enqueue(async()=>{if(!preview)await flush();native.fit();if(preview){const result=await computeReflow({edits:preview.prepared.map(target=>({identity:target.identity,text:target.text}))});preview.result=result;displayLayout(result,'ai',preview.prepared.map(target=>target.text));}paintChrome();}));
   new MutationObserver(()=>decorateParagraphs()).observe(document.getElementById('overlay'),{childList:true});
+  let scrollFrame;
+  document.getElementById('stage').addEventListener('scroll',()=>{
+    cancelAnimationFrame(scrollFrame);scrollFrame=requestAnimationFrame(()=>{
+      const layout=preview?.result??livePreview;if(!layout)return;
+      const stage=document.getElementById('stage'),threshold=stage.getBoundingClientRect().top+stage.clientHeight*.35;
+      const visible=[...document.querySelectorAll('.career-reflow-page')].filter(page=>page.getBoundingClientRect().top<=threshold).at(-1);
+      previewPageIndex=Number(visible?.dataset.pageIndex??0);
+      document.getElementById('career-page').textContent=`Page ${previewPageIndex+1} of ${layout.pages.length}`;
+      document.getElementById('career-prev').disabled=previewPageIndex===0;document.getElementById('career-next').disabled=previewPageIndex===layout.pages.length-1;
+    });
+  },{passive:true});
   send('ready');
 }
 initialize().catch(error=>fail(error));
 let resizeTimer;
 window.addEventListener('resize',()=>{
-  clearTimeout(resizeTimer);resizeTimer=setTimeout(()=>{if(loaded)enqueue(async()=>{const pending=draft(),identity=selectedIdentity();native.cancel();native.fit();if(preview)drawPreviewPage();else if(pending&&identity)openIdentity(identity,{notify:false,text:pending.text,inlineState:pending.inlineState});paintChrome();});},150);
+  clearTimeout(resizeTimer);resizeTimer=setTimeout(()=>{if(loaded)enqueue(async()=>{const pending=draft(),identity=selectedIdentity();native.cancel();native.fit();if(preview){const result=await computeReflow({edits:preview.prepared.map(target=>({identity:target.identity,text:target.text}))});preview.result=result;displayLayout(result,'ai',preview.prepared.map(target=>target.text));}else if(pending&&identity)openIdentity(identity,{notify:false,text:pending.text,inlineState:pending.inlineState});paintChrome();});},150);
 });

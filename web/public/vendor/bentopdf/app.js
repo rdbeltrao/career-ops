@@ -16,6 +16,7 @@ window.addEventListener('unhandledrejection', (e) => {
     ((e.reason && (e.reason.stack || e.reason.message)) || e.reason);
 });
 import { PdfEngine, OBJ } from './core.js';
+import { ensureRenderableRuns } from '../../pdf-editor/reflow.mjs';
 import { readParagraphs } from '../../pdf-editor/model.mjs';
 import { applyTagSurgery } from './tagsurgery.js';
 import { pageHasPatternFill, protectPatternArtwork } from './shadingsurgery.js';
@@ -5120,7 +5121,7 @@ function schedulePreview() {
     if (!es2 || !es2.locked || !es2.para) return;
     if (es2.composing) {
       const edC = es2.editable;
-      const runsC = parseEditor(edC, es2.para.runs);
+      const runsC = ensureRenderableRuns(P(),es2.para,parseEditor(edC, es2.para.runs));
       if (!runsC.length) return;
       const pvC = P().previewParagraph(
         es2.para.id,
@@ -5140,7 +5141,7 @@ function schedulePreview() {
       return;
     }
     const ed = es2.editable;
-    const runs = parseEditor(ed, es2.para.runs);
+    const runs = ensureRenderableRuns(P(),es2.para,parseEditor(ed, es2.para.runs));
     if (!runs.length) return;
     const pv = P().previewParagraph(
       es2.para.id,
@@ -10293,6 +10294,7 @@ export const careerNative = {
   hasChanges() { const e=state.editing; return !!e?.para && (runsDiffer(parseEditor(e.editable,e.para.runs),e.para.runs) || JSON.stringify(e.para.format)!==JSON.stringify(e.careerOriginalFormat)); },
   setRuns(runs, format) {
     const e=state.editing; if (!e) return;
+    runs=ensureRenderableRuns(P(),e.para,runs);
     if(format) e.para={...e.para,format:{...format}};
     e.editable.replaceChildren(...runs.map((run,i)=>runSpan(run,i)));
     delete e.editable.dataset.locked;
@@ -10312,6 +10314,35 @@ export const careerNative = {
   zoom(value) { state.zoom=Math.min(6,Math.max(.12,value)); renderPage(); updateChrome(); },
   fit() { state.zoom=Math.min(2,Math.max(.12,($('stage').clientWidth-32)/P().pageWidth)); renderPage(); updateChrome(); },
   get zoomValue() { return state.zoom; },
+  moveCaretBoundary(end,extend=false) {
+    const e=state.editing;if(!e)return;
+    const offset=end?parseEditor(e.editable,e.para.runs).reduce((sum,run)=>sum+run.text.length,0):0;
+    if(extend){const current=lockedCaretGet(e.editable);lockedSelSet(e.editable,Math.min(current,offset),Math.max(current,offset));}else lockedCaretSet(e.editable,offset);
+    (end?e.editable.lastElementChild:e.editable.firstElementChild)?.scrollIntoView({block:'nearest'});
+  },
+  // Keep one logical contenteditable buffer while its real PDF lines span pages.
+  mapLayout(lines,pages,offsets,height,layout) {
+    const e=state.editing;if(!e?.para)return;
+    const caret=lockedCaretGet(e.editable),selected=lockedSelRange(e.editable);
+    if(layout?.preview){renderLockedLines(e.editable,layout.runs,layout.preview,e.para,layout.preview.x);e.preview=layout.preview;applyLockedGeom(e,layout.preview);applyDocFonts(e.para,e.editable);if(selected)lockedSelSet(e.editable,selected.start,selected.end);else if(caret>=0)lockedCaretSet(e.editable,caret);}
+    const pv=e.preview??P().previewParagraph(e.para.id,parseEditor(e.editable,e.para.runs),e.para.format);
+    const divs=[...e.editable.children].filter(div=>div.classList.contains('eline'));
+    if(!pv?.lines?.length||divs.length!==lines.length)throw new Error('Could not align the editable lines with their page preview.');
+    for(const [index,div] of divs.entries()){
+      const target=lines[index],line=pv.lines[index];
+      const targetY=offsets[target.pageIndex]+(pages[target.pageIndex].height-target.baseline)*state.zoom;
+      const originalY=(P().pageHeight-line.baseline)*state.zoom;
+      div.style.transform=`translate(0px, ${targetY-originalY}px)`;
+    }
+    const editableHeight=Math.max(pv.height*state.zoom,height-(P().pageHeight-pv.top)*state.zoom);
+    e.el.style.overflow='visible';e.el.style.height=`${editableHeight}px`;e.el.style.minHeight=`${editableHeight}px`;
+    e.editable.style.height=`${editableHeight}px`;
+  },
+  clearLayout() {
+    const e=state.editing;
+    if(e){for(const line of e.editable.children)line.style.transform='';e.el.style.overflow='';e.el.style.height='';e.editable.style.height='100%';if(e.preview)applyLockedGeom(e,e.preview);}
+    if(P()?.doc)renderPage();
+  },
   previewBitmap(para,runs,fmt,scale) {
     const pv=P().previewParagraph(para.id,runsToInput(runs),fmt); if(!pv) return null;
     const bitmap=P().renderParagraphLive(para.id,runsToInput(runs),fmt,scale,pv.x,P().pageHeight-pv.top,pv.width,pv.height);
