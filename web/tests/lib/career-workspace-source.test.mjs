@@ -234,6 +234,8 @@ test('page purpose inherits through the tree and changes with revision protectio
   const changed = save(root, id(FIRST), 'usage', { usage: 'preferences' });
   assert.equal(changed.usage, 'preferences');
   assert.equal(readWorkspaceDocument(root, id(CHILD)).usage, 'preferences');
+  assert.equal(readWorkspaceDocument(root, id(CHILD)).declaredUsage, null, 'an inherited purpose is not reported as set on the page');
+  assert.equal(changed.declaredUsage, 'preferences');
   assert.equal(readWorkspaceDocument(root, id(CHILD)).content, before.content);
   assert.throws(() => saveWorkspaceDocument({ root, request: { document: id(CHILD), revision: before.revision, action: 'usage', usage: 'facts' }, write: atomicWriteWithBackup }), (e) => e.code === 'stale');
   save(root, id(CHILD), 'usage', { usage: 'unconfirmed' });

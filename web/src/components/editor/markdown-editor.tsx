@@ -26,6 +26,7 @@ export type MarkdownEditorProps = {
   documentKey: string;
   disabled?: boolean;
   linkPages?: { id: string; title?: string }[];
+  sectionTarget?: { headingIndex: number; start: number; bodyStart: number; request: number } | null;
 };
 
 const theme = {
@@ -44,13 +45,35 @@ export function MarkdownEditor(props: MarkdownEditorProps) {
   return <EditorDocument key={props.documentKey} {...props} />;
 }
 
-function EditorDocument({ value, onChange, disabled = false, linkPages = [] }: MarkdownEditorProps) {
+function EditorDocument({ value, onChange, disabled = false, linkPages = [], sectionTarget }: MarkdownEditorProps) {
+  const container = useRef<HTMLDivElement>(null);
   const [initialAnalysis] = useState(() => analyzeMarkdown(normalizeWorkspaceLinks(value, linkPages)));
   const [draft, setDraft] = useState(value);
   const [sourceMode, setSourceMode] = useState(false);
   const [richMode, setRichMode] = useState(initialAnalysis.safe);
   const [reason, setReason] = useState(initialAnalysis.reason);
   const [generation, setGeneration] = useState(0);
+
+  useEffect(() => {
+    if (!sectionTarget) return;
+    // Wait until the mobile navigation dialog has closed before moving focus.
+    const frame = requestAnimationFrame(() => {
+      const source = container.current?.querySelector("textarea");
+      if (source) {
+        source.focus();
+        source.setSelectionRange(sectionTarget.start, sectionTarget.bodyStart);
+        source.scrollIntoView({ block: "center" });
+        return;
+      }
+      const heading = container.current?.querySelectorAll<HTMLElement>("h1,h2,h3,h4,h5,h6")[sectionTarget.headingIndex];
+      if (heading) {
+        heading.tabIndex = -1;
+        heading.focus({ preventScroll: true });
+        heading.scrollIntoView({ block: "center" });
+      }
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [sectionTarget, sourceMode, richMode, generation]);
 
   function changed(markdown: string) { setDraft(markdown); onChange(markdown); }
 
@@ -63,7 +86,7 @@ function EditorDocument({ value, onChange, disabled = false, linkPages = [] }: M
     setSourceMode(false);
   }
 
-  return <div className="min-w-0 rounded-xl border border-border/80 bg-surface/20">
+  return <div ref={container} className="min-w-0 rounded-xl border border-border/80 bg-surface/20">
     <div className="flex min-h-10 flex-wrap items-center justify-between gap-2 border-b border-border/60 px-3 py-2">
       <p className="text-xs text-muted">{sourceMode ? "Markdown source" : richMode ? "Type / to insert a block" : "Formatted view"}</p>
       <button type="button" onClick={toggleMode} disabled={disabled} aria-pressed={sourceMode} className="inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-xs font-medium text-muted hover:bg-surface hover:text-foreground focus-visible:outline-2 focus-visible:outline-brand disabled:opacity-40">

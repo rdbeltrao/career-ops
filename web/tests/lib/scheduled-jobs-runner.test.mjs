@@ -23,9 +23,11 @@ import {
   enqueueDueJobs,
   executeJob,
   extractRolesFound,
+  JEV_TIMEOUT_MS,
   MAX_ATTEMPTS,
   MAX_RUNS,
   nextFutureRun,
+  rankNewRows,
   recordCompletion,
   runnerResourcePath,
   SCAN_TIMEOUT_MS,
@@ -823,4 +825,58 @@ test("a non-object scheduled-job patch is rejected by input validation", () => {
   for (const value of [null, "status", ["status"]]) {
     assert.throws(() => assertScheduledJobBody(value), /object/);
   }
+});
+
+test("a scheduled scan that added rows runs the Jev pre-screen on them", () => {
+  const temp = fs.mkdtempSync(path.join(os.tmpdir(), "career-ops-scheduled-jev-"));
+  try {
+    const calls = [];
+    const scan = { state: "success", attempt: 1, rolesFound: 3, durationMs: 10, message: "Scan finished with 3 matching roles." };
+    const ranked = rankNewRows(temp, scan, {
+      spawnFn: (node, args, options) => {
+        calls.push({ node, args, options });
+        return { status: 0, stdout: "jev-rank: 3 scored, 0 without JD, 0 failed, 0 already annotated\n", stderr: "" };
+      },
+    });
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].node, process.execPath);
+    assert.deepEqual(calls[0].args, ["jev-rank.mjs"]);
+    assert.equal(calls[0].options.env.CAREER_OPS_ROOT, temp);
+    assert.equal(calls[0].options.timeout, JEV_TIMEOUT_MS);
+    assert.equal(ranked.state, "success");
+    assert.equal(ranked.rolesFound, 3);
+    assert.equal(ranked.message, "Scan finished with 3 matching roles. Jev: 3 scored, 0 without JD, 0 failed, 0 already annotated.");
+  } finally {
+    fs.rmSync(temp, { recursive: true, force: true });
+  }
+});
+
+test("the Jev pre-screen is skipped when a scan added nothing or failed", () => {
+  let spawned = 0;
+  const spawnFn = () => { spawned += 1; return { status: 0, stdout: "", stderr: "" }; };
+  const empty = { state: "success", attempt: 1, rolesFound: 0, durationMs: 1, message: "Scan finished with 0 matching roles." };
+  const failed = { state: "failed", attempt: 3, rolesFound: 0, durationMs: 1, message: "boom" };
+  assert.deepEqual(rankNewRows("/nowhere", empty, { spawnFn }), empty);
+  assert.deepEqual(rankNewRows("/nowhere", failed, { spawnFn }), failed);
+  assert.equal(spawned, 0);
+});
+
+test("a Jev pre-screen that cannot run never fails the scan it follows", () => {
+  const scan = { state: "success", attempt: 1, rolesFound: 2, durationMs: 1, message: "Scan finished with 2 matching roles." };
+  const noKey = rankNewRows("/nowhere", scan, { spawnFn: () => ({ status: 2, stdout: "", stderr: "jev-rank: no OpenRouter key\n" }) });
+  assert.equal(noKey.state, "success");
+  assert.equal(noKey.message, "Scan finished with 2 matching roles. Jev pre-screen not run: no OpenRouter key.");
+
+  const crashed = rankNewRows("/nowhere", scan, { spawnFn: () => ({ status: 1, stdout: "", stderr: "Error: pipeline.md is locked\n" }) });
+  assert.equal(crashed.state, "success");
+  assert.equal(crashed.message, "Scan finished with 2 matching roles. Jev pre-screen failed: Error: pipeline.md is locked");
+
+  const thrown = rankNewRows("/nowhere", scan, { spawnFn: () => { throw new Error("spawn EACCES"); } });
+  assert.equal(thrown.state, "success");
+  assert.equal(thrown.message, "Scan finished with 2 matching roles. Jev pre-screen failed: spawn EACCES");
+
+  const timedOut = rankNewRows("/nowhere", scan, {
+    spawnFn: () => ({ status: null, signal: "SIGTERM", stdout: "", stderr: "", error: Object.assign(new Error("ETIMEDOUT"), { code: "ETIMEDOUT" }) }),
+  });
+  assert.equal(timedOut.message, `Scan finished with 2 matching roles. Jev pre-screen failed: timed out after ${JEV_TIMEOUT_MS / 60_000} minutes.`);
 });

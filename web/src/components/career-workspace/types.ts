@@ -26,6 +26,8 @@ export type WorkspaceDocumentSummary = {
   sourceEditedAt?: string | null;
   importNotes?: string[];
   usage?: PageUsage;
+  /** The purpose set on this page itself; null when it follows its parent. */
+  declaredUsage?: PageUsage | null;
   order?: number;
 };
 

@@ -44,20 +44,38 @@ test('Context has one real page hierarchy with CV as a separate output', { skip:
   async function saved() {
     await page.getByRole('status', { name: 'Page save status' }).filter({ hasText: /Saved\.|Page (created|renamed|moved)\./ }).waitFor();
   }
+  async function pageAction(name) {
+    await page.getByRole('button', { name: 'Page actions', exact: true }).click();
+    await page.getByRole('menu', { name: 'Page actions' }).getByRole('menuitem', { name, exact: true }).click();
+  }
+  async function choosePurpose(label) {
+    await page.getByRole('button', { name: 'Change page purpose', exact: true }).click();
+    await page.getByRole('menu', { name: 'How evaluations use this page' }).getByRole('menuitemradio', { name: new RegExp(`^${label}`) }).click();
+  }
+  const PURPOSE_LABEL = { facts: 'Career facts', reference: 'Reference material' };
   async function shot(name) {
     if (!process.env.CAREER_WORKSPACE_ARTIFACT_DIR) return;
     await mkdir(process.env.CAREER_WORKSPACE_ARTIFACT_DIR, { recursive: true });
     await page.screenshot({ path: path.join(process.env.CAREER_WORKSPACE_ARTIFACT_DIR, `${name}.png`), fullPage: true });
   }
   try {
+    await page.route(`**/api/workspace?document=${rootId}`, async (route) => {
+      const response = await route.fetch();
+      const document = await response.json();
+      await route.fulfill({ json: { ...document, content: document.content + '\n\n## Body-only section\n\nThis is content inside the root page.\n' } });
+    });
     await page.goto(`${origin}/context`);
     await page.getByRole('heading', { name: 'Example job applications', exact: true, level: 1 }).waitFor();
+    await page.getByRole('region', { name: 'Page editor' }).getByRole('heading', { name: 'Body-only section', exact: true }).waitFor();
     assert.equal(writes.length, 0);
     assert.equal(await page.getByRole('button', { name: /^(Source pages|App files)$/ }).count(), 0, 'Context has no competing views');
     assert.match(await page.locator('main').innerText(), /Used for job matching and CV generation/);
     assert.doesNotMatch(await page.locator('main').innerText(), /Local copy|Local edits stay here|matching uses Application profile/);
     assert.equal(await navigation().getByRole('button', { name: 'CV draft', exact: true }).count(), 0);
     assert.equal(await navigation().getByRole('button', { name: 'Career context', exact: true }).count(), 0, 'landing headings never become pages');
+    await navigation().getByRole('textbox', { name: 'Search pages' }).fill('Body-only section');
+    await navigation().getByText('No pages match your search.', { exact: true }).waitFor();
+    await navigation().getByRole('textbox', { name: 'Search pages' }).fill('');
     for (const staleDocument of ['context', 'profile', 'cv']) {
       await page.goto(`${origin}/context?document=${staleDocument}`);
       await page.getByRole('heading', { name: 'Example job applications', exact: true, level: 1 }).waitFor();
@@ -84,16 +102,16 @@ test('Context has one real page hierarchy with CV as a separate output', { skip:
     assert.match(await editor.innerText(), /Edited locally/);
     await shot('source-workspace-desktop');
 
-    const purpose = page.getByRole('combobox', { name: 'Use this page as', exact: true });
+    const purposeStatus = page.getByRole('region', { name: 'Page editor' }).locator('p', { hasText: /^(Career facts|Job preferences|Reference material|Unconfirmed notes) · / });
     const nextPurpose = (await read(employerId)).usage === 'facts' ? 'reference' : 'facts';
     await editor.fill('Fictional employer record. Draft kept while changing page purpose.');
     const writesBeforePurpose = writes.length;
-    await purpose.selectOption(nextPurpose);
+    await choosePurpose(PURPOSE_LABEL[nextPurpose]);
     await page.getByRole('dialog', { name: 'Unsaved changes' }).waitFor();
     assert.equal(writes.length, writesBeforePurpose, 'changing purpose first guards an unsaved draft');
     await page.getByRole('button', { name: 'Keep editing', exact: true }).click();
     assert.match(await editor.innerText(), /Draft kept while changing page purpose/);
-    await purpose.selectOption(nextPurpose);
+    await choosePurpose(PURPOSE_LABEL[nextPurpose]);
     await page.getByRole('button', { name: 'Save and continue', exact: true }).click();
     await page.getByRole('status', { name: 'Page save status' }).filter({ hasText: 'Page purpose updated.' }).waitFor();
     const purposeUpdated = await read(employerId);
@@ -102,18 +120,27 @@ test('Context has one real page hierarchy with CV as a separate output', { skip:
     assert.equal(writes.slice(writesBeforePurpose).filter((write) => write.action === 'usage').length, 1, 'one confirmed purpose change makes one purpose mutation');
     await page.reload();
     await page.getByRole('heading', { name: 'Example Labs', exact: true, level: 1 }).waitFor();
-    assert.equal(await purpose.inputValue(), nextPurpose, 'page purpose survives reload');
+    assert.match(await purposeStatus.innerText(), new RegExp(`^${PURPOSE_LABEL[nextPurpose]} · `), 'page purpose survives reload');
+
+    const allPages = await navigation().getByRole('button', { name: /./ }).count();
+    const factsFilter = navigation().getByRole('button', { name: /^Show only career facts/ });
+    await factsFilter.click();
+    assert.equal(await factsFilter.getAttribute('aria-pressed'), 'true');
+    assert.ok(await navigation().getByRole('img', { name: 'Career facts' }).count() > 0, 'fact pages carry a marker');
+    assert.ok(await navigation().getByRole('button', { name: /./ }).count() < allPages, 'the filter hides pages that are not career facts');
+    await factsFilter.click();
+    assert.equal(await navigation().getByRole('button', { name: /./ }).count(), allPages);
 
     await select('Career History');
-    await page.getByRole('button', { name: 'New child page', exact: true }).click();
+    await pageAction('New child page');
     await page.getByRole('textbox', { name: 'Page title', exact: true }).fill('Research record');
     await page.getByRole('button', { name: 'Create page', exact: true }).click();
     await page.getByRole('heading', { name: 'Research record', exact: true, level: 1 }).waitFor();
-    await page.getByRole('button', { name: 'Rename page', exact: true }).click();
+    await pageAction('Rename page');
     await page.getByRole('textbox', { name: 'Page title', exact: true }).fill('Research notes');
     await page.getByRole('button', { name: 'Rename', exact: true }).click();
     await page.getByRole('heading', { name: 'Research notes', exact: true, level: 1 }).waitFor();
-    await page.getByRole('button', { name: 'Move page up', exact: true }).click();
+    await pageAction('Move page up');
     await saved();
     const index = await fetch(`${origin}/api/workspace`).then((response) => response.json());
     const created = index.documents.find((document) => document.title === 'Research notes');
@@ -128,11 +155,13 @@ test('Context has one real page hierarchy with CV as a separate output', { skip:
     await page.getByRole('navigation', { name: 'App navigation' }).getByRole('link', { name: 'CV draft', exact: true }).click();
     await page.waitForURL(`${origin}/cv`);
     await page.getByRole('heading', { name: 'CV draft', exact: true, level: 1 }).waitFor();
-    await page.getByRole('status', { name: 'Page save status' }).filter({ hasText: 'All changes saved' }).waitFor();
-    assert.equal(await navigation().getByRole('button', { name: 'Example job applications', exact: true }).count(), 0, 'CV has only its own outline');
-    assert.equal(await navigation().getByRole('button', { name: 'Application profile', exact: true }).count(), 0);
+    await page.getByRole('status', { name: 'Document save status' }).filter({ hasText: 'All changes saved' }).waitFor();
+    const cvOutline = page.getByRole('navigation', { name: 'Document sections' });
+    await cvOutline.waitFor();
+    assert.equal(await cvOutline.getByRole('button', { name: 'Example job applications', exact: true }).count(), 0, 'CV has only its own outline');
+    assert.equal(await cvOutline.getByRole('button', { name: 'Application profile', exact: true }).count(), 0);
     assert.equal(await page.getByRole('button', { name: /^(Source pages|App files|New page|New child page)$/ }).count(), 0);
-    assert.match(await page.getByRole('region', { name: 'Page editor' }).innerText(), /output|working r[eé]sum[eé]/i);
+    assert.match(await page.getByRole('region', { name: 'Document editor' }).innerText(), /output|working r[eé]sum[eé]/i);
 
     await page.goto(`${origin}/context`);
     await page.setViewportSize({ width: 1024, height: 900 });
@@ -157,6 +186,7 @@ test('Context has one real page hierarchy with CV as a separate output', { skip:
     assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1));
     await shot('source-workspace-mobile');
     assert.deepEqual(errors, []);
+    assert.ok(writes.every((write) => write.section === null), 'page operations never target Markdown sections');
   } finally { await browser.close(); }
 });
 

@@ -22,6 +22,9 @@ const CODE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..
 export const MAX_RUNS = 100;
 export const MAX_ATTEMPTS = 3;
 export const SCAN_TIMEOUT_MS = 25 * 60 * 1_000;
+// jev-rank.mjs makes one OpenRouter call per pending row (at most 50 by
+// default, each with its own 60 s timeout), so it gets its own budget.
+export const JEV_TIMEOUT_MS = 20 * 60 * 1_000;
 const MAX_OUTPUT_BYTES = 10 * 1024 * 1024;
 export const QUEUE_CLAIM_STALE_MS = 30 * 1_000;
 
@@ -250,6 +253,17 @@ function writeJobPortals(root, job) {
  * not retried: the same sweep would hit the same limit, three times over.
  */
 
+// The scanner and the Jev pass both run with cwd = the checkout; a relative
+// profile override is resolved here, the way the web resolves it, so every
+// child reads one file.
+function childEnv(root) {
+  return {
+    ...process.env,
+    CAREER_OPS_ROOT: root,
+    ...(process.env.CAREER_OPS_PROFILE?.trim() ? { CAREER_OPS_PROFILE: getProfilePath(root) } : {}),
+  };
+}
+
 export function executeJob(root, job, options = {}) {
   const spawnFn = options.spawnFn || spawnSync;
   const startedAt = Date.now();
@@ -266,14 +280,7 @@ export function executeJob(root, job, options = {}) {
         [command.script, ...command.args],
         {
           cwd: CODE_ROOT,
-          env: {
-            ...process.env,
-            CAREER_OPS_ROOT: root,
-            CAREER_OPS_PORTALS: tempPortals,
-            // The scanner runs with cwd = the checkout; a relative override is
-            // resolved here, the way the web resolves it, so both read one file.
-            ...(process.env.CAREER_OPS_PROFILE?.trim() ? { CAREER_OPS_PROFILE: getProfilePath(root) } : {}),
-          },
+          env: { ...childEnv(root), CAREER_OPS_PORTALS: tempPortals },
           encoding: "utf8",
           timeout: SCAN_TIMEOUT_MS,
           maxBuffer: MAX_OUTPUT_BYTES,
@@ -316,6 +323,44 @@ export function executeJob(root, job, options = {}) {
     durationMs: Date.now() - startedAt,
     message: lastError,
   };
+}
+
+/*
+ * A scan that added rows hands them to the Jev pre-screen right away, the way
+ * fork/scripts/daily.sh does after its own scan, so the inbox shows a verdict
+ * instead of "not scored" until the next daily run. Jev costs no agent tokens
+ * (one OpenRouter call per row) and only annotates rows. Its outcome is added
+ * to the run's message; it never turns a successful scan into a failed one,
+ * and a missing OpenRouter key (exit 2) means "not run", not an error.
+ */
+export function rankNewRows(root, result, options = {}) {
+  if (result.state !== "success" || !(result.rolesFound > 0)) return result;
+  const spawnFn = options.spawnFn || spawnSync;
+  let outcome;
+  try {
+    const run = spawnFn(process.execPath, ["jev-rank.mjs"], {
+      cwd: CODE_ROOT,
+      env: childEnv(root),
+      encoding: "utf8",
+      timeout: JEV_TIMEOUT_MS,
+      maxBuffer: MAX_OUTPUT_BYTES,
+      windowsHide: true,
+    });
+    outcome = jevOutcome(run);
+  } catch (error) {
+    outcome = `Jev pre-screen failed: ${scanFailureMessage({ error })}`;
+  }
+  return { ...result, message: `${result.message} ${outcome}` };
+}
+
+function jevOutcome(run) {
+  if (run.status === 0) {
+    const summary = String(run.stdout || "").match(/^jev-rank: (.+?)\s*$/m);
+    return summary ? `Jev: ${summary[1]}.` : "Jev pre-screen finished.";
+  }
+  if (run.status === 2) return "Jev pre-screen not run: no OpenRouter key.";
+  if (run.error?.code === "ETIMEDOUT") return `Jev pre-screen failed: timed out after ${JEV_TIMEOUT_MS / 60_000} minutes.`;
+  return `Jev pre-screen failed: ${scanFailureMessage(run)}`;
 }
 
 export async function recordCompletion(storePath, claim, result, inMemoryStore = null) {
@@ -382,12 +427,12 @@ async function main() {
 
       if (!claim) return { status: "idle" };
 
-      const result = executeJob(root, claim.job);
+      const result = rankNewRows(root, executeJob(root, claim.job));
       await recordCompletion(storePath, claim, result);
       if (result.state === "failed") throw new Error(result.message);
       return { status: "success", jobId: claim.job.id, ...result };
     },
-    { timeoutMs: 1_000, staleMs: SCAN_TIMEOUT_MS * MAX_ATTEMPTS + 60_000 },
+    { timeoutMs: 1_000, staleMs: SCAN_TIMEOUT_MS * MAX_ATTEMPTS + JEV_TIMEOUT_MS + 60_000 },
   );
 }
 
