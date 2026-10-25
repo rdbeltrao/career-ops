@@ -289,6 +289,9 @@ function ApplyExitBar() {
   async function markApplied() {
     setMarking(true);
     setError("");
+    // Record what was submitted before the row changes. A failed save shows on
+    // the page as its own warning and does not hold the status update back.
+    if (a.fields.length) await a.saveAnswers("submitted");
     try {
       const res = await fetch("/api/status", {
         method: "POST",

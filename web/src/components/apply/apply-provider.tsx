@@ -33,6 +33,9 @@ type ApplyCtx = {
   setAnswer: (idOrLabel: string, value: string) => void;
   fill: () => Promise<void>;
   agentFill: () => Promise<void>;
+  /** Save the reviewed answers into the report and the answer bank. Never throws;
+   *  false when nothing was saved. */
+  saveAnswers: (state: "filled" | "submitted") => Promise<boolean>;
   reset: () => void;
 };
 
@@ -84,6 +87,10 @@ export function ApplyProvider({ children }: { children: React.ReactNode }) {
   fieldsRef.current = fields;
   const answersRef = useRef<Record<string, string>>({});
   answersRef.current = answers;
+  const urlRef = useRef("");
+  urlRef.current = url;
+  const titleRef = useRef("");
+  titleRef.current = title;
   // Bumped every time a session is abandoned or replaced. Leaving the page is
   // reachable while a request or stream is still in flight, and none of them can
   // be recalled, so each one carries the generation it started in and drops its
@@ -313,6 +320,47 @@ export function ApplyProvider({ children }: { children: React.ReactNode }) {
     if (f) setAnswers((prev) => ({ ...prev, [f.id]: value }));
   }, []);
 
+  // Persist what the user reviewed, at the moments it becomes real: filled into
+  // the employer's form, or marked submitted. A failed save is surfaced, never
+  // silent, and never blocks the fill or the status update it rides along with.
+  const saveAnswers = useCallback(async (state: "filled" | "submitted") => {
+    const gen = generation.current;
+    const note = (issue: ApplyIssue) => {
+      if (generation.current !== gen) return;
+      setIssues((prev) => [...prev.filter((i) => i.code !== "answers-saved" && i.code !== "answers-not-saved"), issue]);
+    };
+    try {
+      const r = await fetch("/api/apply/answers", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          state,
+          sessionId: sessionId.current ?? "",
+          application: nRef.current,
+          company: companyRef.current,
+          title: titleRef.current,
+          url: /^https?:\/\//i.test(urlRef.current) ? urlRef.current : "",
+          fields: fieldsRef.current.map((f) => ({ id: f.id, type: f.type, label: f.label })),
+          answers: answersRef.current,
+        }),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok || d.error) {
+        note({ level: "warn", code: "answers-not-saved", message: `Your answers weren't saved: ${d.error || `HTTP ${r.status}`}. The form itself is unaffected.` });
+        return false;
+      }
+      if (d.saved) {
+        note({ level: "info", code: "answers-saved", message: d.report ? "Answers saved to this report and your answer bank — the next application starts from them." : "Answers saved to your answer bank — the next application starts from them." });
+      }
+      return !!d.saved;
+    } catch (e) {
+      note({ level: "warn", code: "answers-not-saved", message: `Your answers weren't saved: ${e instanceof Error ? e.message : "network error"}. The form itself is unaffected.` });
+      return false;
+    }
+  }, []);
+  const saveAnswersRef = useRef(saveAnswers);
+  saveAnswersRef.current = saveAnswers;
+
   const fill = useCallback(async () => {
     if (!sessionId.current) return;
     const gen = generation.current;
@@ -339,6 +387,8 @@ export function ApplyProvider({ children }: { children: React.ReactNode }) {
       }
       if (d.navigated) setError("Heads up: the form's page changed during fill — review it carefully before submitting (career-ops never submits for you).");
       setStatus("done");
+      await saveAnswersRef.current("filled");
+      if (generation.current !== gen) return; // left while saving
       // ESCALATION ("si no va, full agente"): if deterministic fill clearly
       // didn't land (most fields failed / mismatched), let the agent fill it.
       const okCount = (d.steps ?? []).filter((s: FillStep) => s.ok).length;
@@ -377,6 +427,7 @@ export function ApplyProvider({ children }: { children: React.ReactNode }) {
       const outcome = screenForFill(result);
       if (outcome.status === "done") {
         setIssues((prev) => [...prev, { level: "info", code: "ai-filled", message: outcome.issue }]);
+        void saveAnswersRef.current("filled");
       } else {
         setError(outcome.error);
       }
@@ -418,8 +469,8 @@ export function ApplyProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const value = useMemo(
-    () => ({ status, url, title, company, n, from, fields, answers, meta, steps, shots, prefillLog, issues, driveSteps, error, open, prefill, setAnswer, fill, agentFill, reset }),
-    [status, url, title, company, n, from, fields, answers, meta, steps, shots, prefillLog, issues, driveSteps, error, open, prefill, setAnswer, fill, agentFill, reset],
+    () => ({ status, url, title, company, n, from, fields, answers, meta, steps, shots, prefillLog, issues, driveSteps, error, open, prefill, setAnswer, fill, agentFill, saveAnswers, reset }),
+    [status, url, title, company, n, from, fields, answers, meta, steps, shots, prefillLog, issues, driveSteps, error, open, prefill, setAnswer, fill, agentFill, saveAnswers, reset],
   );
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }
