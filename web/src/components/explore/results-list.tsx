@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { Search, Plus } from "lucide-react";
+import { Search, Plus, Undo2, X } from "lucide-react";
 import { cn } from "@/lib/cn";
 import type { DiscoveredOffer } from "@/lib/explore";
 import { CHINA_SOURCES } from "@/lib/employer-preset.mjs";
@@ -11,10 +11,12 @@ import { useExplore } from "./explore-provider";
 
 export type EnrichedOffer = DiscoveredOffer & { inPipeline: boolean; evaluatedN?: string };
 
-export function ResultsList({ offers }: { offers: EnrichedOffer[] }) {
-  const { companiesScanned, partial, error, addToPipeline, added, mode, running } = useExplore();
+export function ResultsList({ offers: all }: { offers: EnrichedOffer[] }) {
+  const { companiesScanned, partial, error, addToPipeline, added, mode, running, ignoring, ignoreNotice, ignoreError, undoIgnore, dismissIgnoreError } = useExplore();
+  // Ignored cards leave the list at once; the write waits for the undo window.
+  const offers = useMemo(() => (ignoring.size ? all.filter((o) => !ignoring.has(o.url)) : all), [all, ignoring]);
   const isAi = mode === "ai";
-  const employer = offers.some(o => CHINA_SOURCES.includes(o.source));
+  const employer = all.some(o => CHINA_SOURCES.includes(o.source));
   const [sort, setSort] = useState<"fresh" | "company">("fresh");
   const [q, setQ] = useState("");
 
@@ -87,7 +89,31 @@ export function ResultsList({ offers }: { offers: EnrichedOffer[] }) {
       </div>
 
       {view.length === 0 && (q.trim() || !running) && (
-        <p className="py-10 text-center text-sm text-faint">No results match “{q}”.</p>
+        <p className="py-10 text-center text-sm text-faint">{q.trim() ? <>No results match “{q}”.</> : "No roles left to show."}</p>
+      )}
+
+      {(ignoreNotice || ignoreError) && (
+        <div className="fixed inset-x-0 bottom-20 z-40 flex justify-center px-4 sm:bottom-6">
+          <div className="inline-flex max-w-full flex-wrap items-center gap-3 rounded-2xl border border-border bg-surface px-4 py-2 text-sm shadow-lg">
+            {ignoreError ? (
+              <>
+                <p role="alert" className="min-w-0 flex-1 break-words text-red-600 dark:text-red-400">{ignoreError}</p>
+                <button type="button" onClick={dismissIgnoreError} aria-label="Dismiss" className="inline-flex shrink-0 items-center text-muted hover:text-foreground max-sm:min-h-[44px]">
+                  <X className="size-3.5" />
+                </button>
+              </>
+            ) : ignoreNotice ? (
+              <>
+                <span role="status" className="min-w-0 flex-1 break-words text-muted">
+                  Ignored {ignoreNotice.title} · {ignoreNotice.company}. It won&apos;t come back in future scans.
+                </span>
+                <button type="button" onClick={() => undoIgnore(ignoreNotice.url)} className="inline-flex shrink-0 items-center gap-1 font-medium text-brand max-sm:min-h-[44px]">
+                  <Undo2 className="size-3.5" /> Undo
+                </button>
+              </>
+            ) : null}
+          </div>
+        </div>
       )}
     </div>
   );

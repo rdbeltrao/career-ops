@@ -165,3 +165,16 @@ test("the Explore limit still returns the complete count", () => {
   assert.equal(result.offers.length, MAX_OFFER_LIMIT);
   assert.equal(result.count, MAX_OFFER_LIMIT + 40);
 });
+
+test("an ignored row retires its URL, like an expired one", () => {
+  const rows = [
+    header,
+    "https://example.com/kept\t2026-08-09\ttest\tKept\tAcme\tadded\tRemote",
+    "https://example.com/ignored\t2026-08-09\ttest\tIgnored\tAcme\tadded\tRemote",
+    "https://example.com/ignored\t2026-08-10\texplorer\tIgnored\tAcme\tskipped_ignored\tRemote",
+  ];
+  const result = collectWhatsNew(rows, { cutoff: Date.parse("2026-08-03"), toOffer });
+
+  assert.deepEqual(result.offers.map((o) => o.url), ["https://example.com/kept"]);
+  assert.equal(result.count, 1);
+});

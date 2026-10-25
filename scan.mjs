@@ -1462,9 +1462,17 @@ async function searchForNewUrl(page, offer) {
 
 // ── Dedup ───────────────────────────────────────────────────────────
 
+/**
+ * The status the web Explore page's Ignore button writes for a posting the user
+ * chose to hide. It is permanent: the user decided against this posting, so the
+ * `scan_history.recheck_after_days` window must not bring it back.
+ */
+export const IGNORED_SCAN_HISTORY_STATUS = 'skipped_ignored';
+
 const PERMANENT_SCAN_HISTORY_STATUSES = new Set([
   'skipped_invalid_url',
   'skipped_blocked_host',
+  IGNORED_SCAN_HISTORY_STATUS,
 ]);
 
 /**
