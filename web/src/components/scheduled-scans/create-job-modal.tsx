@@ -2,10 +2,11 @@
 
 import { useRef, useState } from "react";
 import { CalendarPlus, Loader2, Sparkles, X } from "lucide-react";
-import type { ScanEngine } from "@/lib/scheduled-jobs";
+import type { LinkedInSchedule, ScanEngine } from "@/lib/scheduled-jobs";
 import { DEFAULT_FILTERS, type ExploreFilters } from "@/lib/explore";
 import { FilterBuilder } from "@/components/explore/filter-builder";
 import { ScheduledOverlay } from "./scheduled-overlay";
+import { LinkedInScheduleFields } from "./linkedin-schedule-fields";
 import { cadenceMinimum, cadenceValueForUnit, createScheduledJobRequest } from "@/lib/scheduled-job-client.mjs";
 
 export function CreateJobModal({
@@ -27,6 +28,7 @@ export function CreateJobModal({
     positive: [],
     negative: [],
   });
+  const [linkedin, setLinkedIn] = useState<LinkedInSchedule>({ searches: [], useSearchWindow: true });
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
   const nameRef = useRef<HTMLInputElement>(null);
@@ -39,7 +41,7 @@ export function CreateJobModal({
     setError("");
 
     try {
-      await createScheduledJobRequest({ name, engine, every, unit, filters });
+      await createScheduledJobRequest({ name, engine, every, unit, filters, ...(engine === "linkedin" ? { linkedin } : {}) });
 
       onCreated();
       onClose();
@@ -136,9 +138,13 @@ export function CreateJobModal({
             </div>
           </div>
 
-          {/* ─── Reuse FilterBuilder from Explore ─── */}
+          {/* ─── LinkedIn: which saved searches run; otherwise the Explore FilterBuilder ─── */}
           <div className="rounded-xl border border-border bg-surface/30 p-4">
-            <FilterBuilder filters={filters} onChange={setFilters} />
+            {engine === "linkedin" ? (
+              <LinkedInScheduleFields filters={filters} onFiltersChange={setFilters} linkedin={linkedin} onLinkedInChange={setLinkedIn} />
+            ) : (
+              <FilterBuilder filters={filters} onChange={setFilters} />
+            )}
           </div>
 
           {/* ─── Actions ─── */}

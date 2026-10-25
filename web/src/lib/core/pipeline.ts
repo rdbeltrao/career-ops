@@ -82,6 +82,12 @@ process.stdin.on("end", async () => {
 });
 `;
 
+  return runWriterChild(code, clean);
+}
+
+/** Run one writer snippet in a short-lived node child (cwd = the career-ops
+ *  root), feed it `payload` on stdin, and read its one-line JSON answer. */
+function runWriterChild(code: string, payload: unknown): Promise<AddResult> {
   return new Promise((resolve) => {
     const child = spawn(process.execPath, ["--input-type=module", "-e", code], {
       cwd: careerOpsRoot(),
@@ -93,7 +99,62 @@ process.stdin.on("end", async () => {
     child.stderr.on("data", (d: Buffer) => (err += d.toString()));
     child.on("error", (e) => resolve({ added: 0, error: e instanceof Error ? e.message : "spawn failed" }));
     child.on("close", (code, signal) => resolve(pipelineWriterResult(out, err, { code, signal })));
-    child.stdin.write(JSON.stringify(clean));
+    child.stdin.write(JSON.stringify(payload));
     child.stdin.end();
   });
+}
+
+export type IgnoreResult = { ignored: number; error?: string };
+
+/**
+ * "Ignore" — records discovered offers in data/scan-history.tsv under scan.mjs's
+ * IGNORED_SCAN_HISTORY_STATUS (`skipped_ignored`). That status pins the URL for
+ * good, so every later scan, the Explore dry run and the AI search (all of which
+ * read the same history) leave the posting out. Nothing goes to pipeline.md. A
+ * URL that already carries an ignored row gets no second one.
+ */
+export async function ignoreOffers(offers: DiscoveredOffer[]): Promise<IgnoreResult> {
+  const clean = offers
+    .filter((o) => o && typeof o.url === "string" && /^https?:\/\//i.test(o.url))
+    .map((o) => ({
+      url: o.url,
+      company: o.company || "",
+      title: o.title || "",
+      location: o.location || "",
+      postedAt: toCorePostedAt(o.postedAt),
+      source: o.source || o.ats || "explorer",
+    }));
+  if (clean.length === 0) return { ignored: 0 };
+  if (!fs.existsSync(rootScript("scan"))) {
+    return { ignored: 0, error: "This checkout is data-only — the scan history writer (scan.mjs) isn't available." };
+  }
+
+  const scanUrl = pathToFileURL(rootScript("scan")).href;
+  const localTodayUrl = pathToFileURL(path.join(careerOpsCodeRoot(), "lib", "local-today.mjs")).href;
+  const ignoreCode = `
+import { existsSync, readFileSync } from "node:fs";
+import * as scan from ${JSON.stringify(scanUrl)};
+import { localToday } from ${JSON.stringify(localTodayUrl)};
+let input = "";
+process.stdin.setEncoding("utf8");
+process.stdin.on("data", (d) => { input += d; });
+process.stdin.on("end", async () => {
+  try {
+    const offers = JSON.parse(input);
+    const status = scan.IGNORED_SCAN_HISTORY_STATUS;
+    if (typeof status !== "string") throw new Error("scan.mjs is too old to record ignored postings. Update career-ops.");
+    const { appendToScanHistory, unrecordedOffers, SCAN_HISTORY_PATH } = scan;
+    const history = existsSync(SCAN_HISTORY_PATH) ? readFileSync(SCAN_HISTORY_PATH, "utf8") : "";
+    const fresh = unrecordedOffers(offers, status, history);
+    const date = localToday();
+    if (fresh.length > 0) await appendToScanHistory(fresh, date, status);
+    process.stdout.write(JSON.stringify({ added: offers.length }));
+  } catch (e) {
+    process.stdout.write(JSON.stringify({ added: 0, error: String((e && e.message) || e) }));
+  }
+});
+`;
+
+  const result = await runWriterChild(ignoreCode, clean);
+  return result.error ? { ignored: result.added, error: result.error } : { ignored: result.added };
 }

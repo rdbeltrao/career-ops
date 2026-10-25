@@ -62,13 +62,16 @@ test('Explore add preserves a valid posting date in pipeline and scan history', 
   process.env.CAREER_OPS_TRACKER = path.join(tmp, 'data', 'applications.md');
   process.env.CAREER_OPS_PORTALS = path.join(tmp, 'portals.yml');
 
+  // pipeline.ts imports localToday from the code checkout (careerOpsCodeRoot()),
+  // which the shim below points at this repository, so nothing is staged here.
+
   const original = fs.readFileSync(sourcePath, 'utf8');
   const alias = 'import { careerOpsRoot, rootScript, careerOpsCodeRoot } from "@/lib/career-ops";';
   assert.equal(original.split(alias).length - 1, 1,
     'The web writer import changed; update this test rather than testing a mock');
   assert.match(original, /export function addOffersToPipeline\(/);
-  // The data root is disposable; system helpers now resolve from the separate
-  // code root. Exercise that real boundary rather than staging code as data.
+  // Data root: the throwaway folder. Code root: this repository, where the
+  // engine scripts the writer loads (scan.mjs, lib/local-today.mjs) live.
   const shim = `const careerOpsRoot = () => ${JSON.stringify(tmp)};\n`
     + `const careerOpsCodeRoot = () => ${JSON.stringify(repo)};\n`
     + `const rootScript = (name) => {\n`

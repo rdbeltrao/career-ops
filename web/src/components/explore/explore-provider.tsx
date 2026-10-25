@@ -24,6 +24,7 @@ import { isAbortError, isScannerMissing } from "@/lib/explore-error.mjs";
 import { postNdjsonXhr } from "@/lib/post-ndjson-xhr.mjs";
 import { settledExploreUrl } from "@/lib/explore-url.mjs";
 import { createRunOwner } from "@/lib/explore-run.mjs";
+import { createIgnoreQueue, postIgnore } from "@/lib/explore-ignore.mjs";
 
 export type Phase =
   | "idle"
@@ -76,6 +77,16 @@ type ExploreCtx = {
    *  fetched from /api/whats-new, straight into the results phase — no scan. */
   loadFresh: () => Promise<void>;
   addToPipeline: (offers: DiscoveredOffer[]) => Promise<number>;
+  /** URLs hidden by Ignore whose undo window is still open. */
+  ignoring: Set<string>;
+  /** The most recent pending ignore, for the Undo notice; null once it is written or undone. */
+  ignoreNotice: DiscoveredOffer | null;
+  /** The last ignore that failed to save (its card is shown again). */
+  ignoreError: string;
+  /** Hide a posting now; write it to scan history once the undo window closes. */
+  ignoreOffer: (offer: DiscoveredOffer) => void;
+  undoIgnore: (url: string) => void;
+  dismissIgnoreError: () => void;
   applyPatch: (raw: Record<string, unknown>, opts?: { merge?: boolean; run?: boolean }) => void;
   reset: () => void;
   // ── AI search (modes/discover.md) ──
@@ -136,6 +147,8 @@ export function ExploreProvider({ children }: { children: React.ReactNode }) {
   const touched = useRef(false);
   const [phase, setPhase] = useState<Phase>("idle");
   const [offers, setOffers] = useState<DiscoveredOffer[]>([]);
+  const offersRef = useRef(offers);
+  offersRef.current = offers;
   const [sources, setSources] = useState<Partial<Record<DiscoverySource, SourceState>>>({});
   const [matchCount, setMatchCount] = useState(0);
   const [companiesScanned, setCompaniesScanned] = useState(0);
@@ -150,6 +163,9 @@ export function ExploreProvider({ children }: { children: React.ReactNode }) {
   const [scannerMissing, setScannerMissing] = useState(false);
   const [added, setAdded] = useState<Set<string>>(new Set());
   const [adding, setAdding] = useState<Set<string>>(new Set());
+  const [ignoring, setIgnoring] = useState<Set<string>>(new Set());
+  const [ignoreNotice, setIgnoreNotice] = useState<DiscoveredOffer | null>(null);
+  const [ignoreError, setIgnoreError] = useState("");
   const [mode, setModeState] = useState<ExploreMode>("scan");
   const [aiIntent, setAiIntent] = useState("");
   const [aiTrace, setAiTrace] = useState<AiTraceChunk[]>([]);
@@ -433,6 +449,64 @@ export function ExploreProvider({ children }: { children: React.ReactNode }) {
     }
   }, [added, router]);
 
+  // Ignore: hide the card now, write the permanent scan-history row only once the
+  // undo window closes (see lib/explore-ignore.mjs for why the write waits).
+  const ignoreQueue = useRef<ReturnType<typeof createIgnoreQueue<DiscoveredOffer>> | null>(null);
+  if (!ignoreQueue.current) {
+    ignoreQueue.current = createIgnoreQueue<DiscoveredOffer>({
+      commit: async (offer) => {
+        const unhide = () => setIgnoring((s) => {
+          const next = new Set(s);
+          next.delete(offer.url);
+          return next;
+        });
+        setIgnoreNotice((n) => (n?.url === offer.url ? null : n));
+        try {
+          await postIgnore([offer]);
+          // Drop it from the result set too, so a restored snapshot cannot bring it back.
+          if (offersRef.current.some((o) => o.url === offer.url)) {
+            setOffers((list) => list.filter((o) => o.url !== offer.url));
+            setMatchCount((c) => Math.max(0, c - 1));
+          }
+          unhide();
+        } catch (e) {
+          unhide();
+          setIgnoreError(`Could not ignore ${offer.title} at ${offer.company}: ${e instanceof Error ? e.message : "unknown error"}`);
+        }
+      },
+    });
+  }
+
+  const ignoreOffer = useCallback((offer: DiscoveredOffer) => {
+    setIgnoreError("");
+    setIgnoring((s) => new Set([...s, offer.url]));
+    setIgnoreNotice(offer);
+    ignoreQueue.current?.add(offer);
+  }, []);
+
+  const undoIgnore = useCallback((url: string) => {
+    if (!ignoreQueue.current?.undo(url)) return; // already written
+    setIgnoring((s) => {
+      const next = new Set(s);
+      next.delete(url);
+      return next;
+    });
+    setIgnoreNotice((n) => (n?.url === url ? null : n));
+  }, []);
+
+  const dismissIgnoreError = useCallback(() => setIgnoreError(""), []);
+
+  // Leaving the page (or the app shell unmounting) sends what is still pending;
+  // postIgnore uses keepalive so the request outlives the page.
+  useEffect(() => {
+    const flush = () => { void ignoreQueue.current?.flush(); };
+    window.addEventListener("pagehide", flush);
+    return () => {
+      window.removeEventListener("pagehide", flush);
+      flush();
+    };
+  }, []);
+
   const applyPatch = useCallback((raw: Record<string, unknown>, opts?: { merge?: boolean; run?: boolean }) => {
     const next = parseExplorePatch(raw, filtersRef.current, opts?.merge ?? false);
     setFilters(next);
@@ -662,9 +736,10 @@ export function ExploreProvider({ children }: { children: React.ReactNode }) {
       running: phase === "casting" || phase === "scanning" || phase === "revealing" || phase === "hunting",
       offers, sources, matchCount, companiesScanned, companiesAvailable, capHit, droppedNoDate, status, employerOutcome, partial, error, scannerMissing, added, adding,
       discover, loadFresh, addToPipeline, applyPatch, reset,
+      ignoring, ignoreNotice, ignoreError, ignoreOffer, undoIgnore, dismissIgnoreError,
       mode, setMode, aiIntent, setAiIntent, discoverAI, aiTrace, aiCost,
     }),
-    [filters, setFilters, initFilters, phase, offers, sources, matchCount, companiesScanned, companiesAvailable, capHit, droppedNoDate, status, employerOutcome, partial, error, scannerMissing, added, adding, discover, loadFresh, addToPipeline, applyPatch, reset, mode, setMode, aiIntent, discoverAI, aiTrace, aiCost],
+    [filters, setFilters, initFilters, phase, offers, sources, matchCount, companiesScanned, companiesAvailable, capHit, droppedNoDate, status, employerOutcome, partial, error, scannerMissing, added, adding, discover, loadFresh, addToPipeline, applyPatch, reset, ignoring, ignoreNotice, ignoreError, ignoreOffer, undoIgnore, dismissIgnoreError, mode, setMode, aiIntent, discoverAI, aiTrace, aiCost],
   );
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }
