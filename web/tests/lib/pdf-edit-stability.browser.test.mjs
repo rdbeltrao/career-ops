@@ -86,6 +86,18 @@ async function assertInputFrames(inline, baseline) {
   assert.ok(samples.every(y => Math.abs(y - baseline) < 6), `Caret remains anchored throughout input frames: ${JSON.stringify(samples)}`);
 }
 
+async function wordSize(inline, word) {
+  return inline.evaluate((element, word) => {
+    const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT), nodes = []; let node;
+    while ((node = walker.nextNode())) nodes.push(node);
+    const text = nodes.map(node => node.textContent).join(''), start = text.indexOf(word);
+    if (start < 0) throw new Error('Styled fixture word not found');
+    const point = offset => { for (const node of nodes) { if (offset <= node.length) return [node, offset]; offset -= node.length; } };
+    const range = document.createRange(); range.setStart(...point(start)); range.setEnd(...point(start + word.length));
+    const box = range.getBoundingClientRect(); return { width: box.width, height: box.height };
+  }, word);
+}
+
 test('one character at a clicked middle caret keeps the page, scroll and caret stable', { skip: !enabled, timeout: 90_000 }, async t => {
   const { page, frame, inline, errors } = await openEditor(t);
   const originalHeader = await headerPixels(frame.locator('#page'));
@@ -186,5 +198,23 @@ test('typing on a later page keeps the visible caret anchored through pagination
   const next = await caretState(inline());
   assert.equal(next.offset, before.offset + 2);
   assert.ok(Math.abs(next.y - before.y) < 4);
+  assert.deepEqual(errors, []);
+});
+
+test('styled source-font spans retain their geometry through successive live edits', { skip: !enabled, timeout: 90_000 }, async t => {
+  const { frame, inline, errors } = await openEditor(t);
+  await frame.getByRole('button', { name: /^Edit paragraph: Led engineering across web and mobile products/ }).click();
+  const before = await wordSize(inline(), 'design teams');
+  await inline().press('Home');
+  await inline().press('ArrowRight');
+  await inline().pressSequentially('a');
+  await frame.locator('body.live-reflow').waitFor({ state: 'attached' });
+  const caret = await caretState(inline());
+  await traceNextInput(inline());
+  await inline().pressSequentially('b');
+  await assertInputFrames(inline(), caret.y);
+  const after = await wordSize(inline(), 'design teams');
+  assert.ok(Math.abs(after.width - before.width) < 1, `The styled source font retains its advance widths: ${JSON.stringify({ before, after })}`);
+  assert.ok(Math.abs(after.height - before.height) < 1);
   assert.deepEqual(errors, []);
 });
