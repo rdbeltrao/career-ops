@@ -12,9 +12,11 @@
  * never writes the tracker, a report or any other file.
  *
  * PRIMARY SOURCES (the AGENTS.md "Primary / user-authored" tier that carries
- * facts): `cv.md`, `article-digest.md`, `config/profile.yml` (through
- * getProfilePath(), so CAREER_OPS_PROFILE is honored) and `modes/_profile.md`,
- * all under the data root. A missing file is reported and ignored.
+ * facts): `modes/_context.md` (the source of truth about the candidate, so a
+ * notion-sync makes every earlier evaluation stale), `cv.md`,
+ * `article-digest.md`, `config/profile.yml` (through getProfilePath(), so
+ * CAREER_OPS_PROFILE is honored) and `modes/_profile.md`, all under the data
+ * root. A missing file is reported and ignored.
  *
  * WHEN A SOURCE LAST CHANGED
  *   - git: the file is tracked in the git repository that contains it and has
@@ -73,7 +75,7 @@ const STATES_FILE = join(CODE_ROOT, 'templates/states.yml');
 export const DEFAULT_STATUS = 'Evaluated';
 
 /** Primary sources, by the name the output uses. Order is the display order. */
-export const SOURCE_NAMES = ['cv.md', 'article-digest.md', 'config/profile.yml', 'modes/_profile.md'];
+export const SOURCE_NAMES = ['modes/_context.md', 'cv.md', 'article-digest.md', 'config/profile.yml', 'modes/_profile.md'];
 
 /** Only the report header is read; a report's archived JD can run long. */
 const MAX_REPORT_BYTES = 64 * 1024;
@@ -202,6 +204,7 @@ export function sourceChange(name, path) {
 /** Every primary source under the data root, with its last-change day. */
 export function primarySourceChanges(dataRoot, { profilePath = getProfilePath() } = {}) {
   const paths = {
+    'modes/_context.md': join(dataRoot, 'modes', '_context.md'),
     'cv.md': join(dataRoot, 'cv.md'),
     'article-digest.md': join(dataRoot, 'article-digest.md'),
     'config/profile.yml': profilePath,

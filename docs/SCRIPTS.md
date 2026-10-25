@@ -48,7 +48,7 @@ All scripts live in the project root as `.mjs` modules. Most are exposed via
 | `npm run paste-reply` | `paste-reply.mjs` | Manual/no-Gmail input into the `reply-watch.mjs` classification pipeline |
 | `npm run closing-soon` | `closing-soon.mjs` | List tracker rows whose Notes (or matching `jds/` capture) carry a closing date within N days, plus separate `overdue` and `unparsed` groups (read-only) |
 | `npm run close-stale` | `close-stale.mjs` | Close long-silent `Applied` rows in bulk (dry run by default; `--confirm` writes through the locked tracker path, tags the note and logs each transition) |
-| `npm run reeval-candidates` | `reeval-candidates.mjs` | List `Evaluated` tracker rows whose last evaluation predates the latest change to `cv.md`, `article-digest.md`, `config/profile.yml` or `modes/_profile.md` (read-only) |
+| `npm run reeval-candidates` | `reeval-candidates.mjs` | List `Evaluated` tracker rows whose last evaluation predates the latest change to `modes/_context.md`, `cv.md`, `article-digest.md`, `config/profile.yml` or `modes/_profile.md` (read-only) |
 | `npm run freshness` | `check-table-freshness.mjs` | Staleness validator for jurisdiction data tables (`as_of` / `next_effective` watchdog) |
 | `npm run jd-archive` | `check-jd-archive.mjs` | Validate every `reports/*.md` has an archived JD (embedded section or `jds/` capture) — flags `missing-jd-archive` |
 | `npm run openai:tailor` | `openai-tailor.mjs` | Tailor a CV via any OpenAI-compatible endpoint (headless companion to `openai-eval.mjs`) |

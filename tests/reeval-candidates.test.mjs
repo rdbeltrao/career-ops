@@ -208,6 +208,19 @@ eq('report links: Notes are read only when the Report cell has no link',
     eq('rows checked: every Evaluated row, alias status included', r.rowsChecked, 6);
     eq('latest source change is reported', r.latestSourceChange, { source: 'cv.md', changed: '2026-10-05', basis: 'git' });
 
+    // modes/_context.md is the source of truth: a sync after the evaluation
+    // makes the row stale even when cv.md never changed.
+    const contextOnly = computeReevalCandidates(TRACKER, {
+      sources: [
+        { source: 'modes/_context.md', exists: true, changed: '2026-10-20', basis: 'git' },
+        { source: 'cv.md', exists: true, changed: '2026-08-01', basis: 'git' },
+      ],
+      statuses: evaluated, linkDirs, dataRoot: dir,
+    });
+    eq('a context change alone makes earlier evaluations candidates',
+      contextOnly.candidates.find(c => c.num === 1)?.changedSince,
+      [{ source: 'modes/_context.md', changed: '2026-10-20', basis: 'git' }]);
+
     const withApplied = computeReevalCandidates(TRACKER, {
       sources, statuses: resolveStatusFilter('Evaluated,Applied'), linkDirs, dataRoot: dir,
     });
@@ -252,7 +265,7 @@ eq('report links: Notes are read only when the Report cell has no link',
       eq('CLI: default status is Evaluated', out.metadata.statuses, ['Evaluated']);
       eq('CLI: candidates from the mtime data root', out.candidates.map(c => c.num), [4, 1]);
       eq('CLI: sources are shown relative to the data root', out.sources.map(s => s.path),
-        ['cv.md', 'article-digest.md', 'config/profile.yml', 'modes/_profile.md']);
+        ['modes/_context.md', 'cv.md', 'article-digest.md', 'config/profile.yml', 'modes/_profile.md']);
       ok('CLI: every source is labelled mtime', out.sources.every(s => s.basis === 'mtime'));
     }
 
