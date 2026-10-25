@@ -560,3 +560,29 @@ test("buildPrompt: a split data root is named up front; the default layout adds 
   assert.equal(plain.includes("RUNTIME PATHS"), false);
   assert.equal(buildPrompt({ kind: "evaluate", ...ARGS, dataRoot: "" }).includes("RUNTIME PATHS"), false);
 });
+
+// ── evaluate reads a JD the backend already fetched (jd-prefetch.mjs) ────────
+// The evaluate worker has no Bash, so it cannot run fetch-jd.mjs, and WebFetch on
+// a JavaScript-rendered board (Ashby, Workday, LinkedIn) returns an empty shell.
+// Every such run stopped on the "posting appears closed" rule and saved no report.
+
+test("buildPrompt: evaluate with a prefetched JD reads that file instead of WebFetching the posting", () => {
+  const jdFile = "/data/.career-ops-web/jd-prefetch/jd-0123456789abcdef.md";
+  const prompt = buildPrompt({ kind: "evaluate", input: "https://jobs.ashbyhq.com/acme/1", memory: "", today: "2026-10-25", jdFile });
+  assert.ok(prompt.includes(JSON.stringify(jdFile)), "the file path must be named, JSON-quoted");
+  assert.match(prompt, /UNTRUSTED/, "the file is posting text and must be framed as data");
+  assert.match(prompt, /Do NOT WebFetch the posting page/);
+  assert.doesNotMatch(prompt, /unconfirmed \(batch mode\)/, "the ATS API confirmed the posting");
+  // The stop rule survives: a file that is not this job still stops the run.
+  assert.match(prompt, /STOP BEFORE BLOCK A/);
+  assert.match(prompt, /posting appears closed/i);
+  assert.match(prompt, /do not generate an evaluation, a report or a CV/i);
+  assert.ok(prompt.includes(REPORT_OPEN), "the envelope instruction is unchanged");
+});
+
+test("buildPrompt: evaluate without a prefetched JD keeps the WebFetch path", () => {
+  const prompt = buildPrompt({ kind: "evaluate", input: "https://example.com/jobs/9", memory: "", today: "2026-10-25" });
+  assert.match(prompt, /Use WebFetch to read the posting/);
+  assert.match(prompt, /unconfirmed \(batch mode\)/);
+  assert.doesNotMatch(prompt, /jd-prefetch/);
+});
