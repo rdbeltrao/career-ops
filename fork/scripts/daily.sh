@@ -5,9 +5,12 @@
 # Scheduled by ~/Library/LaunchAgents/com.rdbeltrao.career-ops-daily.plist.
 set -u
 export PATH="$HOME/.nvm/versions/node/v22.21.1/bin:$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
-export HOME="${HOME:-/Users/renatobeltrao}"
-CHECKOUT="/Users/renatobeltrao/Projects/career-ops"
-DATA_ROOT="/Users/renatobeltrao/Projects/job-hunt-private"
+# The checkout is two levels above this script; the data root is whatever
+# path-resolver.mjs resolves there (.career-ops-data marker or the env vars),
+# so this script carries no machine-specific path.
+CHECKOUT="$(cd "$(dirname "$0")/../.." && pwd)"
+DATA_ROOT="$(cd "$CHECKOUT" && node -e "import('./path-resolver.mjs').then(m => process.stdout.write(m.getCareerOpsRoot()))")"
+[ -n "$DATA_ROOT" ] || exit 1
 LOG="$DATA_ROOT/output/logs/daily-$(date +%F).log"
 cd "$CHECKOUT" || exit 1
 {
