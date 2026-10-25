@@ -74,6 +74,7 @@ import { compileKeyword, compilePositiveKeyword, compileContentKeyword, buildTit
 import { flagValue, hasFlag, validateFlags } from './lib/cli-flags.mjs';
 import { withPortalHealthLock } from './portal-health-lock.mjs';
 import { localToday } from './lib/local-today.mjs';
+import { startJevPass } from './lib/jev-auto.mjs';
 import { printScanSummaryHeader } from './lib/scan-summary-marker.mjs';
 import { isMainModule } from './lib/is-main-module.mjs';
 import { SCAN_HISTORY_COLUMNS, parseScanHistoryLine } from './lib/scan-history-columns.mjs';
@@ -3410,9 +3411,27 @@ Paste job URLs below as \`- [ ] {url}\` then run \`/career-ops pipeline\`.
 // read-modify-write and silently drop each other's offers.
 // Same seam as loadSeenUrls above: the default is the CAREER_OPS_ROOT-anchored
 // module constant; a caller with its own lane (or a fixture) passes the path.
-export async function appendToPipeline(offers, { pipelinePath = PIPELINE_PATH } = {}) {
+//
+// Once the rows are written, the Jev pre-screen starts in the background on
+// them (lib/jev-auto.mjs), so every ingestion path scores what it adds without
+// waiting for it. `startJev` is the seam for tests; CAREER_OPS_NO_AUTO_JEV=1
+// turns it off.
+export async function appendToPipeline(offers, { pipelinePath = PIPELINE_PATH, startJev = startJevPass } = {}) {
   if (offers.length === 0) return;
+  await writePipelineOffers(offers, pipelinePath);
+  const dataRoot = dataRootForPipeline(pipelinePath);
+  if (dataRoot) startJev({ dataRoot });
+}
 
+// jev-rank.mjs reads `<data root>/data/pipeline.md`; a pipeline anywhere else
+// (a caller's own lane) is not one it can score.
+function dataRootForPipeline(pipelinePath) {
+  const resolved = path.resolve(pipelinePath);
+  if (path.basename(resolved) !== 'pipeline.md' || path.basename(path.dirname(resolved)) !== 'data') return null;
+  return path.dirname(path.dirname(resolved));
+}
+
+async function writePipelineOffers(offers, pipelinePath) {
   await withPipelineLock(pipelinePath, async () => {
     // Auto-create with standard skeleton if missing (fresh-install guard).
     let text = existsSync(pipelinePath)

@@ -31,6 +31,11 @@ export const NODE = process.execPath;
 // overwritten by a later .env load (#4707 did the same for one test and
 // CAREER_OPS_PIPELINE). A test that needs the override sets its own.
 process.env.CAREER_OPS_TRACKER = '';
+// appendToPipeline() starts a background Jev pass after every write
+// (lib/jev-auto.mjs). A suite run as a plain `node` process (not node --test,
+// which sets NODE_TEST_CONTEXT) must not start one: it would call OpenRouter
+// with a real key from the Keychain against fixture rows.
+process.env.CAREER_OPS_NO_AUTO_JEV = '1';
 
 // The same rule for the data root itself, which is where everything else a
 // script reads and writes is resolved from (#5113). Left alone, the suite ran

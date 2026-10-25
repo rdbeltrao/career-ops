@@ -34,13 +34,15 @@
  * candidate for a Jev segment).
  */
 
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { flagValue, hasFlag, safeIntFlag, validateFlags } from './lib/cli-flags.mjs';
 import { isMainModule } from './lib/is-main-module.mjs';
 import { getCareerOpsRoot, getProfilePath } from './path-resolver.mjs';
 import { withPipelineLock } from './pipeline-lock.mjs';
+import { acquireDirLock, releaseOrWarn, tryAcquireDirLockSync } from './lib/dir-lock.mjs';
+import { jevLockDir, jevRerunMarker } from './lib/jev-auto.mjs';
 import { resolveOpenRouterKey } from './lib/openrouter-key.mjs';
 import { loadCriteria } from './lib/jev-criteria.mjs';
 import { readJdForUrl } from './lib/jd-store.mjs';
@@ -59,9 +61,12 @@ const LABELED_SEGMENT = /^[a-z_]+:(\s|$)/i;
 const USAGE = `
   jev-rank.mjs — zero-token Jev pass over pending pipeline rows (annotates, never filters)
 
-  node jev-rank.mjs [--limit N] [--dry-run] [--no-fetch]
+  node jev-rank.mjs [--limit N] [--dry-run] [--no-fetch] [--auto]
 
     --limit N     max rows to score this run (default ${DEFAULT_LIMIT}, ceiling ${LIMIT_CEILING})
+    --auto        the background pass ingestion starts (lib/jev-auto.mjs): if
+                  another pass is running, ask it to go again and exit; else
+                  score up to ${LIMIT_CEILING} rows and repeat while rows keep arriving
     --dry-run     print the annotations, write nothing
     --no-fetch    only rows with a stored JD (jds/feeder/); never call an ATS API
     --self-test   run the in-memory suite (no network)
@@ -71,7 +76,13 @@ const USAGE = `
   counted as "without JD". Key: OPENROUTER_API_KEY_JOB_SEARCH or
   OPENROUTER_API_KEY (env, .env, macOS Keychain); exit 2 without one.
 `;
-const KNOWN_FLAGS = ['--limit', '--dry-run', '--no-fetch', '--self-test', '--help', '-h'];
+const KNOWN_FLAGS = ['--limit', '--dry-run', '--no-fetch', '--auto', '--self-test', '--help', '-h'];
+// An --auto pass that keeps being asked to go again stops after this many, so a
+// writer stuck in a loop cannot keep it alive forever; the next write restarts it.
+const MAX_AUTO_PASSES = 10;
+// A manual run waits this long for a running pass before giving up.
+const MANUAL_LOCK_WAIT_MS = 30 * 60 * 1000;
+const LOCK_STALE_MS = 60 * 60 * 1000;
 const VALUE_FLAGS = ['--limit'];
 
 // ── row parsing ───────────────────────────────────────────────────────────────
@@ -277,6 +288,49 @@ export async function main(args, deps = {}) {
   const log = deps.log ?? ((line) => console.error(line));
   const out = deps.out ?? ((line) => console.log(line));
   const dataRoot = deps.dataRoot ?? getCareerOpsRoot();
+  const auto = hasFlag(args, '--auto');
+  const dryRun = hasFlag(args, '--dry-run');
+  // A dry run writes nothing, and a data root with no pipeline has nothing to
+  // score: neither needs the lock (nor a data/ directory created for it).
+  if (dryRun || !existsSync(join(dataRoot, 'data', 'pipeline.md'))) return runPass(args, { ...deps, log, out, dataRoot });
+
+  // One pass at a time per data root: two concurrent passes would pay for the
+  // same rows twice. Ingestion starts an --auto pass after every write, so the
+  // lock is routinely contended.
+  const lockDir = jevLockDir(dataRoot);
+  const marker = jevRerunMarker(dataRoot);
+  const lockOptions = { staleMs: LOCK_STALE_MS, owner: { script: 'jev-rank' }, createParent: true };
+  let lock;
+  if (auto) {
+    lock = tryAcquireDirLockSync(lockDir, lockOptions);
+    if (!lock) {
+      writeFileSync(marker, '');
+      out('jev-rank: another pass is running; it will score the new rows when it finishes.');
+      return 0;
+    }
+  } else {
+    lock = await acquireDirLock(lockDir, { ...lockOptions, timeoutMs: MANUAL_LOCK_WAIT_MS, retryMs: 250 });
+  }
+
+  try {
+    if (!auto) return await runPass(args, { ...deps, log, out, dataRoot });
+    const passArgs = hasFlag(args, '--limit') ? args : [...args, '--limit', String(LIMIT_CEILING)];
+    let code = 0;
+    for (let pass = 1; pass <= MAX_AUTO_PASSES; pass += 1) {
+      rmSync(marker, { force: true });
+      out(`jev-rank --auto: pass ${pass} at ${new Date().toISOString()}`);
+      code = await runPass(passArgs, { ...deps, log, out, dataRoot });
+      if (code !== 0 || !existsSync(marker)) break;
+    }
+    return code;
+  } finally {
+    releaseOrWarn(lock);
+  }
+}
+
+/** One scoring pass over the pending rows; see main() for the locking around it. */
+async function runPass(args, deps) {
+  const { log, out, dataRoot } = deps;
   const env = deps.env ?? process.env;
 
   const dryRun = hasFlag(args, '--dry-run');
