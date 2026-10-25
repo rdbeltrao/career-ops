@@ -3,7 +3,7 @@
 import { startTransition, useCallback, useDeferredValue, useEffect, useMemo, useOptimistic, useRef, useState, useTransition } from "react";
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { Search, ChevronsUpDown, X, Compass, ArrowRight, ExternalLink, Download } from "lucide-react";
+import { Search, ChevronsUpDown, ChevronRight, X, Compass, ArrowRight, ExternalLink, Download } from "lucide-react";
 import type { Application, InboxJob } from "@/lib/career-ops";
 import { Badge } from "@/components/ui/badge";
 import { jevTone, jevLabel } from "@/lib/jev-presentation";
@@ -22,6 +22,7 @@ import { PIPELINE_TABS, pipelineQuery, pipelineTab } from "@/lib/pipeline-naviga
 import { COMPARE_MAX } from "@/lib/pipeline-compare.mjs";
 import { postingHref, postingLabel } from "@/lib/posting-url.mjs";
 import { trackerCsv, trackerCsvFilename } from "@/lib/tracker-csv.mjs";
+import { groupSimilarApplications } from "@/lib/pipeline-groups.mjs";
 
 type Tab = (typeof PIPELINE_TABS)[number];
 
@@ -50,6 +51,8 @@ export function PipelineView({
   const [bulkStatus, setBulkStatus] = useState("");
   const [bulkBusy, setBulkBusy] = useState(false);
   const [bulkError, setBulkError] = useState("");
+  const [groupListings, setGroupListings] = useState(true);
+  const [expandedGroups, setExpandedGroups] = useState<ReadonlySet<string>>(new Set());
   const activeTab = useRef<HTMLButtonElement>(null);
 
   // The URL is the SINGLE source of truth for tab/min/sort/dir, so the home stat
@@ -132,8 +135,17 @@ export function PipelineView({
     ) as Application[];
   }, [visibleApplications, tab, deferredQ, sort, minFilter]);
 
-  const filteredKeys = filtered.map(applicationKey);
-  const selectedRows = filtered.filter((r) => selected.has(applicationKey(r)));
+  const groups = useMemo(() => groupSimilarApplications(filtered), [filtered]);
+  const displayRows = !groupListings
+    ? filtered.map((r) => ({ r, group: { key: applicationKey(r), rows: [r] }, child: false }))
+    : groups.flatMap((group) => {
+      const expanded = expandedGroups.has(group.key);
+      return (expanded ? group.rows : group.rows.slice(0, 1)).map((r, index) => ({ r, group, child: index > 0 }));
+    });
+  // Selection only covers visible records. Expanding a group never silently
+  // selects its other sources, and bulk saves never change collapsed records.
+  const filteredKeys = displayRows.map(({ r }) => applicationKey(r));
+  const selectedRows = displayRows.map(({ r }) => r).filter((r) => selected.has(applicationKey(r)));
   const allSelected = filteredKeys.length > 0 && filteredKeys.every((k) => selected.has(k));
 
   function toggleRow(key: string) {
@@ -194,7 +206,7 @@ export function PipelineView({
               type="button"
               onClick={downloadCsv}
               disabled={isPending || filtered.length === 0}
-              title={`Download the ${filtered.length} row${filtered.length === 1 ? "" : "s"} shown as a CSV file`}
+              title={`Download all ${filtered.length} matching listing${filtered.length === 1 ? "" : "s"} as a CSV file`}
               className="inline-flex items-center gap-1.5 whitespace-nowrap rounded-md border border-border bg-surface/60 px-3 py-2 text-sm text-muted transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-brand/40 disabled:cursor-not-allowed disabled:opacity-50 max-sm:min-h-[44px] max-sm:min-w-[44px] max-sm:justify-center max-sm:px-0"
             >
               <Download aria-hidden="true" className="size-4" />
@@ -236,6 +248,19 @@ export function PipelineView({
       </div>
 
       <p role="status" className="sr-only">{announcement}</p>
+
+      {visibleTab !== "INBOX" && groups.length < filtered.length && (
+        <div className="mt-3 flex flex-wrap items-center gap-3 text-xs text-muted">
+          <span>{displayRows.length} shown · {filtered.length} matching listings</span>
+          <button
+            type="button"
+            onClick={() => setGroupListings((value) => !value)}
+            className="rounded px-2 py-1 text-brand hover:underline focus-visible:ring-2 focus-visible:ring-brand/40"
+          >
+            {groupListings ? "Show all listings" : "Group similar listings"}
+          </button>
+        </div>
+      )}
 
       {visibleTab !== "INBOX" && minFilter != null && (
         <div className="mt-3 flex items-center gap-2">
@@ -351,13 +376,13 @@ export function PipelineView({
             {/* Keep editors mounted while query navigation is pending: sorting
                 must not discard an open editor or an in-flight status save. */}
             <tbody className="divide-y divide-border" hidden={isPending} aria-busy={false}>
-              {filtered.map((r) => {
+              {displayRows.map(({ r, group, child }) => {
                 const company = companyPresentation(r);
                 const key = applicationKey(r);
                 const detailHref = `/pipeline/${encodeURIComponent(r.n)}${detailQuery ? `?${detailQuery}` : ""}`;
                 const posting = postingHref(r.url);
                 return (
-                  <tr key={key} data-application-key={key} className="group transition-colors hover:bg-surface/40">
+                  <tr key={key} data-application-key={key} className={cn("group transition-colors hover:bg-surface/40", groupListings && child && "bg-surface/20")}>
                     <td className="w-8 px-3 py-3">
                       <input
                         type="checkbox"
@@ -376,6 +401,23 @@ export function PipelineView({
                         <CompanyLogo name={company.logoName} size={20} />
                         {company.label}
                       </Link>
+                      {groupListings && !child && group.rows.length > 1 && (
+                        <button
+                          type="button"
+                          aria-expanded={expandedGroups.has(group.key)}
+                          aria-label={`${expandedGroups.has(group.key) ? "Collapse" : "Expand"} ${group.rows.length} similar listings for ${company.label}, ${r.role}`}
+                          onClick={() => setExpandedGroups((previous) => {
+                            const next = new Set(previous);
+                            if (next.has(group.key)) next.delete(group.key);
+                            else next.add(group.key);
+                            return next;
+                          })}
+                          className="mt-1 inline-flex items-center gap-1 rounded px-1 py-1 text-xs font-normal text-brand hover:underline focus-visible:ring-2 focus-visible:ring-brand/40"
+                        >
+                          <ChevronRight aria-hidden="true" className={cn("size-3 transition-transform", expandedGroups.has(group.key) && "rotate-90")} />
+                          {group.rows.length} similar listings
+                        </button>
+                      )}
                     </td>
                   <td className="px-4 py-3 text-muted">
                     <div className="flex items-center gap-2">
