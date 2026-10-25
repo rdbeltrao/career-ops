@@ -79,23 +79,42 @@ test('direct PDF typing, AI preview, styled recovery and document lifecycle', { 
   assert.equal((await inline().innerText()).replace(/\s+/g, ' ').trim(), descriptor);
   assert.equal(await inline().locator('span').evaluateAll(spans => spans.some(span => getComputedStyle(span).fontStyle === 'italic' || (span.dataset.italic === '1' && !!span.dataset.docfont))), true);
   await inline().press('Escape');
-  // Moving Education before Work Experience transfers its whole block from
-  // page 2, while history restores both pages atomically.
-  await frame.locator('#career-next').click();
+  await inline().waitFor({ state: 'hidden' });
+  // A prior text edit may already have compacted Education onto page 1.
+  // Movement and history must retain the complete section either way.
+  const baselinePages = savedPages();
+  const educationPage = baselinePages.findIndex(paragraphs => paragraphs.some(p => p.text === 'Education'));
+  const showPage = async index => {
+    let current = Number((await frame.locator('#career-page').innerText()).match(/Page (\d+) of/)[1]) - 1;
+    while (current !== index) {
+      await frame.locator(current < index ? '#career-next' : '#career-prev').click();
+      current += current < index ? 1 : -1;
+      await frame.locator('#career-page').filter({ hasText: `Page ${current + 1} of` }).waitFor();
+    }
+  };
+  await showPage(educationPage);
   const education = frame.getByRole('button', { name: 'Select section: Education', exact: true });
   await education.waitFor();
+  await education.evaluate(element => element.scrollIntoView({ block: 'center' }));
   const start = await education.boundingBox();
   assert.ok(start);
   await page.mouse.move(start.x + start.width / 2, start.y + start.height / 2);
   await page.mouse.down();
   await page.mouse.move(start.x + start.width / 2 + 20, start.y + start.height / 2 + 10, { steps: 5 });
   const destination = frame.getByRole('button', { name: 'Drop section before work experience', exact: true });
-  await destination.waitFor({ state: 'visible' });
+  try {
+    await destination.waitFor({ state: 'visible' });
+  } catch (error) {
+    await page.screenshot({ path: path.join(root, 'section-drag-failure.png') });
+    console.error(`Section drag status: ${await frame.locator('#career-status').innerText()}`);
+    console.error(`Section drag handle: ${await education.getAttribute('title')}; bounds ${JSON.stringify(start)}`);
+    throw error;
+  }
   const drop = await destination.boundingBox();
   assert.ok(drop);
   await page.mouse.move(drop.x + drop.width / 2, drop.y + drop.height / 2, { steps: 12 });
   await page.mouse.up();
-  await frame.getByText('Whole section moved. Review the page layout before saving.', { exact: true }).waitFor();
+  await frame.getByText('Section moved. The PDF pages have adjusted automatically.', { exact: true }).waitFor();
   await page.getByRole('button', { name: 'Save PDF', exact: true }).click();
   await page.getByText('PDF saved. The previous version is available below.').waitFor();
   const movedPages = savedPages();
@@ -104,14 +123,16 @@ test('direct PDF typing, AI preview, styled recovery and document lifecycle', { 
   assert.ok(!movedPages[1].some(p => /Education|Fictional education/.test(p.text)));
   assert.ok(movedPages[0].find(p => p.text === 'Education').box.top > movedPages[0].find(p => p.text === 'Work Experience').box.top);
   await page.getByRole('button', { name: 'Undo', exact: true }).click();
+  await showPage(educationPage);
   await education.waitFor();
   await page.getByRole('button', { name: 'Redo', exact: true }).click();
-  await frame.locator('#career-prev').click();
+  await showPage(0);
   await education.waitFor();
   await page.getByRole('button', { name: 'Undo', exact: true }).click();
   await page.getByRole('button', { name: 'Save PDF', exact: true }).click();
   await page.getByText('PDF saved. The previous version is available below.').waitFor();
-  assert.ok(savedPages()[1].some(p => p.text === 'Education'));
+  assert.deepEqual(savedPages().map(paragraphs => paragraphs.map(p => p.text)), baselinePages.map(paragraphs => paragraphs.map(p => p.text)));
+  await showPage(0);
   await frame.getByRole('button', { name: 'Select section: Professional Summary', exact: true }).click();
   await page.evaluate(() => localStorage.setItem('career-ops:config', JSON.stringify({ cliId: 'codex' })));
   await page.route('**/api/documents/*/rewrite', route => {
@@ -123,10 +144,10 @@ test('direct PDF typing, AI preview, styled recovery and document lifecycle', { 
   await page.getByLabel('What should change?').fill('Make the wording concise.');
   await page.getByRole('button', { name: 'Preview with AI', exact: true }).click();
   await page.getByRole('button', { name: 'Reject', exact: true }).waitFor();
-  const preview = frame.getByRole('img', { name: 'AI preview: Engineering leader building products.', exact: true });
-  await preview.waitFor();
+  const preview = frame.getByRole('region', { name: 'AI rewrite preview', exact: true }).filter({ hasText: 'Engineering leader building products.' });
+  await preview.waitFor({ state: 'attached' });
   await frame.locator('#pageWrap').click({ position: { x: 5, y: 5 }, force: true });
-  await preview.waitFor();
+  await preview.waitFor({ state: 'attached' });
   assert.match(savedText(), /Engineering leader delivering products\./);
   assert.equal(await page.getByRole('button', { name: 'Save PDF', exact: true }).isDisabled(), true);
   await page.getByRole('button', { name: 'Reject', exact: true }).click();
