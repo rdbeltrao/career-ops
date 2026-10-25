@@ -20,8 +20,11 @@ export type Session = { state: SessionState; busy: boolean; signedInAt: string; 
 export type CrawlStatus = { result: "ok" | "login-required" | "error"; search: string; jobs?: number; message: string; at: string };
 export type SearchView = LinkedInSearch & { description: ReturnType<typeof describeSearchUrl> };
 export type ScheduleView = { id: string; name: string; engine: ScanEngine; every: number; unit: string; status: string; nextRunAt?: string; lastRunAt?: string };
+/** The portals.yml filters a LinkedIn schedule keeps unless it sets its own. */
+export type PortalsFilters = { positive: string[]; negative: string[]; allow: string[] };
 export type LinkedInState = {
   searches: SearchView[];
+  portalsFilters: PortalsFilters;
   session: Session | null;
   crawl: CrawlStatus | null;
   schedules: ScheduleView[];
@@ -49,11 +52,14 @@ export async function loadLinkedInState(): Promise<LinkedInState> {
   const file = portalsConfigPath(root);
   let searches: SearchView[] = [];
   let portalsFound = false;
+  let portalsFilters: PortalsFilters = { positive: [], negative: [], allow: [] };
   let error: string | undefined;
   try {
-    const doc = yaml.load(fs.readFileSync(/* turbopackIgnore: true */ file, "utf8"));
+    const doc = yaml.load(fs.readFileSync(/* turbopackIgnore: true */ file, "utf8")) as Record<string, Record<string, unknown>> | null;
     portalsFound = true;
     searches = listLinkedInSearches(doc).map((s) => ({ ...s, description: describeSearchUrl(s.searchUrl) }));
+    const strings = (v: unknown) => (Array.isArray(v) ? v.filter((x): x is string => typeof x === "string" && !!x.trim()) : []);
+    portalsFilters = { positive: strings(doc?.title_filter?.positive), negative: strings(doc?.title_filter?.negative), allow: strings(doc?.location_filter?.allow) };
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code !== "ENOENT") error = `portals.yml could not be read: ${err instanceof Error ? err.message : String(err)}`;
   }
@@ -65,7 +71,7 @@ export async function loadLinkedInState(): Promise<LinkedInState> {
   const schedules = listScheduledJobs()
     .jobs.filter((j) => j.status !== "deleted" && (j.engine === "portals" || j.engine === "linkedin"))
     .map((j) => ({ id: j.id, name: j.name, engine: j.engine, every: j.every, unit: j.unit, status: j.status, nextRunAt: j.nextRunAt, lastRunAt: j.lastRunAt }));
-  return { searches, session, crawl, schedules, portalsFound, ...(error ? { error } : {}) };
+  return { searches, portalsFilters, session, crawl, schedules, portalsFound, ...(error ? { error } : {}) };
 }
 
 /** Apply one add / update / toggle request to portals.yml (backup kept, atomic write). */
