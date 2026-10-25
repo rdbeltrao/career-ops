@@ -6,6 +6,16 @@ Optional passes:
 
 ## Full pipeline
 
+**When a Context library exists:** current Context pages supply career facts and
+preferences throughout this pipeline. References below to facts in `cv.md`, the
+old profile or the digest describe the legacy path; they do not create a second
+authority. The skill-gap and fact commands read Context directly. CV title,
+structure and ordering comparisons are optional comparisons with a previous
+output, run only if that draft exists. They cannot override corrected Context
+facts or block a first CV because no old draft exists. Check historical titles,
+dates, skills and attribution against the career-fact pages instead. Operational
+settings such as output language and template remain configuration settings.
+
 **Locked Sections:** If `cv.locked_sections` is defined in `profile.yml`, NEVER remove, shorten, or paraphrase those sections during CV generation or tailoring. They must appear verbatim.
 
 ## Application-scoped artifacts
@@ -14,7 +24,11 @@ When a CV is reused or lightly tailored for an existing application, initialize 
 
 Run `npm run jd:similarity -- {bundle-root}/jd/current.md {bundle-root}/jd/previous.md` when both comparison sources exist. Record the visible decision (`reuse`, `reuse-with-edits`, or `regenerate`), score, source CV/JD paths, and changed sections in `decision/reuse.json`. Strongly discourage applications scoring below 4.0/5 and proceed only when the user explicitly overrides that recommendation. Reuse only after a visible `reuse` result or an explicit user override; never silently reuse when a source is missing. The PDF manifest supports these nested paths and continues to link them to the report. Flat `output/` paths remain valid for one-off PDFs.
 
-1. Read `cv.md` as the source of truth
+1. Run `node context-evidence.mjs` first. When it reports a Context library, use
+   its current pages as the source of truth, respecting page purpose, attribution
+   and uncertainty markers. `cv.md` is an optional previous draft/layout reference,
+   never competing evidence. Without a library, use the existing context/profile
+   files and `cv.md`. A broken library must be repaired, not bypassed.
 2. Ask the user for the JD if it is not in context (text or URL)
    For a new posting (no tracker row yet), run `node precheck-duplicate.mjs --company "$COMPANY" --title "$TITLE" [--url "$URL"] [--req "$REQ"]` once first (read-only, advisory; pass `--url` when the JD came as a URL and `--req` when the posting shows a requisition ID; set each variable from the posting with single quotes or pass an argument array, never paste posting text into the command string) and surface any hit before drafting.
 3. Extract 15-20 keywords from the JD
@@ -70,7 +84,9 @@ Run `npm run jd:similarity -- {bundle-root}/jd/current.md {bundle-root}/jd/previ
 18. Run `node build-cv-html.mjs /tmp/cv-{candidate}[-{report}]-{company}.json {html-path} {template}`, where `{html-path}` is the active bundle's `cv/tailored/vNNN/cv.html` or `output/cv-{candidate}-{report}-{company}.html` for a one-off CV (omit `-{report}` only when no report number exists at all, never for a batch or parallel run), and `{template}` is the path printed by **Selecting the template** below (omit it to use the base template). The script owns every tag, CSS class, and HTML escaping. Keep the HTML outside temporary storage because the dashboard's `D` hotkey regenerates from it.
 19. Run the fact gate against the generated HTML: `node verify-cv-facts.mjs {html-path}`
     - This is a hard gate before PDF rendering.
-    - If it fails, stop and fix the generated HTML by removing invented metrics or adding verified evidence to `cv.md`, `article-digest.md`, or `config/cv-facts.json`.
+    - If it fails, remove unsupported claims or ask the user to correct their
+      Context evidence. Never add a claim to the CV just to make it pass its own
+      check. Without a library, the legacy evidence files remain applicable.
 20. **Hiring-manager audit — off by default, opt-in only.** Run `modes/pdf/hm-audit.md` if and only if one of these is true; otherwise skip straight to Step 21 without prompting.
     - The invocation carried `--hm-audit` (`/career-ops pdf --hm-audit`, or the same flag on a natural-language request).
     - `modes/_custom.md` turns it on as a house rule.

@@ -491,6 +491,7 @@ Usage:
     // validator before importing Playwright or writing a PDF so a failed gate
     // cannot leave behind a misleading artifact.
     const factCheck = assertFacts(html, {
+      dataRoot: getCareerOpsRoot(),
       label: "cover letter",
       planTexts: letterInputTexts(payload),
     });

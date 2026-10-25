@@ -2,7 +2,7 @@
 // offsets let the UI expose pages without introducing another content store.
 
 /** @typedef {{id:string,title:string,level:number,parentId:string|null,start:number,bodyStart:number,end:number}} WorkspaceSection */
-/** @typedef {{action:string,section?:string|null,content?:string,title?:string,direction?:string}} WorkspaceMutation */
+/** @typedef {{action:string,section?:string|null,content?:string,title?:string,direction?:string,usage?:string}} WorkspaceMutation */
 
 export class WorkspaceError extends Error {
   /** @param {string} message @param {string} code @param {number} [status] */

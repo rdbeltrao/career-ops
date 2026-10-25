@@ -97,6 +97,7 @@ export function runPlanner(opts: {
         // accepted it, but typed as the canonical id rather than the caller's
         // optional string.
         { cliId: spec.id, capabilities: CAPS.localReadOnly },
+        { prompt },
       );
     } catch (e) {
       // Fencing refuses an argv that contradicts the capability record. Resolve

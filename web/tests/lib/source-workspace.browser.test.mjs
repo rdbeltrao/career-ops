@@ -11,7 +11,7 @@ const employerId = `source-${'3'.repeat(32)}`;
 const proofId = `source-${'4'.repeat(32)}`;
 const marker = 'Fictional source-page browser fixture.';
 
-test('source workspace preserves real page ancestry and separates application files', { skip: !target, timeout: 180_000 }, async () => {
+test('Context has one real page hierarchy with CV as a separate output', { skip: !target, timeout: 180_000 }, async () => {
   const url = new URL(target);
   assert.ok(['localhost', '127.0.0.1', '[::1]'].includes(url.hostname));
   const origin = url.origin;
@@ -53,8 +53,16 @@ test('source workspace preserves real page ancestry and separates application fi
     await page.goto(`${origin}/context`);
     await page.getByRole('heading', { name: 'Example job applications', exact: true, level: 1 }).waitFor();
     assert.equal(writes.length, 0);
+    assert.equal(await page.getByRole('button', { name: /^(Source pages|App files)$/ }).count(), 0, 'Context has no competing views');
+    assert.match(await page.locator('main').innerText(), /Used for job matching and CV generation/);
+    assert.doesNotMatch(await page.locator('main').innerText(), /Local copy|Local edits stay here|matching uses Application profile/);
     assert.equal(await navigation().getByRole('button', { name: 'CV draft', exact: true }).count(), 0);
     assert.equal(await navigation().getByRole('button', { name: 'Career context', exact: true }).count(), 0, 'landing headings never become pages');
+    for (const staleDocument of ['context', 'profile', 'cv']) {
+      await page.goto(`${origin}/context?document=${staleDocument}`);
+      await page.getByRole('heading', { name: 'Example job applications', exact: true, level: 1 }).waitFor();
+      assert.equal(await navigation().getByRole('button', { name: 'Application profile', exact: true }).count(), 0, 'stale local links cannot expose a second structure');
+    }
     assert.ok((await page.locator('#workspace-sidebar').boundingBox()).width >= 300, 'source navigation has room');
     assert.equal((await page.getByRole('complementary', { name: 'App sidebar' }).boundingBox()).width, 240, 'main navigation remains fully visible');
     assert.equal(await page.getByRole('button', { name: /Expand app navigation|Collapse app navigation|Reload from disk/ }).count(), 0);
@@ -75,6 +83,26 @@ test('source workspace preserves real page ancestry and separates application fi
     await page.getByRole('heading', { name: 'Example Labs', exact: true, level: 1 }).waitFor();
     assert.match(await editor.innerText(), /Edited locally/);
     await shot('source-workspace-desktop');
+
+    const purpose = page.getByRole('combobox', { name: 'Use this page as', exact: true });
+    const nextPurpose = (await read(employerId)).usage === 'facts' ? 'reference' : 'facts';
+    await editor.fill('Fictional employer record. Draft kept while changing page purpose.');
+    const writesBeforePurpose = writes.length;
+    await purpose.selectOption(nextPurpose);
+    await page.getByRole('dialog', { name: 'Unsaved changes' }).waitFor();
+    assert.equal(writes.length, writesBeforePurpose, 'changing purpose first guards an unsaved draft');
+    await page.getByRole('button', { name: 'Keep editing', exact: true }).click();
+    assert.match(await editor.innerText(), /Draft kept while changing page purpose/);
+    await purpose.selectOption(nextPurpose);
+    await page.getByRole('button', { name: 'Save and continue', exact: true }).click();
+    await page.getByRole('status', { name: 'Page save status' }).filter({ hasText: 'Page purpose updated.' }).waitFor();
+    const purposeUpdated = await read(employerId);
+    assert.equal(purposeUpdated.usage, nextPurpose);
+    assert.match(purposeUpdated.content, /Draft kept while changing page purpose/);
+    assert.equal(writes.slice(writesBeforePurpose).filter((write) => write.action === 'usage').length, 1, 'one confirmed purpose change makes one purpose mutation');
+    await page.reload();
+    await page.getByRole('heading', { name: 'Example Labs', exact: true, level: 1 }).waitFor();
+    assert.equal(await purpose.inputValue(), nextPurpose, 'page purpose survives reload');
 
     await select('Career History');
     await page.getByRole('button', { name: 'New child page', exact: true }).click();
@@ -97,8 +125,12 @@ test('source workspace preserves real page ancestry and separates application fi
     await page.getByRole('article', { name: 'Formatted page' }).waitFor();
     assert.equal(await page.getByRole('table').count(), 1);
     assert.equal(await page.getByRole('textbox', { name: 'Markdown source', exact: true }).count(), 0);
-    await page.getByRole('button', { name: 'App files', exact: true }).click();
-    await select('CV draft');
+    await page.getByRole('navigation', { name: 'App navigation' }).getByRole('link', { name: 'CV draft', exact: true }).click();
+    await page.waitForURL(`${origin}/cv`);
+    await page.getByRole('heading', { name: 'CV draft', exact: true, level: 1 }).waitFor();
+    assert.equal(await navigation().getByRole('button', { name: 'Example job applications', exact: true }).count(), 0, 'CV has only its own outline');
+    assert.equal(await navigation().getByRole('button', { name: 'Application profile', exact: true }).count(), 0);
+    assert.equal(await page.getByRole('button', { name: /^(Source pages|App files|New page|New child page)$/ }).count(), 0);
     assert.match(await page.getByRole('region', { name: 'Page editor' }).innerText(), /output|working r[eé]sum[eé]/i);
 
     await page.goto(`${origin}/context`);
@@ -106,17 +138,12 @@ test('source workspace preserves real page ancestry and separates application fi
     await page.getByRole('button', { name: 'Show pages', exact: true }).click();
     const drawer = page.getByRole('dialog', { name: 'Workspace page navigation' });
     await drawer.waitFor();
-    await drawer.getByRole('button', { name: 'App files', exact: true }).click();
-    await drawer.getByRole('button', { name: 'App files', exact: true }).filter({ hasText: 'App files' }).waitFor();
-    await page.waitForFunction(() => document.querySelector('section[aria-label="Page editor"] h1')?.textContent === 'Application profile');
-    assert.equal(await drawer.isVisible(), true, 'switching to App files keeps navigation open');
-    await drawer.getByRole('button', { name: 'Source pages', exact: true }).click();
-    await page.waitForFunction(() => document.querySelector('section[aria-label="Page editor"] h1')?.textContent === 'Example job applications');
-    assert.equal(await drawer.isVisible(), true, 'switching to Source pages keeps navigation open');
     await select('Career History');
     assert.equal(await drawer.isVisible(), true, 'selecting a page keeps navigation open');
     await select('Career History');
     assert.equal(await drawer.isVisible(), true, 'selecting the active page keeps navigation open');
+    await select('Example Labs');
+    assert.equal(await drawer.isVisible(), true, 'repeated page selection keeps navigation open');
     await drawer.getByRole('button', { name: 'Hide pages', exact: true }).click();
     assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1));
     await shot('source-workspace-narrow');
@@ -151,5 +178,28 @@ test('a missing source body does not hide healthy sibling pages', { skip: !targe
     await page.getByRole('navigation', { name: 'Workspace pages' }).getByRole('button', { name: 'Approved achievements', exact: true }).click();
     await page.getByRole('heading', { name: 'Approved achievements', exact: true, level: 1 }).waitFor();
     await page.getByRole('table').waitFor();
+  } finally { await browser.close(); }
+});
+
+test('an unreadable Context hierarchy never silently exposes legacy files', { skip: !target, timeout: 60_000 }, async () => {
+  const url = new URL(target);
+  assert.ok(['localhost', '127.0.0.1', '[::1]'].includes(url.hostname));
+  const catalog = await fetch(`${url.origin}/api/workspace`).then((response) => response.json());
+  const problem = 'The fictional Context hierarchy could not be read.';
+  const { chromium } = await import('playwright-core');
+  const browser = await chromium.launch({ channel: 'chrome', headless: true });
+  const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+  const requestedDocuments = [];
+  page.on('request', (request) => {
+    const address = new URL(request.url());
+    if (address.pathname === '/api/workspace' && address.searchParams.has('document')) requestedDocuments.push(address.searchParams.get('document'));
+  });
+  try {
+    await page.route('**/api/workspace', (route) => route.fulfill({ json: { ...catalog, documents: catalog.documents.filter((document) => document.kind !== 'source'), sourceRootDocumentId: null, sourceError: { error: problem, code: 'invalid_source_library' } } }));
+    await page.goto(`${url.origin}/context?document=context`);
+    await page.getByRole('alert').filter({ hasText: problem }).waitFor();
+    assert.equal(await page.getByRole('button', { name: 'Application profile', exact: true }).count(), 0);
+    assert.equal(await page.getByRole('button', { name: /^(Source pages|App files)$/ }).count(), 0);
+    assert.deepEqual(requestedDocuments, [], 'no hidden fallback document is loaded after a hierarchy error');
   } finally { await browser.close(); }
 });

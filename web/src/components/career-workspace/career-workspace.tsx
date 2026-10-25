@@ -7,12 +7,12 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { ArrowDown, ArrowUp, BookOpen, Check, ChevronRight, Files, ListChecks, Loader2, PanelLeft, Pencil, Plus, X } from "lucide-react";
 import { SkillGaps } from "@/components/skill-gaps";
 import { cn } from "@/lib/cn";
-import { collapsedPageKeys, collapsedSourcePageIds, initialWorkspaceDocument, navigationSections, pageBreadcrumbs, selectedPageContent, siblingAvailability, sourcePageBreadcrumbs, sourcePageMovement } from "@/lib/workspace-view.mjs";
+import { collapsedPageKeys, collapsedSourcePageIds, initialWorkspaceDocument, navigationSections, pageBreadcrumbs, selectedPageContent, siblingAvailability, sourcePageBreadcrumbs, sourcePageMovement, workspaceNavigationDocuments } from "@/lib/workspace-view.mjs";
 import { workspaceDrafts } from "@/lib/workspace-drafts.mjs";
 import { PageTree } from "./page-tree";
 import { SourcePageTree } from "./source-page-tree";
 import { UnsavedDialog } from "./unsaved-dialog";
-import type { PageSelection, WorkspaceDocument, WorkspaceDocumentSummary, WorkspaceSection } from "./types";
+import type { PageSelection, PageUsage, WorkspaceDocument, WorkspaceDocumentSummary, WorkspaceSection } from "./types";
 
 // EVIDENCE: Next's bundled lazy-loading guide requires ssr:false in a client
 // component. Lexical owns browser selection and is loaded only for this surface.
@@ -22,15 +22,22 @@ const MarkdownEditor = dynamic(() => import("@/components/editor/markdown-editor
 });
 
 const TRUST: Record<string, { label: string; text: string }> = {
-  context: { label: "App summary", text: "The local profile this app uses for applications. It summarizes career facts and preferences." },
-  cv: { label: "Résumé output", text: "Your working CV draft. Keep its facts consistent with your application profile and original career records." },
-  achievements: { label: "App summary", text: "Local professional examples and proof points used for applications. Preserve source links and confirmation notes." },
-  profile: { label: "App settings", text: "Role preferences and positioning for your search. Preferences are not evidence of past work." },
+  context: { label: "Career context", text: "Career facts and preferences used for applications." },
+  cv: { label: "Résumé output", text: "Your working CV draft, built from your career context." },
+  achievements: { label: "Professional examples", text: "Professional examples and proof points used for applications. Preserve source links and confirmation notes." },
+  profile: { label: "Role preferences", text: "Role preferences and positioning for your search. Preferences are not evidence of past work." },
   stories: { label: "Working stories", text: "Interview narratives. Figures and scope still need support from your career record." },
   guide: { label: "Writing and workflow rules", text: "Instructions for how your search runs. These rules do not establish career facts." },
 };
 
-type Mutation = { action: "replace" | "add" | "rename" | "move"; content?: string; title?: string; direction?: "up" | "down" };
+const PAGE_PURPOSE: Record<PageUsage, { label: string; description: string }> = {
+  facts: { label: "Career facts", description: "Use this page as evidence of your experience." },
+  preferences: { label: "Job preferences", description: "Guide job matching with your preferences, not claims about past work." },
+  reference: { label: "Reference material", description: "Keep this page as background material, not career evidence." },
+  unconfirmed: { label: "Unconfirmed notes", description: "Keep these notes out of factual claims until you confirm them." },
+};
+
+type Mutation = { action: "replace" | "add" | "rename" | "move" | "usage"; content?: string; title?: string; direction?: "up" | "down"; usage?: PageUsage };
 type ActionForm = { kind: "add" | "rename"; title: string } | null;
 type ApiProblem = { error?: string; code?: string };
 type RecoveredDraft = { section: string | null; revision: string; content: string; original: string; form: ActionForm };
@@ -58,8 +65,6 @@ export function CareerWorkspace({ initialDocument = "context" }: { initialDocume
   const [error, setError] = useState("");
   const [indexError, setIndexError] = useState("");
   const [sourceError, setSourceError] = useState("");
-  const [navigationView, setNavigationView] = useState<"source" | "local">(initialDocument === "cv" ? "local" : "source");
-  const [sourceRootId, setSourceRootId] = useState<string | null>(null);
   const [conflict, setConflict] = useState(false);
   const [notice, setNotice] = useState("");
   const [query, setQuery] = useState("");
@@ -101,7 +106,6 @@ export function CareerWorkspace({ initialDocument = "context" }: { initialDocume
     sectionRef.current = validSection;
     dirtyRef.current = false;
     setCurrent(document);
-    setNavigationView(document.kind === "source" ? "source" : "local");
     setSectionId(validSection);
     setDraft(content);
     setOriginal(content);
@@ -149,11 +153,11 @@ export function CareerWorkspace({ initialDocument = "context" }: { initialDocume
       documentsRef.current = nextDocuments;
       setDocuments(nextDocuments);
       setSourceError(body.sourceError?.error || "");
-      setSourceRootId(body.sourceRootDocumentId || null);
       setCollapsed(collapsedPageKeys(nextDocuments, { document: latest?.id || initialDocument, section: sectionRef.current }));
       setCollapsedSources(collapsedSourcePageIds(nextDocuments, latest?.kind === "source" ? latest.id : body.sourceRootDocumentId || null));
       if (openInitial) {
-        const document = requestedDocument || initialWorkspaceDocument(nextDocuments, initialDocument, body.sourceRootDocumentId || null);
+        const invalidContext = initialDocument === "context" && body.sourceError && !nextDocuments.some((item: WorkspaceDocumentSummary) => item.kind === "source");
+        const document = invalidContext ? null : initialWorkspaceDocument(nextDocuments, initialDocument, body.sourceRootDocumentId || null, requestedDocument);
         if (document) await loadDocument({ document, section: null });
         else { loadingRef.current = false; setLoading(false); }
       }
@@ -243,7 +247,7 @@ export function CareerWorkspace({ initialDocument = "context" }: { initialDocume
       setRecoveryWarning(false);
       acceptDocument(body, body.selectedSection === undefined ? sectionRef.current : body.selectedSection);
       if (document.kind === "source") await loadIndex();
-      setNotice(mutation.action === "add" ? "Page created." : mutation.action === "rename" ? "Page renamed." : mutation.action === "move" ? "Page moved." : "Saved.");
+      setNotice(mutation.action === "add" ? "Page created." : mutation.action === "rename" ? "Page renamed." : mutation.action === "move" ? "Page moved." : mutation.action === "usage" ? "Page purpose updated." : "Saved.");
       if (document.id === "cv") window.dispatchEvent(new CustomEvent("co-cv-saved"));
       return true;
     } catch (problem) {
@@ -287,29 +291,6 @@ export function CareerWorkspace({ initialDocument = "context" }: { initialDocume
     beforeAction(() => setForm({ kind, title: kind === "rename" ? (isSource ? current?.title : selected?.title) || "" : "" }));
   }
 
-  function selectNavigationView(view: "source" | "local") {
-    if (view === navigationView) return;
-    beforeAction(() => {
-      setQuery("");
-      const document = view === "source" ? initialWorkspaceDocument(documentsRef.current, "context", sourceRootId) : initialDocument === "cv" ? "cv" : "context";
-      if (document) void loadDocument({ document, section: null });
-      else {
-        currentRef.current = null;
-        sectionRef.current = null;
-        setCurrent(null);
-        setSectionId(null);
-        setDraft("");
-        setOriginal("");
-        setForm(null);
-        setRecovered(null);
-        setError("");
-        setNotice("");
-        setConflict(false);
-        setNavigationView(view);
-      }
-    });
-  }
-
   function restoreDraft() {
     if (!current || !recovered || (recovered.section && !current.sections.some((page) => page.id === recovered.section))) return;
     const revisionChanged = current.revision !== recovered.revision;
@@ -337,26 +318,23 @@ export function CareerWorkspace({ initialDocument = "context" }: { initialDocume
   }
 
   const displayedSelection = displaySections.find((section) => section.id === sectionId);
-  const pageTitle = displayedSelection?.title || current?.title || (navigationView === "source" ? "Source pages" : initialDocument === "cv" ? "CV draft" : "Application profile");
+  const pageTitle = displayedSelection?.title || current?.title || (initialDocument === "cv" ? "CV draft" : "Your career context");
+  const navigationDocuments = workspaceNavigationDocuments(documents, initialDocument);
+  const hasContextPages = initialDocument === "context" && navigationDocuments.some((document) => document.kind === "source");
   const selection = { document: current?.id || initialDocument, section: sectionId };
   const button = "inline-flex min-h-9 items-center justify-center gap-1.5 rounded-lg border border-border bg-surface px-3 py-1.5 text-sm text-muted transition-colors hover:bg-surface-hover focus-visible:outline-2 focus-visible:outline-brand disabled:opacity-40";
   const toggleCollapsed = (setter: typeof setCollapsed, key: string) => setter((previous) => { const next = new Set(previous); if (next.has(key)) next.delete(key); else next.add(key); return next; });
   const pageTree = <>
-    <div role="group" aria-label="Workspace views" className="mb-5 grid grid-cols-2 gap-1 rounded-lg bg-surface-hover p-1">
-      <button type="button" aria-pressed={navigationView === "source"} disabled={busy} onClick={() => selectNavigationView("source")} className={cn("min-h-9 rounded-md px-2 text-sm transition-colors focus-visible:outline-2 focus-visible:outline-brand disabled:opacity-50", navigationView === "source" ? "bg-surface font-medium text-foreground shadow-sm" : "text-muted")}>Source pages</button>
-      <button type="button" aria-pressed={navigationView === "local"} disabled={busy} onClick={() => selectNavigationView("local")} className={cn("min-h-9 rounded-md px-2 text-sm transition-colors focus-visible:outline-2 focus-visible:outline-brand disabled:opacity-50", navigationView === "local" ? "bg-surface font-medium text-foreground shadow-sm" : "text-muted")}>App files</button>
-    </div>
-    {navigationView === "source" && <p className="mb-4 px-2 text-xs leading-relaxed text-muted">Local edits stay here. Job matching uses Application profile in App files.</p>}
-    {indexError ? <div role="alert" className="p-2 text-sm text-muted"><p>{indexError}</p><button type="button" onClick={() => void loadIndex(!current)} className={cn(button, "mt-3")}>Retry page list</button></div> : !documents.length && loading ? <p role="status" className="p-2 text-sm text-muted">Loading pages…</p> : navigationView === "source" ? <>
-      {sourceError && <div role="alert" className="mb-4 p-2 text-sm text-muted"><p>{sourceError}</p><button type="button" onClick={() => void loadIndex(!current)} className={cn(button, "mt-3")}>Retry source pages</button></div>}
-      {documents.some((document) => document.kind === "source") ? <SourcePageTree documents={documents} selectedDocument={isSource ? current?.id || null : null} collapsed={collapsedSources} query={query} busy={busy} onQuery={setQuery} onToggle={(id) => toggleCollapsed(setCollapsedSources, id)} onSelect={(document) => selectPage({ document, section: null })} /> : !sourceError && <p className="px-2 text-sm leading-relaxed text-muted">No source pages have been imported yet. App files contain your separate local summaries and drafts.</p>}
-    </> : <PageTree documents={documents.filter((document) => document.kind !== "source")} selected={selection} collapsed={collapsed} query={query} busy={busy} onQuery={setQuery} onToggle={(key) => toggleCollapsed(setCollapsed, key)} onSelect={selectPage} />}
+    {indexError ? <div role="alert" className="p-2 text-sm text-muted"><p>{indexError}</p><button type="button" onClick={() => void loadIndex(!current)} className={cn(button, "mt-3")}>Retry page list</button></div> : !documents.length && loading ? <p role="status" className="p-2 text-sm text-muted">Loading pages…</p> : <>
+      {initialDocument === "context" && sourceError && <div role="alert" className="mb-4 p-2 text-sm text-muted"><p>{sourceError}</p><button type="button" onClick={() => void loadIndex(!current)} className={cn(button, "mt-3")}>Retry pages</button></div>}
+      {hasContextPages ? <SourcePageTree documents={navigationDocuments} selectedDocument={isSource ? current?.id || null : null} collapsed={collapsedSources} query={query} busy={busy} onQuery={setQuery} onToggle={(id) => toggleCollapsed(setCollapsedSources, id)} onSelect={(document) => selectPage({ document, section: null })} /> : !(initialDocument === "context" && sourceError) && <PageTree documents={navigationDocuments} selected={selection} collapsed={collapsed} query={query} busy={busy} onQuery={setQuery} onToggle={(key) => toggleCollapsed(setCollapsed, key)} onSelect={selectPage} />}
+    </>}
   </>;
 
   return (
     <div className="mx-auto w-full max-w-[1680px] px-4 py-6 sm:px-6 xl:px-8">
       <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
-        <div><p className="text-xs font-medium uppercase tracking-[0.16em] text-faint">Your career workspace</p><p className="mt-1 text-sm text-muted">Source pages and application files, kept separate.</p></div>
+        <div><p className="text-xs font-medium uppercase tracking-[0.16em] text-faint">{initialDocument === "cv" ? "Your CV draft" : "Your career context"}</p><p className="mt-1 text-sm text-muted">{initialDocument === "cv" ? "Résumé output built from your career context" : "Used for job matching and CV generation"}</p></div>
         <div className="flex items-center gap-2">
           <Link href="/documents" className={button}><Files aria-hidden="true" className="size-4" />Documents</Link>
           <Link href="/pipeline" className={button}><ListChecks aria-hidden="true" className="size-4" />Applications</Link>
@@ -366,27 +344,28 @@ export function CareerWorkspace({ initialDocument = "context" }: { initialDocume
       <button type="button" onClick={() => setMobilePages(true)} aria-expanded={mobilePages} aria-controls="workspace-pages-drawer" className={cn(button, "mb-4 xl:hidden")}><PanelLeft aria-hidden="true" className="size-4" />Show pages</button>
 
       <dialog ref={pagesDialog} id="workspace-pages-drawer" aria-label="Workspace page navigation" onClose={() => setMobilePages(false)} onCancel={() => setMobilePages(false)} onClick={(event) => { if (event.target === event.currentTarget) setMobilePages(false); }} className="fixed inset-y-0 left-0 right-auto m-0 h-dvh max-h-none w-[min(360px,calc(100vw-2rem))] max-w-none border-r border-border bg-background p-0 text-foreground shadow-xl backdrop:bg-black/40 open:flex open:flex-col">
-        <div className="flex shrink-0 items-center justify-between border-b border-border px-4 py-3"><h2 className="text-sm font-medium">Workspace pages</h2><button type="button" aria-label="Hide pages" onClick={() => setMobilePages(false)} className={button}><X aria-hidden="true" className="size-4" /></button></div>
+        <div className="flex shrink-0 items-center justify-between border-b border-border px-4 py-3"><h2 className="text-sm font-medium">Pages</h2><button type="button" aria-label="Hide pages" onClick={() => setMobilePages(false)} className={button}><X aria-hidden="true" className="size-4" /></button></div>
         <div className="overflow-y-auto p-4">{pageTree}</div>
       </dialog>
 
       <div className="grid min-w-0 gap-8 xl:grid-cols-[304px_minmax(0,1fr)] 2xl:grid-cols-[320px_minmax(0,1fr)]">
         <aside id="workspace-sidebar" aria-label="Workspace sidebar" className="sticky top-6 hidden max-h-[calc(100dvh-3rem)] min-w-0 self-start overflow-y-auto rounded-2xl border border-border bg-surface/50 p-4 xl:block">
+          <h2 className="mb-4 px-2 text-sm font-medium">Pages</h2>
           {pageTree}
         </aside>
 
         <section aria-label="Page editor" aria-busy={busy} className="min-w-0">
           <nav aria-label="Page breadcrumbs" className="mb-4 flex flex-wrap items-center gap-1 text-xs text-muted">
             <BookOpen aria-hidden="true" className="mr-1 size-3.5" />
-            <span>{isSource || (!current && navigationView === "source") ? "Source pages" : "App files"}</span>
+            {initialDocument === "context" && <span>Context</span>}
             {isSource ? sourceTrail.map((page) => <span key={page.id} className="inline-flex min-w-0 items-center gap-1"><ChevronRight aria-hidden="true" className="size-3 shrink-0" /><button type="button" title={page.title} aria-current={page.id === current?.id ? "page" : undefined} disabled={busy} onClick={() => selectPage({ document: page.id, section: null })} className="rounded px-1 py-1 text-left break-words hover:text-foreground focus-visible:outline-2 focus-visible:outline-brand">{page.title}</button></span>) : current && <><ChevronRight aria-hidden="true" className="size-3 shrink-0" /><button type="button" disabled={busy} onClick={() => selectPage({ document: current.id, section: null })} className="rounded px-1 py-1 hover:text-foreground focus-visible:outline-2 focus-visible:outline-brand">{current.title}</button>{trail.map((page) => <span key={page.id} className="inline-flex min-w-0 items-center gap-1"><ChevronRight aria-hidden="true" className="size-3 shrink-0" /><button type="button" title={page.title} aria-current={page.id === sectionId ? "page" : undefined} disabled={busy} onClick={() => selectPage({ document: current.id, section: page.id })} className="rounded px-1 py-1 text-left break-words hover:text-foreground focus-visible:outline-2 focus-visible:outline-brand">{page.title}</button></span>)}</>}
           </nav>
 
           <div className="flex flex-wrap items-start justify-between gap-4">
             <div className="min-w-0 flex-1">
               <h1 className="font-display text-3xl tracking-tight text-landing break-words sm:text-4xl">{pageTitle}</h1>
-              <p className="mt-3 max-w-2xl text-sm leading-relaxed text-muted">{isSource ? "Local copy. Changes stay here." : trust?.text || current?.description || "Open a source page, or switch to App files for local summaries and drafts."}</p>
-              {isSource && Boolean(current?.importNotes?.length) && <details className="mt-3 max-w-2xl text-sm text-muted"><summary className="w-fit cursor-pointer rounded focus-visible:outline-2 focus-visible:outline-brand">About this local copy</summary><ul className="mt-2 list-disc space-y-1 pl-5 text-xs leading-relaxed">{current!.importNotes!.map((note, index) => <li key={index}>{note}</li>)}</ul></details>}
+              {!isSource && (trust?.text || current?.description) && <p className="mt-3 max-w-2xl text-sm leading-relaxed text-muted">{trust?.text || current?.description}</p>}
+              {isSource && Boolean(current?.importNotes?.length) && <details className="mt-3 max-w-2xl text-sm text-muted"><summary className="w-fit cursor-pointer rounded focus-visible:outline-2 focus-visible:outline-brand">Formatting notes</summary><ul className="mt-2 list-disc space-y-1 pl-5 text-xs leading-relaxed">{current!.importNotes!.map((note, index) => <li key={index}>{note}</li>)}</ul></details>}
             </div>
             <button type="button" onClick={() => void mutate({ action: "replace", content: draft })} disabled={busy || !dirty || !current} className={cn("inline-flex min-h-10 items-center justify-center gap-2 rounded-full px-5 py-2 text-sm font-medium transition-colors focus-visible:outline-2 focus-visible:outline-brand disabled:opacity-50", dirty ? "bg-brand text-brand-foreground hover:bg-brand-200" : "border border-border bg-surface text-muted")}>
               {saving ? <Loader2 aria-hidden="true" className="size-4 animate-spin" /> : !dirty && notice === "Saved." ? <Check aria-hidden="true" className="size-4" /> : null}{saving ? "Saving…" : "Save"}
@@ -395,9 +374,23 @@ export function CareerWorkspace({ initialDocument = "context" }: { initialDocume
 
           <div className="my-5 flex flex-wrap items-center gap-2">
             {trust && <span className="mr-1 rounded-full bg-surface-hover px-2.5 py-1 text-xs text-muted">{trust.label}</span>}
+            {isSource && <div className="mr-2 flex flex-wrap items-center gap-2">
+              <label className="text-xs text-muted" htmlFor="page-purpose">Use this page as</label>
+              <select id="page-purpose" aria-describedby={current?.usage ? "page-purpose-description" : undefined} value={current?.usage || ""} disabled={busy || Boolean(recovered)} onChange={(event) => { const usage = event.target.value as PageUsage; if (usage !== current?.usage) beforeAction(() => void mutate({ action: "usage", usage })); }} className="min-h-9 rounded-lg border border-border bg-surface px-2 text-sm text-foreground focus-visible:outline-2 focus-visible:outline-brand disabled:opacity-40">
+                {!current?.usage && <option value="" disabled>Choose a purpose</option>}
+                {Object.entries(PAGE_PURPOSE).map(([value, purpose]) => <option key={value} value={value}>{purpose.label}</option>)}
+              </select>
+            </div>}
             {current && current.id !== "cv" && <button type="button" disabled={busy || Boolean(recovered) || Boolean(current.outlineWarning) || Boolean(selected && selected.level >= 6)} onClick={() => startForm("add")} className={button}><Plus aria-hidden="true" className="size-3.5" />{selected || isSource ? "New child page" : "New page"}</button>}
-            {(selected || isSource) && <><button type="button" disabled={busy || Boolean(recovered) || Boolean(current?.outlineWarning)} onClick={() => startForm("rename")} className={button}><Pencil aria-hidden="true" className="size-3.5" />Rename page</button><button type="button" aria-label="Move page up" disabled={busy || Boolean(recovered) || !movement.up || Boolean(current?.outlineWarning)} onClick={() => beforeAction(() => void mutate({ action: "move", direction: "up" }))} className={button}><ArrowUp aria-hidden="true" className="size-3.5" /></button><button type="button" aria-label="Move page down" disabled={busy || Boolean(recovered) || !movement.down || Boolean(current?.outlineWarning)} onClick={() => beforeAction(() => void mutate({ action: "move", direction: "down" }))} className={button}><ArrowDown aria-hidden="true" className="size-3.5" /></button></>}
+            {(selected || isSource) && <>
+              <button type="button" disabled={busy || Boolean(recovered) || Boolean(current?.outlineWarning)} onClick={() => startForm("rename")} className={button}><Pencil aria-hidden="true" className="size-3.5" />Rename page</button>
+              <span className="inline-flex shrink-0 gap-2">
+                <button type="button" aria-label="Move page up" disabled={busy || Boolean(recovered) || !movement.up || Boolean(current?.outlineWarning)} onClick={() => beforeAction(() => void mutate({ action: "move", direction: "up" }))} className={button}><ArrowUp aria-hidden="true" className="size-3.5" /></button>
+                <button type="button" aria-label="Move page down" disabled={busy || Boolean(recovered) || !movement.down || Boolean(current?.outlineWarning)} onClick={() => beforeAction(() => void mutate({ action: "move", direction: "down" }))} className={button}><ArrowDown aria-hidden="true" className="size-3.5" /></button>
+              </span>
+            </>}
           </div>
+          {isSource && current?.usage && <p id="page-purpose-description" className="-mt-3 mb-5 text-xs text-muted">{PAGE_PURPOSE[current.usage].description}</p>}
 
           {form && <form onSubmit={(event) => { event.preventDefault(); if (form.title.trim()) void mutate({ action: form.kind, title: form.title.trim() }); }} className="mb-5 rounded-xl border border-border bg-surface p-4">
             <label className="block text-sm font-medium text-foreground">Page title<input autoFocus value={form.title} onChange={(event) => setForm({ ...form, title: event.target.value })} maxLength={200} required disabled={busy} className="mt-2 min-h-10 w-full rounded-lg border border-border bg-background px-3 text-sm text-foreground outline-none focus:border-brand" /></label>

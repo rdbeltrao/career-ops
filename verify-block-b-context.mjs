@@ -2,10 +2,11 @@
 
 /**
  * verify-block-b-context.mjs — zero-LLM check that a report's Block B does
- * not mark a requirement missing when modes/_context.md carries it.
+ * not mark a requirement missing when the authoritative Context carries it.
  *
- * modes/_context.md is the source of truth about the candidate: every fact
- * and figure in it is evidence, and cv.md is a tailored rendering of it. A
+ * The Context page hierarchy supplies career facts when present. Reference,
+ * preference and unconfirmed pages never count as evidence. Installations
+ * without a library retain modes/_context.md as their context source. A
  * Block B row ("Match with CV", also headed "B) Match with CV", "Block B —
  * Match with CV" or "CV Match") that reads `❌ Missing` therefore means that
  * neither the primary files nor the context file carry the fact. An
@@ -36,8 +37,8 @@
  * Usage:
  *   node verify-block-b-context.mjs <report.md> [--context <path>] [--json] [--strict]
  *
- *   --context  the context file to compare against (default
- *              {DATA_ROOT}/modes/_context.md)
+ *   --context  an explicit diagnostic file override (default: Context library
+ *              facts, otherwise {DATA_ROOT}/modes/_context.md)
  *   --json     print { report, context, status, reason?, findings } instead of text
  *   --strict   exit 1 when there is at least one finding, or when the Block B
  *              table could not be found
@@ -54,6 +55,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { isMainModule } from './lib/is-main-module.mjs';
 import { getCareerOpsRoot } from './path-resolver.mjs';
+import { readContextLibrary } from './lib/context-library.mjs';
 import { cleanHeading } from './web/src/lib/report-sections.mjs';
 import { colIndex, parsePipeTable, splitPipeTables } from './web/src/lib/report-tables.mjs';
 
@@ -286,12 +288,13 @@ export function findMatchTable(section) {
  *
  * @param {ReturnType<typeof findMatchTable>} table
  * @param {string} contextText
+ * @param {{contextLabel?:string,preFiltered?:boolean}} [options]
  * @returns {Array<{kind: string, requirement: string, match: string, terms: string[], evidence: string, detail: string}>}
  */
-export function checkRows(table, contextText) {
-  const evidence = evidenceText(contextText);
-  const context = contextTermSet(evidence);
-  const contextPairs = phrasePairs(evidence);
+export function checkRows(table, contextText, { contextLabel = 'modes/_context.md', preFiltered = false } = {}) {
+  const sourceEvidence = preFiltered ? contextText : evidenceText(contextText);
+  const context = contextTermSet(sourceEvidence);
+  const contextPairs = phrasePairs(sourceEvidence);
   const findings = [];
   const cell = (row, index) => (index >= 0 ? String(row[index] ?? '').trim() : '');
   for (const row of table.rows) {
@@ -313,7 +316,7 @@ export function checkRows(table, contextText) {
       // A name counts only when the context also writes it as a name: inside a
       // sentence or a list, never only at the start of a line, where any word
       // is capitalized ("Core, many years hands-on" is not the product Core).
-      const nameHits = hits.filter((hit) => !isGeneric(hit) && hit[1].properNoun && namedInContext(hit[1].original, evidence));
+      const nameHits = hits.filter((hit) => !isGeneric(hit) && hit[1].properNoun && namedInContext(hit[1].original, sourceEvidence));
       // A phrase counts when at least one of its words is specific.
       const pairHits = [...phrasePairs(requirement)]
         .filter((pair) => contextPairs.has(pair))
@@ -328,12 +331,12 @@ export function checkRows(table, contextText) {
           match,
           terms: matched,
           evidence,
-          detail: `modes/_context.md mentions ${mentions.join(', ')}; check the row: a requirement the context carries is Strong or Partial, never Missing`,
+          detail: `${contextLabel} ${contextLabel === 'Context pages' ? 'mention' : 'mentions'} ${mentions.join(', ')}; check the row: a requirement the context carries is Strong or Partial, never Missing`,
         });
       }
     }
     if (evidence && CV_SILENCE_RES.some((re) => re.test(evidence))) {
-      findings.push({ kind: 'cv-silence-as-gap', requirement, match, terms: [], evidence, detail: CV_SILENCE_DETAIL });
+      findings.push({ kind: 'cv-silence-as-gap', requirement, match, terms: [], evidence, detail: CV_SILENCE_DETAIL.replace('modes/_context.md', contextLabel) });
     }
   }
   return findings;
@@ -342,22 +345,32 @@ export function checkRows(table, contextText) {
 /**
  * The whole check for one report.
  *
- * @param {{reportPath: string, contextPath: string}} opts
+ * @param {{reportPath: string, contextPath?: string|null, dataRoot?:string}} opts
  * @returns {{report: string, context: string, status: 'ok'|'findings'|'unverified', reason?: string, findings: object[], exitCode: number}}
  */
-export function verifyBlockBContext({ reportPath, contextPath }) {
-  const base = { report: reportPath, context: contextPath, findings: [] };
+export function verifyBlockBContext({ reportPath, contextPath = null, dataRoot = getCareerOpsRoot() }) {
+  const base = { report: reportPath, context: contextPath ?? join(dataRoot, 'modes', '_context.md'), findings: [] };
   if (!existsSync(reportPath)) {
     return { ...base, status: 'unverified', reason: `report not found: ${reportPath}`, exitCode: 2 };
   }
-  if (!existsSync(contextPath)) {
-    return { ...base, status: 'unverified', reason: `context file not found: ${contextPath}`, exitCode: 2 };
-  }
   let report;
   let contextText;
+  let contextLabel = 'modes/_context.md';
+  let preFiltered = false;
   try {
     report = readFileSync(reportPath, 'utf-8');
-    contextText = readFileSync(contextPath, 'utf-8');
+    // The explicit path is a diagnostic override. Ordinary runs always use
+    // the same current Context facts as generation, never archived summaries.
+    const library = contextPath === null ? readContextLibrary(dataRoot) : null;
+    if (library) {
+      base.context = library.path;
+      contextText = library.evidenceText;
+      contextLabel = 'Context pages';
+      preFiltered = true;
+    } else {
+      if (!existsSync(base.context)) return { ...base, status: 'unverified', reason: `context file not found: ${base.context}`, exitCode: 2 };
+      contextText = readFileSync(base.context, 'utf-8');
+    }
   } catch (err) {
     return { ...base, status: 'unverified', reason: `could not read: ${err.message}`, exitCode: 2 };
   }
@@ -366,13 +379,13 @@ export function verifyBlockBContext({ reportPath, contextPath }) {
   if (!table) {
     return { ...base, status: 'unverified', reason: 'no-block-b-table', exitCode: 0 };
   }
-  const findings = checkRows(table, contextText);
+  const findings = checkRows(table, contextText, { contextLabel, preFiltered });
   return { ...base, status: findings.length ? 'findings' : 'ok', findings, exitCode: 0 };
 }
 
 /**
  * @param {string[]} argv
- * @returns {{reportPath: string, contextPath: string, json: boolean, strict: boolean} | {error: string} | {help: true}}
+ * @returns {{reportPath: string, contextPath: string|null, json: boolean, strict: boolean} | {error: string} | {help: true}}
  */
 export function parseArgs(argv) {
   let reportArg = null;
@@ -392,7 +405,7 @@ export function parseArgs(argv) {
     else return { error: `unexpected extra argument: ${a}` };
   }
   if (reportArg === null) return { error: 'a report path is required' };
-  const contextPath = contextArg ? resolve(contextArg) : join(getCareerOpsRoot(), 'modes', '_context.md');
+  const contextPath = contextArg ? resolve(contextArg) : null;
   return { reportPath: resolve(reportArg), contextPath, json, strict };
 }
 

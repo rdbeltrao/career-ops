@@ -26,6 +26,7 @@ import { profileRef } from "@/lib/core/profile-path.mjs";
 import { acquireTrackerWrite, releaseTrackerWrite } from "@/lib/core/run-registry";
 import { createRunFinalizer } from "@/lib/run-finalizer.mjs";
 import { readJsonObject } from "@/lib/json-body";
+import { candidateContextReady, readAppContextLibrary, type ContextLibrary } from "@/lib/core/context-library.mjs";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -96,11 +97,18 @@ export async function POST(req: Request) {
     );
   }
 
-  // An A–F score is meaningless without a CV to score against — the CLI would
-  // hallucinate a fit narrative and still emit a VERDICT. Require cv.md first.
-  if ((kind === "evaluate" || kind === "pdf" || kind === "cover") && !fs.existsSync(path.join(careerOpsRoot(), "cv.md"))) {
+  let contextLibrary: ContextLibrary | null = null;
+  if (kind !== "fix-portal") {
+    try { contextLibrary = await readAppContextLibrary(codeRoot, dataRoot); }
+    catch {
+      return Response.json({ error: "Your Context could not be read. Check its pages before starting this run." }, { status: 409 });
+    }
+  }
+  // The Context library is authoritative when present; an older CV must not
+  // stand in for a library that has no candidate evidence.
+  if ((kind === "evaluate" || kind === "pdf" || kind === "cover") && !candidateContextReady(contextLibrary, fs.existsSync(path.join(dataRoot, "cv.md")))) {
     return new Response(
-      JSON.stringify({ error: "Add your CV first so I can score this against you — drop it on the home page." }),
+      JSON.stringify({ error: contextLibrary ? "Add your career facts to Context before starting this run." : "Add your CV first so I can score this against you — drop it on the home page." }),
       { status: 400, headers: { "Content-Type": "application/json" } },
     );
   }
@@ -152,7 +160,7 @@ export async function POST(req: Request) {
   const prompt = buildPrompt({
     kind,
     input,
-    memory: readMemory(),
+    memory: contextLibrary ? "" : readMemory(),
     today,
     postedAt,
     lang,
@@ -161,6 +169,7 @@ export async function POST(req: Request) {
     coverBrief: coverRequest?.ok ? coverRequest.brief : undefined,
     profile: profileRef(careerOpsRoot()),
     dataRoot: splitLayout ? dataRoot : undefined,
+    contextLibrary,
   });
 
   const isClaude = cliId === "claude";
@@ -201,6 +210,7 @@ export async function POST(req: Request) {
       // The checkout: modes/ and scripts resolve there; the prompt carries the data root.
       { cwd: codeRoot, env: process.env },
       { cliId, capabilities },
+      { prompt },
     );
   } catch (e) {
     // Fencing refuses an argv that contradicts the capability record, so nothing

@@ -4,12 +4,13 @@
  * jd-skill-gap.mjs — Zero-LLM JD skill-gap checker.
  *
  * Extracts an explicit skill/requirement list from a JD (regex-based, no LLM
- * call — see extractJdSkills()), then classifies each one against cv.md into
+ * call — see extractJdSkills()), then classifies each one against Context
+ * career facts (or cv.md when no page library exists) into
  * three buckets so a CV can be tailored honestly instead of guessed at:
  *
- *   existing            — already a named skill in cv.md's Skills section
- *   supportedByResume    — not a named skill, but appears in prose elsewhere in cv.md
- *   gap                  — JD requires it, cv.md has no trace of it at all
+ *   existing            — already a named skill in an evidence Skills section
+ *   supportedByResume    — not a named skill, but appears in evidence prose
+ *   gap                  — JD requires it, the career evidence does not carry it
  *   (nothing is ever auto-added — this tool only classifies and reports)
  *
  * Design note: the three-way classification (existing / supportedByResume / gap)
@@ -32,19 +33,13 @@ import { isMainModule } from './lib/is-main-module.mjs';
 import { join } from 'path';
 import { getCareerOpsRoot } from './path-resolver.mjs';
 import { normalizePandocLine, toPlainText } from './lib/cv-markdown.mjs';
+import { readContextLibrary } from './lib/context-library.mjs';
 
 // ── Config ──────────────────────────────────────────────────────────
 
-// From the data root, not the cwd. cv.md is a Source-of-Truth Boundary primary
-// file and lives wherever CAREER_OPS_ROOT / CAREER_OPS_DATA_DIR / the
-// .career-ops-data marker points; a bare relative path resolves against
-// whatever directory the process was started in.
-//
-// Everything this script reports is a comparison against that file, so without
-// it there is nothing to say at all. The error below therefore has to serve two
-// different users at once: one who never wrote a cv.md, and one who has one
-// sitting outside the data root this resolver just looked in. Naming only one
-// of them sends the other to the wrong fix.
+// The legacy fallback follows the configured data root, never the working
+// directory. A present Context library takes precedence even without cv.md;
+// a malformed library is an error, not permission to use this old draft.
 const CV_PATH = join(getCareerOpsRoot(), 'cv.md');
 
 // ── JD skill extraction (regex, no LLM) ─────────────────────────────
@@ -1245,14 +1240,23 @@ if (selfTestMode) {
     console.error('       node jd-skill-gap.mjs --self-test');
     process.exit(1);
   }
-  if (!existsSync(CV_PATH)) {
+  let library;
+  try {
+    // Read on every run. Reference material and aspirations cannot establish
+    // a skill, and an unreadable library must not revive stale CV evidence.
+    library = readContextLibrary(getCareerOpsRoot());
+  } catch (error) {
+    console.error(`Error: ${error.message}`);
+    process.exit(1);
+  }
+  if (!library && !existsSync(CV_PATH)) {
     console.error(`Error: cv.md not found at ${CV_PATH}`);
     console.error('Create it there, or point CAREER_OPS_ROOT / CAREER_OPS_DATA_DIR (or a .career-ops-data marker) at the directory that already has it.');
     process.exit(1);
   }
 
   const jdText = readFileSync(jdPathArg, 'utf-8');
-  const cvText = readFileSync(CV_PATH, 'utf-8');
+  const cvText = library ? library.evidenceText : readFileSync(CV_PATH, 'utf-8');
   const jdSkills = extractJdSkills(jdText);
   const result = classifySkillGaps(jdSkills, cvText);
   // Computed for BOTH output modes. The JSON branch is the one other tools
@@ -1265,16 +1269,17 @@ if (selfTestMode) {
   if (summaryMode) {
     console.log(`\nJD Skill-Gap Check`);
     console.log('─'.repeat(40));
+    if (library) console.log('Source: Context pages (career facts only)');
     console.log(`JD skills found: ${jdSkills.length}`);
     console.log(`  ✅ Already in Skills section:   ${result.existing.join(', ') || '(none)'}`);
-    console.log(`  📝 Mentioned in resume prose:   ${result.supportedByResume.join(', ') || '(none)'}`);
+    console.log(`  📝 Mentioned in ${library ? 'Context' : 'resume'} prose:   ${result.supportedByResume.join(', ') || '(none)'}`);
     console.log(`  ⚠️  Real gaps (not found anywhere): ${result.gap.join(', ') || '(none)'}`);
     // Without a recognized skills heading every match lands in "prose", which
     // reads like a CV that lists no skills rather than a heading this script
     // did not recognize (#4879).
     if (!splitSkillsSection(cvText).namedSkillsText.trim()) {
       console.log('');
-      console.log('  ℹ️  No skills section recognized in cv.md (a heading containing "Skills" or "Competencies", or a top-level');
+      console.log(`  ℹ️  No skills section recognized in ${library ? 'Context pages' : 'cv.md'} (a heading containing "Skills" or "Competencies", or a top-level`);
       console.log('     "Tools" / "Technologies" / "Tech Stack" heading), so nothing can be "already in Skills section".');
     }
 

@@ -1536,15 +1536,18 @@ async function updatePDFManifest(reportNum, pdfPath, htmlPath, format, kind) {
  * both paths, because the batch run is exactly that caller and for a while it
  * was the path with no gate at all.
  *
- * Callers pass the normalized HTML and skip the call when --skip-fact-check is
- * set or the workspace has no cv.md to check against.
+ * Callers pass the normalized HTML and skip only for --skip-fact-check. A
+ * Context library is sufficient evidence even before a cv.md draft exists.
  *
  * @param {string} html - Normalized HTML, as it will be printed.
  * @param {string} label - Document name for the error and warning lines.
  * @returns {Promise<void>} Resolves when the document passes or only warns.
  * @throws {Error} When a metric, fact or forbidden phrase blocks the document.
  */
-async function runFactGate(html, label) {
+export async function runPdfFactGate(html, label, { dataRoot = workspaceRoot } = {}) {
+  const { loadContextManifest } = await import('./lib/context-library.mjs');
+  const hasLibrary = Boolean(loadContextManifest(dataRoot));
+  if (!hasLibrary && !existsSync(resolve(dataRoot, 'cv.md'))) return { verdict: 'skipped', reason: 'no Context library or cv.md' };
   // Imported lazily, by the callers' guard. A static import is resolved at module
   // load whether or not the gate runs, and the page-budget/batch suites copy
   // generate-pdf.mjs alone into a temp workspace — a static import of a sibling
@@ -1554,7 +1557,7 @@ async function runFactGate(html, label) {
   // module is genuinely missing in a real workspace this throws and the render
   // fails, which is the correct direction to fail for a fact gate.
   const { assertFacts, printFactWarnings } = await import('./verify-cv-facts.mjs');
-  const factCheck = assertFacts(html, { label });
+  const factCheck = assertFacts(html, { label, dataRoot });
   // Ahead of the verdict, because it qualifies it: with no config the phrase
   // lists are empty, so a "passed" below covers metrics and facts only.
   if (factCheck.configMissing) {
@@ -1566,6 +1569,7 @@ async function runFactGate(html, label) {
   } else {
     console.log(`✅ Fact check passed: ${label}`);
   }
+  return factCheck;
 }
 
 /**
@@ -1802,7 +1806,7 @@ async function generatePDF() {
   }
 
   // Fact gate, on the normalized HTML: the document that actually prints.
-  if (!skipFactCheck && cvMarkdown) await runFactGate(html, basename(inputPath));
+  if (!skipFactCheck) await runPdfFactGate(html, basename(inputPath), { dataRoot: workspaceRoot });
 
   return renderHtmlToPdf(html, outputPath, {
     format,
@@ -1957,7 +1961,7 @@ async function runBatchFromManifest(manifestPath, globals) {
       // Same gate, same guard and same place as the single render. A blocked
       // entry throws into the catch below: it is recorded as failed and never
       // reaches Chromium, and the rest of the batch still renders.
-      if (!globals.skipFactCheck && cvMarkdown) await runFactGate(html, basename(entryInput));
+      if (!globals.skipFactCheck) await runPdfFactGate(html, basename(entryInput), { dataRoot: workspaceRoot });
 
       entries.push({
         _idx: i,

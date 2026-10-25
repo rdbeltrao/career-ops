@@ -62,6 +62,7 @@ copyFileSync(join(ROOT, 'path-resolver.mjs'), join(sandbox, 'path-resolver.mjs')
 // it the copy dies with ERR_MODULE_NOT_FOUND before parsing an argument.
 mkdirSync(join(sandbox, 'lib'), { recursive: true });
 copyFileSync(join(ROOT, 'lib', 'is-main-module.mjs'), join(sandbox, 'lib', 'is-main-module.mjs'));
+copyFileSync(join(ROOT, 'lib', 'context-library.mjs'), join(sandbox, 'lib', 'context-library.mjs'));
 // lib/page-format.mjs owns the paper size generate-pdf.mjs imports at module
 // scope, so the copy needs it for the same reason.
 copyFileSync(join(ROOT, 'lib', 'page-format.mjs'), join(sandbox, 'lib', 'page-format.mjs'));

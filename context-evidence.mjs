@@ -1,11 +1,11 @@
 #!/usr/bin/env node
 /**
- * context-evidence.mjs — print modes/_context.md the way the evaluation reads
- * it.
+ * context-evidence.mjs — print the current authoritative context hierarchy,
+ * or modes/_context.md when no library exists, as the evaluation reads it.
  *
- * The file is the source of truth about the candidate, so by default it is
- * printed as written under a one-line notice that says so (CONTEXT_NOTICE in
- * lib/context-evidence.mjs). The interactive router, the web evaluate prompt
+ * Library pages retain their hierarchy and explicit evidence roles; a broken
+ * library is an error, never a reason to substitute an older summary. The
+ * interactive router, the web evaluate prompt
  * and batch-runner.sh hand the context to an agent as text, so they run this
  * command instead of reading the raw file, and every path gets the same view.
  *
@@ -49,17 +49,21 @@ const USAGE = 'Usage: node context-evidence.mjs [--file <path>] [--mask] [--raw]
 export function renderContextEvidence({ dataRoot, file = null, raw = false, mask = defaultMask(), notice = true } = {}) {
   const masked = Boolean(mask) && !raw;
   let text;
+  let contextNotice = masked ? MASKED_NOTICE : CONTEXT_NOTICE;
   if (file) {
     const path = resolve(file);
     if (!existsSync(path)) return { ok: false, error: `context file not found: ${path}` };
     const body = readFileSync(path, 'utf-8').replace(/^﻿/, '').trim();
     text = masked ? maskContextNumbers(body) : body;
   } else {
-    const found = readContext(dataRoot, { mask: masked, raw });
+    let found;
+    try { found = readContext(dataRoot, { mask: masked, raw }); }
+    catch (error) { return { ok: false, error: error.message }; }
     if (!found) return { ok: false, error: `modes/_context.md not found under ${dataRoot}` };
     text = found.text;
+    contextNotice = found.notice;
   }
-  const header = notice ? `<!-- ${masked ? MASKED_NOTICE : CONTEXT_NOTICE} -->\n\n` : '';
+  const header = notice ? `<!-- ${contextNotice} -->\n\n` : '';
   return { ok: true, text: `${header}${text}\n` };
 }
 

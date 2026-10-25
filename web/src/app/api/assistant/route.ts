@@ -2,7 +2,8 @@ import { pathToFileURL } from "node:url";
 import { buildConversationContext } from "@/lib/assistant-history.mjs";
 import { spawnHeadlessCli } from "@/lib/spawn-cli.mjs";
 import { cliSubstitutionNotice, cliUnavailableError, resolveCliOrFallback } from "@/lib/clis";
-import { careerOpsRoot, readMemory, doctorState, rootScript } from "@/lib/career-ops";
+import { careerOpsRoot, careerOpsCodeRoot, readMemory, doctorState, rootScript } from "@/lib/career-ops";
+import { readAppContextLibrary, type ContextLibrary } from "@/lib/core/context-library.mjs";
 import { resolveCodeRoot } from "@/lib/core/code-root.mjs";
 import { profileRef } from "@/lib/core/profile-path.mjs";
 import { buildSystemPreamble } from "@/lib/assistant-preamble.mjs";
@@ -66,8 +67,11 @@ export async function POST(req: Request) {
   const pageLine = pageContext
     ? `\n\nCURRENT PAGE (the user is looking at this right now): ${pageContext}\nWhen the user's message is ambiguous ("this", "it", "apply", "evaluate this", "draft it"), assume it refers to what's on the current page.`
     : "";
-  const memory = readMemory();
-  const memoryLine = memory.trim()
+  let contextLibrary: ContextLibrary | null;
+  try { contextLibrary = await readAppContextLibrary(careerOpsCodeRoot(), careerOpsRoot()); }
+  catch { return Response.json({ error: "Your Context could not be read. Check its pages before continuing." }, { status: 409 }); }
+  const memory = contextLibrary ? "" : readMemory();
+  const memoryLine = contextLibrary ? "" : memory.trim()
     ? `\n\nWHAT YOU KNOW ABOUT THE USER (persistent memory — carries across sessions and CLIs):\n${memory.trim()}`
     : "\n\n(No persistent memory about the user yet — learn and use <<remember:>> as you go.)";
   // Hand the assistant the SAME authoritative setup signal the home screen reads
@@ -79,16 +83,18 @@ export async function POST(req: Request) {
   // prerequisite is "present" the moment doctor auto-copies the template, so
   // doctorState alone would call a generic file "done". Section state is what
   // tells the assistant which parts of the brief are still not this person's.
-  const generic = await personalizationGeneric();
+  const generic = contextLibrary ? [] : await personalizationGeneric();
   const personalizationLine = generic === null
     ? "\n- Personalization: could not be read right now — do NOT emit setPersonalization and do NOT say it is complete; if the user asks, tell them the personalization file could not be read"
     : generic.length
       ? `\n- Personalization still on the template (ask about these, then setPersonalization): ${generic.join(", ")}`
       : "\n- Personalization: filled";
-  const setupLine = onboardingNeeded || generic === null || generic.length
+  const setupLine = contextLibrary
+    ? "\n\nSETUP STATE: current Context is loaded. Career facts and preferences come from its classified pages; an absent CV draft or legacy personalization summary is not missing career context. Help with the user's current request."
+    : onboardingNeeded || generic === null || generic.length
     ? `\n\nSETUP STATE (authoritative — the SAME signal the home screen uses; trust it over guessing, and do NOT re-ask for anything already on file):\n- CV on file (cv.md): ${hasCv ? "YES — do NOT ask for it again; read it to be concrete" : "NO — this is the first thing to collect"}\n- Still missing: ${missing.length ? missing.join(", ") : "nothing"}${personalizationLine}\nWhen onboarding, START at the first item actually missing. If the CV is already on file, SKIP step 1 entirely and go straight to the next missing prerequisite (usually the profile — target roles, comp, location), then the personalization sections still on the template.`
     : `\n\nSETUP STATE: this user is fully set up (CV + profile + scanner + personalization all on file). Do NOT run onboarding or ask for a CV — just help them with what they actually asked.`;
-  const prompt = `${buildSystemPreamble(profileRef(careerOpsRoot()))}${setupLine}${memoryLine}${pageLine}\n\n--- Conversation ---\n${convo}\nUser: ${message}\nAssistant:`;
+  const prompt = `${buildSystemPreamble(profileRef(careerOpsRoot()), contextLibrary)}${setupLine}${memoryLine}${pageLine}\n\n--- Conversation ---\n${convo}\nUser: ${message}\nAssistant:`;
 
   // Claude Code streams token-level deltas via stream-json + partial messages.
   // Other CLIs: pass their stdout through raw.
@@ -130,6 +136,7 @@ export async function POST(req: Request) {
       args,
       { cwd: careerOpsRoot(), env: process.env },
       { cliId, capabilities: CAPS.networkReadOnly },
+      { prompt },
     );
   } catch (e) {
     // Fencing refuses an argv that contradicts the capability record. Report it

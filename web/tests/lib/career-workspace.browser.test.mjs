@@ -9,7 +9,7 @@ const target = process.env.CAREER_WORKSPACE_TEST_URL;
 const fixtureMarker = 'Fictional career-workspace browser fixture.';
 const contextFixture = `# Career record\n\n${fixtureMarker}\n\n## Profile, Skills & Credentials\n\nBuilds reliable software with **TypeScript**.\n\n## Career History\n\nEmployer records.\n\n### Example Labs\n\nLed a team of 4 engineers.\n\n- Improved onboarding.\n- Kept source [record](https://example.com/evidence).\n\n### Example Studio\n\nNeeds confirmation: delivery metric.\n\n## Professional Examples\n\nExamples belong to their sources.\n`;
 
-test('career workspace edits canonical sections, guards drafts, and supports mobile', {
+test('legacy Context fallback edits canonical sections, guards drafts, and supports mobile', {
   skip: !target,
   timeout: 180_000,
 }, async () => {
@@ -30,6 +30,13 @@ test('career workspace edits canonical sections, guards drafts, and supports mob
   const { chromium } = await import('playwright-core');
   const browser = await chromium.launch({ channel: 'chrome', headless: true });
   const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
+  // Exercise fallback without deleting or modifying the fixture's page library.
+  await page.route('**/api/workspace', async (route) => {
+    if (route.request().method() !== 'GET') return route.continue();
+    const response = await route.fetch();
+    const catalog = await response.json();
+    await route.fulfill({ json: { ...catalog, documents: catalog.documents.filter((document) => document.kind !== 'source'), sourceRootDocumentId: null, sourceError: null } });
+  });
   const errors = [];
   page.on('pageerror', (error) => errors.push(error.message));
   const writes = [];
@@ -61,6 +68,8 @@ test('career workspace edits canonical sections, guards drafts, and supports mob
     await page.getByRole('navigation', { name: 'Workspace pages' }).waitFor();
     await page.getByRole('button', { name: 'Save', exact: true }).waitFor();
     assert.equal(writes.length, 0, 'opening does not write');
+    assert.equal(await page.getByRole('button', { name: /^(Source pages|App files)$/ }).count(), 0);
+    assert.equal(await page.getByRole('navigation', { name: 'Workspace pages' }).getByRole('button', { name: 'CV draft', exact: true }).count(), 0, 'CV is separate from fallback Context');
     await select('Profile, Skills & Credentials');
     const editor = page.getByRole('textbox', { name: 'Page content', exact: true });
     await editor.fill('Builds reliable software with TypeScript. Reviewed 7 projects.');
@@ -94,7 +103,7 @@ test('career workspace edits canonical sections, guards drafts, and supports mob
 
     await editor.fill('Unsaved local draft.');
     const cvTitle = documents.find((d) => d.id === 'cv').title;
-    await select(cvTitle, false);
+    await page.getByRole('navigation', { name: 'App navigation' }).getByRole('link', { name: cvTitle, exact: true }).click();
     await page.getByRole('dialog', { name: 'Unsaved changes' }).waitFor();
     await page.getByRole('button', { name: 'Keep editing', exact: true }).click();
     assert.match(await editor.innerText(), /Unsaved local draft/);
@@ -126,16 +135,12 @@ test('career workspace edits canonical sections, guards drafts, and supports mob
     await saved();
     assert.ok((await read('achievements')).content.startsWith(originalTable), 'unsupported table remains byte-identical');
 
-    await select(cvTitle);
-    await editor.waitFor();
-    assert.match(await editor.innerText(), /Alex Example/);
     await page.goto(`${origin}/cv`);
     await editor.waitFor();
     assert.match(await editor.innerText(), /Alex Example/, 'legacy CV route uses shared editor');
 
     await page.locator('aside nav').getByRole('link', { name: 'Context', exact: true }).last().click();
     await page.waitForURL(`${origin}/context`);
-    await page.getByRole('button', { name: 'App files', exact: true }).click();
     await select(documents.find((d) => d.id === 'context').title);
     await select('Profile, Skills & Credentials');
     await editor.fill('Recover this draft after browser navigation.');
@@ -145,13 +150,11 @@ test('career workspace edits canonical sections, guards drafts, and supports mob
     await page.waitForURL(`${origin}/cv`);
     await page.goForward();
     await page.waitForURL(`${origin}/context`);
-    await page.getByRole('button', { name: 'App files', exact: true }).click();
     await page.getByRole('button', { name: 'Restore draft', exact: true }).click();
     assert.match(await editor.innerText(), /Recover this draft/);
     assert.equal(writes.length, writesBeforeHistory, 'history recovery never writes the source file');
     page.once('dialog', (dialog) => dialog.accept());
     await page.reload();
-    await page.getByRole('button', { name: 'App files', exact: true }).click();
     await page.getByRole('button', { name: 'Restore draft', exact: true }).waitFor();
     const latest = await read();
     const changedWhileAway = await fetch(`${origin}/api/workspace`, {

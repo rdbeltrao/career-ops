@@ -35,7 +35,7 @@ for (const file of [
   'cv-sections-core.mjs', 'path-resolver.mjs',
 ]) copyFileSync(join(ROOT, file), join(sandbox, file));
 mkdirSync(join(sandbox, 'lib'), { recursive: true });
-for (const file of ['is-main-module.mjs', 'page-format.mjs', 'dir-lock.mjs', 'yaml-document.mjs']) {
+for (const file of ['is-main-module.mjs', 'page-format.mjs', 'dir-lock.mjs', 'yaml-document.mjs', 'context-library.mjs']) {
   copyFileSync(join(ROOT, 'lib', file), join(sandbox, 'lib', file));
 }
 mkdirSync(join(sandbox, 'data'), { recursive: true });
@@ -164,6 +164,30 @@ try {
   } else {
     fail(`single-file --skip-fact-check: status=${singleSkipped.status}\n${singleSkipped.output.trim()}`);
   }
+
+  // A library is sufficient evidence even before a tailored cv.md exists.
+  rmSync(join(sandbox, 'cv.md'));
+  const contextDir = join(sandbox, 'data', 'context-workspace');
+  mkdirSync(join(contextDir, 'pages'), { recursive: true });
+  const rootId = '1'.repeat(32);
+  writeFileSync(join(contextDir, 'index.json'), JSON.stringify({ version: 1, rootId, pages: [{ id: rootId, title: 'Context', parentId: null, order: 0, usage: 'facts' }] }));
+  writeFileSync(join(contextDir, 'pages', `${rootId}.md`), 'Led a team of 4 engineers and cut p95 latency by 30%.\n');
+  const contextOnly = runBatch('context-only');
+  if (contextOnly.status === 1 && contextOnly.rendered('honest.pdf') && !contextOnly.rendered('inflated.pdf')
+      && contextOnly.results?.[1]?.ok === false && /Context/.test(contextOnly.results[1].error)) {
+    pass('--batch gates against Context without cv.md and blocks stale or invented facts');
+  } else {
+    fail(`Context-only batch gate: status=${contextOnly.status} results=${JSON.stringify(contextOnly.results)}\n${contextOnly.output.trim()}`);
+  }
+  const contextSingle = run(['inflated.html', 'context-single/inflated.pdf']);
+  if (contextSingle.status === 1 && !existsSync(join(sandbox, 'context-single', 'inflated.pdf')) && /Context/.test(contextSingle.output)) {
+    pass('single-file generation gates against Context without cv.md');
+  } else fail(`Context-only single gate: status=${contextSingle.status}\n${contextSingle.output.trim()}`);
+  writeFileSync(join(contextDir, 'index.json'), '{ malformed');
+  const malformed = run(['honest.html', 'context-malformed/honest.pdf']);
+  if (malformed.status === 1 && !existsSync(join(sandbox, 'context-malformed', 'honest.pdf'))) {
+    pass('a malformed Context library blocks PDF creation');
+  } else fail(`malformed Context gate: status=${malformed.status}\n${malformed.output.trim()}`);
 } finally {
   rmSync(sandbox, { recursive: true, force: true });
 }

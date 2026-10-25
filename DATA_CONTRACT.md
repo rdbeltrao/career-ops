@@ -11,6 +11,8 @@ These files contain your personal data, customizations, and work product. Update
 | `.career-ops-web/chats/*.json` | Local assistant conversation history (gitignored, not verified profile facts); only the chat API writes these files |
 | `.career-ops-web/cv-studio/*.json` | Your CV Studio edits to a tailored CV, one file per report number (gitignored); only the CV Studio API writes these files |
 | `cv.md` | Your CV in markdown |
+| `data/context-workspace/index.json` and `pages/*.md` | Your single editable Context hierarchy and its authoritative page bodies for matching and CV generation. The shared context reader loads fresh pages on every run. Manifest `usage` is `facts`, `preferences`, `reference` or `unconfirmed`, inherited from the nearest ancestor (default `facts`). Only settled, explicitly attributed facts support candidate claims. Invalid libraries fail visibly instead of falling back to old summaries. |
+| `data/context-workspace/sources/*` | Preserved original import snapshots; provenance only, never a second live context or automatic source of candidate claims. |
 | `config/profile.yml` | Your identity, targets, comp range |
 | `config/cv-facts.json` | Your CV fact-check allowlist and forbidden phrases |
 | `config/benchmarks.yml` | Your market calibration benchmark overrides (optional; copy `templates/benchmarks.yml` here and edit — read by `funnel-velocity.mjs`) |

@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import { fenceArgs } from "./cli-fencing.mjs";
 import { prepareCliLaunch } from "./cli-launch.mjs";
+import { preparePromptInput } from "./cli-prompt-input.mjs";
 
 // Plain .mjs (same pattern as tracker-table.mjs/clean-chips.mjs) so
 // tests/lib/spawn-cli.test.mjs can import it directly under Node. Import it with the
@@ -9,11 +10,11 @@ import { prepareCliLaunch } from "./cli-launch.mjs";
 // JS modules must be fully specified.
 
 /**
- * Spawn a headless agent CLI with stdin closed, under the worker's permissions.
+ * Spawn a headless agent CLI with stdin delivered and closed, under the worker's permissions.
  *
  * CLIs such as `codex exec` read additional prompt text from stdin when a pipe
- * is left open. A web request never supplies that extra input, so leaving the
- * default pipe open makes Codex wait forever without producing stdout. This is
+ * is left open. Close it immediately after delivering a large prompt, or with
+ * no input for an ordinary argv prompt, so Codex never waits on an open pipe. This is
  * the ONLY spawn path for CLI-invoking routes — every call site should use it
  * instead of `node:child_process`'s `spawn` directly, so the fix can't drift.
  *
@@ -43,8 +44,9 @@ import { prepareCliLaunch } from "./cli-launch.mjs";
  * @param {string[]} args
  * @param {import("node:child_process").SpawnOptionsWithoutStdio} options
  * @param {{cliId: string, capabilities: import("./worker-capabilities.mjs").Capabilities}} fencing
+ * @param {{prompt?:string}} [input] The complete prompt, when the caller supports large Context.
  */
-export function spawnHeadlessCli(binPath, args, options, fencing) {
+export function spawnHeadlessCli(binPath, args, options, fencing, input = {}) {
   // Fail fast rather than spawn unfenced. Omitting `fencing` used to spread
   // `undefined` into nothing, leaving cliId undefined — which matches no fencer,
   // so the raw argv was spawned with no error at all. The docstring's "it does
@@ -57,7 +59,8 @@ export function spawnHeadlessCli(binPath, args, options, fencing) {
         "Declare what the worker needs (worker-capabilities.mjs) so its permissions can be applied.",
     );
   }
-  const { args: fencedArgs } = fenceArgs({ ...fencing, args });
+  const transport = preparePromptInput(fencing.cliId, args, input.prompt);
+  const { args: fencedArgs } = fenceArgs({ ...fencing, args: transport.args });
   // On Windows an npm-installed CLI is a script shim spawn() cannot run without a
   // shell, so launch the .js/.exe it wraps (a no-op elsewhere; cli-launch.mjs).
   // After fencing, so the fencers see the CLI's own argv rather than node's.
@@ -68,7 +71,16 @@ export function spawnHeadlessCli(binPath, args, options, fencing) {
   // output at all; the same spawn with windowsHide (CREATE_NO_WINDOW) succeeds.
   // Nothing spawned here needs a console, so never inherit one. Set after the
   // caller's options so no caller can opt back in. No-op on POSIX (#3809).
-  const child = spawn(launch.command, launch.args, { ...options, windowsHide: true });
-  child.stdin?.end();
+  const child = spawn(launch.command, launch.args, { ...options, ...(transport.stdin !== null ? { stdio: /** @type {const} */ (["pipe", "pipe", "pipe"]) } : {}), windowsHide: true });
+  if (transport.stdin !== null && child.stdin) {
+    // A CLI may exit before reading a large request. Surface the failed input
+    // through the caller's existing child error handler instead of crashing
+    // the server on an unhandled EPIPE or accepting a partial Context.
+    child.stdin.once("error", () => {
+      child.kill();
+      child.emit("error", new Error("The AI CLI closed its input before the complete Context was delivered."));
+    });
+    child.stdin.end(transport.stdin);
+  } else child.stdin?.end();
   return child;
 }

@@ -7,10 +7,11 @@ export const SOURCE_MANIFEST_PATH = 'data/context-workspace/index.json';
 export const MAX_SOURCE_MANIFEST_BYTES = 1_000_000;
 export const MAX_SOURCE_PAGES = 5000;
 const PAGE_ID = /^[a-f0-9]{32}$/;
+const PAGE_USAGES = new Set(['facts', 'preferences', 'reference', 'unconfirmed']);
 /** @param {unknown} value */
 function validPageId(value) { return typeof value === 'string' && PAGE_ID.test(value); }
 
-/** @typedef {{id:string,title:string,parentId:string|null,order:number,sourceUrl?:string,sourceEditedAt?:string,importNotes?:string[]}} SourcePage */
+/** @typedef {{id:string,title:string,parentId:string|null,order:number,usage?:'facts'|'preferences'|'reference'|'unconfirmed',sourceUrl?:string,sourceEditedAt?:string,importNotes?:string[]}} SourcePage */
 /** @typedef {{version:1,rootId:string,pages:SourcePage[]}} SourceManifest */
 /** @param {unknown} value */
 function isObject(value) { return value !== null && typeof value === 'object' && !Array.isArray(value); }
@@ -47,6 +48,7 @@ export function validateSourceManifest(input) {
     if (page.sourceUrl !== undefined && !validSourceUrl(page.sourceUrl)) throw invalidManifest();
     if (page.sourceEditedAt !== undefined && !validSourceDate(page.sourceEditedAt)) throw invalidManifest();
     if (page.importNotes !== undefined && !validImportNotes(page.importNotes)) throw invalidManifest();
+    if (page.usage !== undefined && !PAGE_USAGES.has(page.usage)) throw invalidManifest();
     const position = `${page.parentId}:${page.order}`;
     if (positions.has(position)) throw invalidManifest();
     ids.add(page.id); positions.add(position);
@@ -59,12 +61,12 @@ export function validateSourceManifest(input) {
   // JUDGMENT: iterative traversal bounds stack use for imported deep trees and
   // rejects disconnected cycles as well as orphaned references.
   const children = childrenByParent(input.pages);
-  const visited = new Set(); const pending = [root.id];
+  const visited = new Set(); const pending = [{ id: root.id, depth: 0 }];
   while (pending.length) {
-    const id = pending.pop();
-    if (visited.has(id)) throw invalidManifest();
+    const { id, depth } = pending.pop();
+    if (visited.has(id) || depth > 64) throw invalidManifest();
     visited.add(id);
-    for (const child of children.get(id) ?? []) pending.push(child.id);
+    for (const child of children.get(id) ?? []) pending.push({ id: child.id, depth: depth + 1 });
   }
   if (visited.size !== input.pages.length) throw invalidManifest();
   return input;
@@ -98,22 +100,32 @@ function pageIdFromDocument(document) {
 }
 /** @param {string} id */
 function pagePath(id) { return `data/context-workspace/pages/${id}.md`; }
-/** @param {SourcePage} page @param {string} workspaceId */
-function metadata(page, workspaceId) {
-  return { id: `source-${page.id}`, title: page.title, kind: 'source', group: 'Source pages', description: 'A local copy of a source page. Editing this page does not update Notion or the app’s career facts.', workspaceId, parentDocumentId: page.parentId === null ? null : `source-${page.parentId}`, order: page.order, sourceUrl: page.sourceUrl ?? null, sourceEditedAt: page.sourceEditedAt ?? null, importNotes: page.importNotes ?? [], sections: [] };
+/** @param {SourcePage} page @param {SourcePage[]} pages */
+function effectiveUsage(page, pages) {
+  const byId = new Map(pages.map((item) => [item.id, item]));
+  let current = page;
+  while (current) {
+    if (current.usage) return current.usage;
+    current = current.parentId === null ? undefined : byId.get(current.parentId);
+  }
+  return 'facts';
 }
-/** @param {SourcePage} page @param {string} content @param {string} manifestText @param {string} workspaceId */
-function snapshot(page, content, manifestText, workspaceId) {
+/** @param {SourcePage} page @param {string} workspaceId @param {SourcePage[]} pages */
+function metadata(page, workspaceId, pages) {
+  return { id: `source-${page.id}`, title: page.title, kind: 'source', group: 'Context', description: 'Part of the career context used for job matching and CV generation.', usage: effectiveUsage(page, pages), workspaceId, parentDocumentId: page.parentId === null ? null : `source-${page.parentId}`, order: page.order, sourceUrl: page.sourceUrl ?? null, sourceEditedAt: page.sourceEditedAt ?? null, importNotes: page.importNotes ?? [], sections: [] };
+}
+/** @param {SourcePage} page @param {string} content @param {string} manifestText @param {string} workspaceId @param {SourcePage[]} pages */
+function snapshot(page, content, manifestText, workspaceId, pages) {
   // EVIDENCE: title and hierarchy live in the manifest, separate from the body.
   // Include its exact bytes so a stale tab cannot undo any intervening tree edit.
   const revision = createHash('sha256').update('source-page-v1\0').update(page.id).update('\0').update(manifestText).update('\0').update(content).digest('hex');
-  return { ...metadata(page, workspaceId), exists: true, content, revision };
+  return { ...metadata(page, workspaceId, pages), exists: true, content, revision };
 }
-/** @param {string} root @param {SourcePage} page @param {string} manifestText @param {string} workspaceId */
-function readPage(root, page, manifestText, workspaceId) {
+/** @param {string} root @param {SourcePage} page @param {string} manifestText @param {string} workspaceId @param {SourcePage[]} pages */
+function readPage(root, page, manifestText, workspaceId, pages) {
   const body = readWorkspaceFile(root, pagePath(page.id));
   if (!body.exists) throw new WorkspaceError('This source page is listed in the library, but its document is missing. Nothing was created or overwritten.', 'missing_source_page', 409);
-  return snapshot(page, body.content, manifestText, workspaceId);
+  return snapshot(page, body.content, manifestText, workspaceId, pages);
 }
 /** @param {unknown} error */
 function errorInfo(error) {
@@ -126,7 +138,7 @@ export function readSourceDocument(root, document, workspaceId) {
   const source = loadManifest(root);
   const page = source?.manifest.pages.find((candidate) => candidate.id === id);
   if (!page) throw new WorkspaceError('Unknown workspace document.', 'unknown_document', 404);
-  return readPage(root, page, source.content, workspaceId);
+  return readPage(root, page, source.content, workspaceId, source.manifest.pages);
 }
 
 /** @param {string} root @param {string} workspaceId */
@@ -141,11 +153,11 @@ export function listSourceDocuments(root, workspaceId) {
   while (pending.length) {
     const page = pending.pop();
     try {
-      const { content: _content, revision: _revision, ...summary } = readPage(root, page, source.content, workspaceId);
+      const { content: _content, revision: _revision, ...summary } = readPage(root, page, source.content, workspaceId, source.manifest.pages);
       documents.push(summary);
     } catch (error) {
       sourceError ??= errorInfo(error);
-      documents.push({ ...metadata(page, workspaceId), exists: true, ...errorInfo(error) });
+      documents.push({ ...metadata(page, workspaceId, source.manifest.pages), exists: true, ...errorInfo(error) });
     }
     pending.push(...(children.get(page.id) ?? []).toReversed());
   }
@@ -166,20 +178,27 @@ function serializeManifest(manifest) {
 /**
  * All reads, revision checks and writes are synchronous, like local documents.
  * Only the existing injected backup writer persists user content.
- * @param {{root:string,workspaceId:string,request:import('./career-workspace.mjs').WorkspaceMutation & {document:string,revision:string},write:(file:string,content:string)=>unknown}} options
+ * @param {{root:string,workspaceId:string,request:import('./career-workspace.mjs').WorkspaceMutation & {document:string,revision:string,usage?:string},write:(file:string,content:string)=>unknown}} options
  */
 export function saveSourceDocument({ root, workspaceId, request, write }) {
   const id = pageIdFromDocument(request.document);
   const source = loadManifest(root);
   const page = source?.manifest.pages.find((candidate) => candidate.id === id);
   if (!page) throw new WorkspaceError('Unknown workspace document.', 'unknown_document', 404);
-  const before = readPage(root, page, source.content, workspaceId);
+  const before = readPage(root, page, source.content, workspaceId, source.manifest.pages);
   if (request.revision !== before.revision) throw new WorkspaceError('This document or its page hierarchy changed elsewhere. Reload before saving; your draft has not been written.', 'stale', 409);
   if (request.section !== undefined && request.section !== null) throw new WorkspaceError('Source-page headings are content, not separate pages. Edit the whole page.', 'invalid_section');
   let selectedPage = page; let content = before.content; let manifestText = source.content;
   if (request.action === 'replace') {
     content = validateWorkspaceContent(request.content);
     if (content !== before.content) write(workspaceFilePath(root, pagePath(id)), content);
+  } else if (request.action === 'usage') {
+    if (!PAGE_USAGES.has(request.usage)) throw new WorkspaceError('Choose how this page is used: career facts, job preferences, reference material or unconfirmed notes.', 'invalid_usage');
+    if (request.usage !== before.usage) {
+      page.usage = /** @type {SourcePage['usage']} */ (request.usage);
+      manifestText = serializeManifest(source.manifest);
+      write(workspaceFilePath(root, SOURCE_MANIFEST_PATH), manifestText);
+    }
   } else if (request.action === 'rename') {
     const title = mutationTitle(request.title);
     if (title !== page.title) {
@@ -223,5 +242,5 @@ export function saveSourceDocument({ root, workspaceId, request, write }) {
   } else {
     throw new WorkspaceError('Unknown document action.', 'invalid_action');
   }
-  return { ...snapshot(selectedPage, content, manifestText, workspaceId), selectedSection: null, selectedDocument: `source-${selectedPage.id}` };
+  return { ...snapshot(selectedPage, content, manifestText, workspaceId, source.manifest.pages), selectedSection: null, selectedDocument: `source-${selectedPage.id}` };
 }

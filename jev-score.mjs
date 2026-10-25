@@ -30,11 +30,9 @@
  *   --job       a JSON file ({ url, title, company, location, workplace,
  *               seniority, description, salary?, posted_date? }; unknown keys
  *               ignored) or `-` for stdin.
- *   --context   the candidate context. Default {DATA_ROOT}/modes/_context.md;
- *               when absent, cv.md followed by config/profile.yml with a
- *               one-line notice on stderr. It is the source of truth about
- *               the candidate under the Source-of-Truth Boundary
- *               (AGENTS.md), read whole here as the profile.
+ *   --context   an explicit candidate context file. By default read the live
+ *               Context library with its page roles; older installations use
+ *               modes/_context.md, then cv.md + config/profile.yml with a notice.
  *   --criteria  the question set. Default {DATA_ROOT}/config/jev-criteria.yml,
  *               else config/jev-criteria.example.yml in the checkout.
  *
@@ -64,6 +62,7 @@ import { resolveOpenRouterKey } from './lib/openrouter-key.mjs';
 import { loadCriteria, parseCriteria } from './lib/jev-criteria.mjs';
 import { sanitizeMarkdownField } from './scan.mjs';
 import { DEFAULT_USER_AGENT } from './user-agent.mjs';
+import { readContext } from './lib/context-evidence.mjs';
 
 const CAREER_OPS = dirname(fileURLToPath(import.meta.url));
 
@@ -482,12 +481,12 @@ export function formatJevSegment(result) {
 // ── context ───────────────────────────────────────────────────────────────────
 
 /**
- * The candidate context Jev reads whole. `modes/_context.md` in the data root
- * (or an explicit path), else cv.md followed by the profile.yml text with a
- * notice the caller prints once.
+ * The candidate context Jev reads whole: an explicit file, the live Context
+ * library, or the legacy context/CV/profile fallback. The library carries its
+ * role notice in the model input; callers also report the notice to the user.
  *
  * @param {{ dataRoot: string, contextPath?: string, profilePath?: string }} opts
- * @returns {{ text: string, source: 'context'|'cv+profile', path: string|null, notice: string|null }}
+ * @returns {{ text: string, source: 'library'|'context'|'cv+profile', path: string|null, notice: string|null }}
  */
 export function loadContextText({ dataRoot, contextPath, profilePath } = {}) {
   if (contextPath) {
@@ -495,6 +494,10 @@ export function loadContextText({ dataRoot, contextPath, profilePath } = {}) {
     return { text: readFileSync(contextPath, 'utf-8'), source: 'context', path: contextPath, notice: null };
   }
   const root = dataRoot ?? getCareerOpsRoot();
+  // Use the same live Context source as matching and CV generation. The role
+  // notice travels with the text so reference pages cannot become career facts.
+  const context = readContext(root, { raw: true });
+  if (context?.source === 'library') return { ...context, text: `${context.notice}\n\n${context.text}` };
   const ctx = join(root, CONTEXT_RELATIVE_PATH);
   if (existsSync(ctx)) return { text: readFileSync(ctx, 'utf-8'), source: 'context', path: ctx, notice: null };
 
@@ -519,8 +522,8 @@ const USAGE = `
 
     --job <file|->     job JSON: { url, title, company, location, workplace,
                        seniority, description, salary?, posted_date? }; - reads stdin
-    --context <path>   candidate context (default {DATA_ROOT}/modes/_context.md,
-                       else cv.md + config/profile.yml with a notice)
+    --context <path>   explicit candidate context (default live Context library,
+                       else modes/_context.md, then cv.md + config/profile.yml)
     --criteria <path>  question set (default {DATA_ROOT}/config/jev-criteria.yml,
                        else config/jev-criteria.example.yml)
     --format <f>       json (default) | markdown (pre-screen block) | segment (pipeline segment)
@@ -604,7 +607,7 @@ async function main(args) {
   }
   if (context.notice) console.error(context.notice);
   if (!context.text.trim()) {
-    console.error('jev-score: no candidate context found (modes/_context.md, cv.md or config/profile.yml in the data root).');
+    console.error('jev-score: no candidate context found (Context library, modes/_context.md, cv.md or config/profile.yml in the data root).');
     return 1;
   }
   if (!job.description.trim()) console.error('jev-score: the job has no description; Jev scores the title and metadata only.');

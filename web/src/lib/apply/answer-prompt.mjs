@@ -13,6 +13,7 @@
  * receiving all along; this is a relocation, not a rewrite.
  */
 import { DEFAULT_PROFILE_REF } from "../core/profile-path.mjs";
+import { contextLibraryPrompt } from "../context-library-prompt.mjs";
 
 
 /**
@@ -58,15 +59,17 @@ import { DEFAULT_PROFILE_REF } from "../core/profile-path.mjs";
  * @property {string} class
  * @property {boolean} sameCompany
  *
- * @param {{title: string, fields: PromptField[], memory?: string, cvSource?: string | null, profile?: string, priorAnswers?: PriorAnswer[]}} opts
+ * @param {{title: string, fields: PromptField[], memory?: string, cvSource?: string | null, profile?: string, priorAnswers?: PriorAnswer[], contextLibrary?: import('../core/context-library.mjs').ContextLibrary|null}} opts
  * `profile` is how the prompt names the profile file: profileRef() in core/profile-path.mjs.
  * @returns {string}
  */
-export function buildAnswerPrompt({ title, fields, memory = "", cvSource = null, profile = DEFAULT_PROFILE_REF, priorAnswers = [] }) {
+export function buildAnswerPrompt({ title, fields, memory = "", cvSource = null, profile = DEFAULT_PROFILE_REF, priorAnswers = [], contextLibrary = null }) {
   const fieldsList = fields
     .map((f) => `${f.id}\t${f.type}${f.required ? "*" : ""}\t${f.label}${f.options ? `\t[options: ${f.options.join(" | ")}]` : ""}`)
     .join("\n");
-  const sources = cvSource
+  const sources = contextLibrary
+    ? `${contextLibraryPrompt(contextLibrary)}SOURCES. Current Context facts pages own career experience and achievements. Read ${profile} for contact details and settings only. ${cvSource ? `The attached CV is ${cvSource}; read it for presentation consistency, but do not repeat any claim unsupported by current Context. Flag a conflict for the candidate instead of silently copying it.` : "No tailored CV was found; draft from current Context facts pages."} A report or saved answer may describe this application, but cannot add candidate facts.`
+    : cvSource
     ? `SOURCES. The document being attached to this form is the tailored CV at ${cvSource} — read it, and read ${profile}. If a matching report for this company exists in reports/, read it too.
 - ${profile} owns name, email, phone, address, links, work authorization, visa status and comp expectations. It is authoritative; no CV overrides it.
 - The tailored CV owns employer names, job titles, dates, locations, role descriptions, achievements, education, certifications, skills and the summary. The reviewer is holding it, so every experience answer must describe the roles as it states them.
@@ -76,18 +79,18 @@ export function buildAnswerPrompt({ title, fields, memory = "", cvSource = null,
   const priors = priorAnswers.length
     ? `\n\nPRIOR ANSWERS. The user reviewed these on earlier applications before they were sent (field id ⇥ class ⇥ earlier answer ⇥ from):
 ${priorAnswers.map((p) => `${p.fieldId}\t${p.class}\t${oneLine(p.answer)}\t${p.company || "unknown company"}, ${p.date}, ${p.state}${p.sameCompany ? ", same company" : ""}`).join("\n")}
-- same company: keep the answer consistent with what was sent before, unless the CV or ${profile} now says otherwise.
+- same company: keep the answer consistent with what was sent before, unless ${contextLibrary ? "current Context" : "the CV"} or ${profile} now says otherwise.
 - free text from another company: adapt it to this company and role; never paste it unchanged.
 - identity: ${profile} wins over an earlier answer.
 - knockout or sensitive: do not use the earlier answer as the value; set needs_confirmation:true. The page offers it to the user, who confirms it for this employer.
-- a number in an earlier answer counts only if the CV carries it; otherwise leave it out.`
+- a number in an earlier answer counts only if ${contextLibrary ? "current Context facts pages support it" : "the CV carries it"}; otherwise leave it out.`
     : "";
 
   return `You are pre-filling a job application for the user (company/role: ${title}).
 
 ${sources}
 
-Ground EVERY answer in the REAL candidate — never invent facts.${memory ? `\n\nDurable notes about the user:\n${memory}` : ""}
+Ground EVERY answer in the REAL candidate — never invent facts.${!contextLibrary && memory ? `\n\nDurable notes about the user:\n${memory}` : ""}
 
 FIELDS (id ⇥ type ⇥ label ⇥ options):
 ${fieldsList}${priors}

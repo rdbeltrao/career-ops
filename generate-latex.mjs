@@ -13,7 +13,7 @@
  * --skip-fact-check: compile without the fact gate.
  *
  * Both modes run the CV fact gate (verify-cv-facts.mjs) on the .tex before
- * compiling, when the data root has a cv.md to check against — the same
+ * compiling, when the data root has a Context library or cv.md — the same
  * condition generate-pdf.mjs uses. A blocked document is not compiled.
  *
  * Requires: a repo-local tectonic (`node install-latex-engine.mjs`, see
@@ -297,8 +297,8 @@ export async function compileLatexFile(absPath, content, outputPath, compileOnly
  * The latex and latex-tex modes hand the user a CV as sendable as the one
  * pdf mode renders, and until this ran here neither path checked it at all:
  * generate-pdf.mjs gates in code, this compiler did not. Same condition as
- * generate-pdf: no cv.md in the data root means there is nothing to check
- * against, so the gate is skipped rather than failing every claim.
+ * generate-pdf: a Context library supplies evidence even without a cv.md draft.
+ * A present but unreadable library blocks instead of falling back to the draft.
  *
  * @param {string} content - the .tex source
  * @param {{root?: string, extraSources?: string[], label?: string}} [options]
@@ -308,7 +308,12 @@ export async function compileLatexFile(absPath, content, outputPath, compileOnly
  */
 export async function runLatexFactGate(content, { root = getCareerOpsRoot(), extraSources = [], label } = {}) {
   const cvPath = join(root, 'cv.md');
-  if (!existsSync(cvPath)) return { verdict: 'skipped', reason: `no cv.md in ${root}` };
+  let hasLibrary;
+  try {
+    const { loadContextManifest } = await import('./lib/context-library.mjs');
+    hasLibrary = Boolean(loadContextManifest(root));
+  } catch (error) { return { verdict: 'block', reason: error.message }; }
+  if (!hasLibrary && !existsSync(cvPath)) return { verdict: 'skipped', reason: `no Context library or cv.md in ${root}` };
   // Imported lazily, as generate-pdf.mjs does: a test that copies this script
   // alone into a temp workspace has no cv.md and never reaches the import.
   const { assertFacts } = await import('./verify-cv-facts.mjs');
@@ -322,9 +327,9 @@ export async function runLatexFactGate(content, { root = getCareerOpsRoot(), ext
   // tailored rendering of it, so the context is evidence here too. A missing
   // default source reads as empty inside verifyFacts; only an explicit
   // --source has to exist.
-  const sourcePaths = [join(root, 'modes', '_context.md'), cvPath, join(root, 'article-digest.md'), ...extraPaths];
+  const sourcePaths = hasLibrary ? extraPaths : [join(root, 'modes', '_context.md'), cvPath, join(root, 'article-digest.md'), ...extraPaths];
   try {
-    const result = assertFacts(content, { sourcePaths, configPath: join(root, 'config', 'cv-facts.json'), label });
+    const result = assertFacts(content, { dataRoot: root, sourcePaths, configPath: join(root, 'config', 'cv-facts.json'), label });
     return { verdict: result.verdict, result };
   } catch (err) {
     return { verdict: 'block', reason: err.message };
@@ -343,7 +348,7 @@ const USAGE = `Usage:
   node generate-latex.mjs <input.tex> [output.pdf] --skip-fact-check
   node generate-latex.mjs --help|-h                                # print this usage block and exit
 
-The fact gate runs when the data root has a cv.md; a blocked document is not compiled.
+The fact gate runs when the data root has a Context library or cv.md; a blocked document is not compiled.
 Requires a repo-local tectonic (${INSTALL_HINT}) or tectonic/pdflatex on PATH.`;
 
 /**
