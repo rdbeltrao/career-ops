@@ -45,11 +45,17 @@ function setup(file, { fail }) {
   });
   const load = { ok: true, reportNum: "007", company: "Acme", file, tree, doc, edits: emptyEdits("h1"), stale: false, hasBase: false };
   const previousRoot = process.env.CAREER_OPS_ROOT;
+  const previousCodeRoot = process.env.CAREER_OPS_CODE_ROOT;
   process.env.CAREER_OPS_ROOT = root;
+  // The app resolves executable scripts separately from candidate data.
+  // Point both roots at the fixture so this test uses its renderer stub.
+  process.env.CAREER_OPS_CODE_ROOT = root;
   const out = (name) => path.join(root, "output", name);
   const cleanup = () => {
     if (previousRoot === undefined) delete process.env.CAREER_OPS_ROOT;
     else process.env.CAREER_OPS_ROOT = previousRoot;
+    if (previousCodeRoot === undefined) delete process.env.CAREER_OPS_CODE_ROOT;
+    else process.env.CAREER_OPS_CODE_ROOT = previousCodeRoot;
     fs.rmSync(root, { recursive: true, force: true });
   };
   return { load, out, cleanup };
