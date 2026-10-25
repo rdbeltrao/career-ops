@@ -15,6 +15,7 @@
   },
   "dependencies": {
     "@lexical/code": "0.52.0",
+    "@lexical/extension": "0.52.0",
     "@lexical/link": "0.52.0",
     "@lexical/list": "0.52.0",
     "@lexical/markdown": "0.52.0",

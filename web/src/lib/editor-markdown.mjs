@@ -1,13 +1,38 @@
-import { $createRangeSelection, $getSelection, $isRangeSelection, $isTextNode, $setSelection, createEditor } from 'lexical';
+import { $createParagraphNode, $createRangeSelection, $getSelection, $isRangeSelection, $isTextNode, $setSelection, createEditor } from 'lexical';
 import { HeadingNode, QuoteNode } from '@lexical/rich-text';
 import { ListNode, ListItemNode } from '@lexical/list';
 import { LinkNode } from '@lexical/link';
 import { CodeNode, CodeHighlightNode } from '@lexical/code';
+import { $createHorizontalRuleNode, $isHorizontalRuleNode, HorizontalRuleNode } from '@lexical/extension';
 import { $convertFromMarkdownString, $convertToMarkdownString, TRANSFORMERS } from '@lexical/markdown';
 import { fromMarkdown } from 'mdast-util-from-markdown';
 
-export const EDITOR_NODES = [HeadingNode, QuoteNode, ListNode, ListItemNode, LinkNode, CodeNode, CodeHighlightNode];
-export const EDITOR_TRANSFORMERS = TRANSFORMERS;
+export const EDITOR_NODES = [HeadingNode, QuoteNode, ListNode, ListItemNode, LinkNode, CodeNode, CodeHighlightNode, HorizontalRuleNode];
+
+// EVIDENCE: Lexical's element transformer contract supports additional block
+// nodes. The semantic preflight below still checks setext headings and nested
+// rules, so recognising a divider can never silently change its meaning.
+/** @type {import('@lexical/markdown').ElementTransformer} */
+const HORIZONTAL_RULE = {
+  dependencies: [HorizontalRuleNode],
+  export: (node) => $isHorizontalRuleNode(node) ? '---' : null,
+  regExp: /^ {0,3}(?:(?:\*\s*){3,}|(?:-\s*){3,}|(?:_\s*){3,})$/,
+  replace: (parent, children, _match, isImport) => {
+    // Shortcuts match only the first text node. A following bold span/link is
+    // still part of this paragraph, so it must never be replaced by a divider.
+    if (children.some((child) => !$isTextNode(child) || child.getTextContentSize() > 0)) return false;
+    const rule = $createHorizontalRuleNode();
+    parent.replace(rule);
+    if (!isImport) {
+      const paragraph = $createParagraphNode();
+      rule.insertAfter(paragraph);
+      paragraph.select();
+    }
+  },
+  type: 'element',
+};
+
+export const EDITOR_TRANSFORMERS = [HORIZONTAL_RULE, ...TRANSFORMERS];
 
 /** Remove a slash query from the live selection, including a stale menu split. */
 export function $removeSlashQuery() {
@@ -68,7 +93,7 @@ export function exportMarkdown() {
   return $convertToMarkdownString(EDITOR_TRANSFORMERS);
 }
 
-const supported = new Set(['root', 'paragraph', 'text', 'heading', 'emphasis', 'strong', 'inlineCode', 'code', 'blockquote', 'list', 'listItem', 'link']);
+const supported = new Set(['root', 'paragraph', 'text', 'heading', 'emphasis', 'strong', 'inlineCode', 'code', 'blockquote', 'list', 'listItem', 'link', 'thematicBreak']);
 
 function unsupportedNode(node, source) {
   if (!supported.has(node.type)) return node.type;
@@ -110,7 +135,7 @@ function outsideCode(source, tree) {
 /**
  * Check whether rich editing can preserve this document. The original source is
  * always returned untouched, including on a failed import. This is deliberately
- * conservative: a source-mode document is preferable to a lost evidence link.
+ * conservative: a formatted read view is preferable to a lost evidence link.
  * @param {string} source
  * @returns {{safe:boolean, equivalent:boolean, source:string, reason:string}}
  */
@@ -119,7 +144,7 @@ export function analyzeMarkdown(source) {
   try {
     const original = fromMarkdown(source);
     const unsupported = unsupportedNode(original, source);
-    if (unsupported) return fallback('This page contains formatting that needs source editing. Its original text is preserved.');
+    if (unsupported) return fallback('Choose Source to edit this page. Its original formatting is preserved.');
     const prose = outsideCode(source, original);
     // JUDGMENT: GFM tables/tasks, footnotes and definition lists are outside the
     // current transformer set. Detect them before CommonMark treats them as text.
@@ -127,14 +152,14 @@ export function analyzeMarkdown(source) {
         /^\s*[-+*]\s+\[[ xX]\]/m.test(prose) ||
         /\[\^[^\]]+\]/.test(prose) || /^\s*:\s+\S/m.test(prose) ||
         /&(?:#\d+|#x[\da-f]+|[a-z][a-z\d]+);/i.test(prose)) {
-      return fallback('This page uses Markdown features that need source editing. Its original formatting is preserved.');
+      return fallback('Choose Source to edit this page. Its original formatting is preserved.');
     }
     const converted = fromMarkdown(roundTripMarkdown(source));
     if (JSON.stringify(semanticTree(original)) !== JSON.stringify(semanticTree(converted))) {
-      return fallback('Rich editing would change this page’s formatting. Source editing keeps the original intact.');
+      return fallback('Choose Source to edit this page while keeping its original formatting intact.');
     }
     return { safe: true, equivalent: true, source, reason: '' };
   } catch {
-    return fallback('This page could not be safely opened in rich editing. Its original text is available in source mode.');
+    return fallback('This page is available to read. Choose Source to edit its original text.');
   }
 }

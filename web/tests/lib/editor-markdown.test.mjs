@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { $createParagraphNode, $createTextNode, $getRoot, createEditor } from 'lexical';
-import { $removeSlashQuery, analyzeMarkdown, roundTripMarkdown, safeLinkUrl } from '../../src/lib/editor-markdown.mjs';
+import { $removeSlashQuery, analyzeMarkdown, EDITOR_NODES, EDITOR_TRANSFORMERS, roundTripMarkdown, safeLinkUrl } from '../../src/lib/editor-markdown.mjs';
 
 test('slash cleanup uses the live range after a stale typeahead split without deleting preceding prose', () => {
   for (let split = 1; split < '/heading'.length; split++) {
@@ -54,6 +54,31 @@ test('empty text and ordinary paragraphs support rich editing', () => {
   }
 });
 
+test('ordinary achievement sections with thematic breaks remain safely editable', () => {
+  for (const divider of ['---', '***', '___', '- - -']) {
+    const markdown = `# Approved achievements\n\n## EX01 — Delivery\n\n- **Confirmed:** 45% improvement.\n- [Evidence](https://example.com/source?q=1#proof)\n\n${divider}\n\n## EX02 — Team\n\nA source-backed statement.\n`;
+    assert.equal(analyzeMarkdown(markdown).safe, true, divider);
+    assert.match(roundTripMarkdown(markdown), /45% improvement/);
+    assert.match(roundTripMarkdown(markdown), /https:\/\/example.com\/source\?q=1#proof/);
+  }
+});
+
+test('a thematic-break shortcut cannot discard a following formatted text node', () => {
+  const editor = createEditor({ nodes: EDITOR_NODES, onError: (error) => { throw error; } });
+  editor.update(() => {
+    const marker = $createTextNode('--- ');
+    const evidence = $createTextNode('Keep this 45% claim').toggleFormat('bold');
+    const paragraph = $createParagraphNode().append(marker, evidence);
+    $getRoot().append(paragraph);
+    // Lexical matches the first text node and supplies the remaining siblings.
+    // A block-only shortcut must decline when any of those contain content.
+    const result = EDITOR_TRANSFORMERS[0].replace(paragraph, [evidence], ['--- '], false);
+    assert.equal(result, false);
+    assert.equal($getRoot().getTextContent(), '--- Keep this 45% claim');
+    assert.ok(evidence.hasFormat('bold'));
+  }, { discrete: true });
+});
+
 test('unsupported Markdown keeps exact source and explains fallback', () => {
   for (const markdown of [
     '| Claim | Source |\n| --- | --- |\n| 45% | report |\n',
@@ -100,6 +125,89 @@ test('links accept web, email, fragments and relative references, rejecting exec
   }
 });
 
+test('unsupported pages open formatted and source remains an explicit lossless view', { skip: !process.env.EDITOR_MARKDOWN_TEST_URL, timeout: 90_000 }, async () => {
+  const target = new URL(process.env.EDITOR_MARKDOWN_TEST_URL);
+  assert.ok(['localhost', '127.0.0.1', '[::1]'].includes(target.hostname));
+  const { chromium } = await import('playwright-core');
+  const browser = await chromium.launch({ channel: 'chrome', headless: true });
+  const page = await browser.newPage();
+  const content = '# Evidence summary\r\n\r\n| Claim | Source |\r\n| --- | --- |\r\n| **45%** | [Original](https://example.com/evidence?q=7) |\r\n\r\n---\r\n\r\nA hard break.  \r\nSecond line.\r\n';
+  const doc = { id: 'context', title: 'Career context', group: 'Context', description: 'Fictional formatted fallback', exists: true, content, revision: 'fixture', sections: [] };
+  const writes = [];
+  await page.route('**/api/workspace**', (route) => {
+    if (route.request().method() !== 'GET') {
+      writes.push(route.request().postDataJSON());
+      return route.fulfill({ json: { ...doc, content: writes.at(-1).content, revision: 'saved', selectedSection: null } });
+    }
+    return route.fulfill({ json: new URL(route.request().url()).searchParams.has('document') ? doc : { documents: [doc] } });
+  });
+  try {
+    await page.goto(`${target.origin}/context?document=context`);
+    // The workspace Save control mounts before its lazy editor chunk finishes.
+    await page.locator('[aria-label="Formatted page"], textarea[aria-label="Markdown source"]').first().waitFor();
+    const preview = page.getByRole('article', { name: 'Formatted page', exact: true });
+    assert.equal(await preview.count(), 1, 'unsupported Markdown defaults to a formatted page');
+    assert.equal(await page.getByRole('textbox', { name: 'Markdown source', exact: true }).count(), 0);
+    assert.equal(await preview.getByRole('heading', { name: 'Evidence summary' }).count(), 1);
+    assert.equal(await preview.getByRole('table').count(), 1);
+    assert.equal(await preview.locator('hr').count(), 1);
+    assert.equal(await preview.locator('br').count(), 1);
+    assert.equal(await preview.getByRole('link', { name: 'Original' }).getAttribute('href'), 'https://example.com/evidence?q=7');
+    await page.getByRole('button', { name: 'Source', exact: true }).click();
+    const source = page.getByRole('textbox', { name: 'Markdown source', exact: true });
+    // HTML textarea values normalise CRLF, but toggling must never publish that
+    // browser normalisation or write a replacement document.
+    assert.equal(await source.inputValue(), content.replace(/\r\n/g, '\n'));
+    assert.equal(await page.getByRole('button', { name: 'Save', exact: true }).isDisabled(), true);
+    await page.getByRole('button', { name: 'Preview', exact: true }).click();
+    assert.equal(await preview.getByRole('table').count(), 1);
+    assert.equal(await page.getByRole('button', { name: 'Save', exact: true }).isDisabled(), true);
+    assert.equal(writes.length, 0);
+    await page.getByRole('button', { name: 'Source', exact: true }).click();
+    const edited = `${content.replace(/\r\n/g, '\n')}\nAdded source note.\n`;
+    await source.fill(edited);
+    await page.getByRole('button', { name: 'Preview', exact: true }).click();
+    assert.match(await preview.innerText(), /Added source note\./);
+    await page.getByRole('button', { name: 'Save', exact: true }).click();
+    await preview.waitFor();
+    assert.equal(writes.at(-1).content, edited, 'formatted view saves the exact edited source');
+  } finally { await browser.close(); }
+});
+
+test('page navigation shows ordinary proof points and hides source-only comments', { skip: !process.env.EDITOR_MARKDOWN_TEST_URL, timeout: 90_000 }, async () => {
+  const target = new URL(process.env.EDITOR_MARKDOWN_TEST_URL);
+  assert.ok(['localhost', '127.0.0.1', '[::1]'].includes(target.hostname));
+  const { chromium } = await import('playwright-core');
+  const browser = await chromium.launch({ channel: 'chrome', headless: true });
+  try {
+    for (const content of [
+      '# Approved achievements\n\n## EX01 — Delivery\n\n- **Confirmed:** 45% improvement.\n- [Evidence](https://example.com/proof)\n\n---\n',
+      '<!-- Internal fixture guidance: do not show this note. -->\n\n# Career context\n\n**Confirmed:** 45% improvement.\n\n[Evidence](https://example.com/proof)\n\n<script>window.__unsafePreview=true</script>\n\n[Unsafe](javascript:alert(1))\n',
+    ]) {
+      const page = await browser.newPage();
+      const doc = { id: 'context', title: 'Career context', group: 'Context', description: 'Fictional readable page', exists: true, content, revision: 'fixture', sections: [] };
+      await page.route('**/api/workspace**', (route) => {
+        assert.equal(route.request().method(), 'GET', 'opening and switching views never writes');
+        return route.fulfill({ json: new URL(route.request().url()).searchParams.has('document') ? doc : { documents: [doc] } });
+      });
+      await page.goto(`${target.origin}/context?document=context`);
+      await page.getByRole('button', { name: 'Source', exact: true }).waitFor();
+      const body = content.startsWith('#') ? page.getByRole('textbox', { name: 'Page content', exact: true }) : page.getByRole('article', { name: 'Formatted page', exact: true });
+      assert.equal(await body.count(), 1);
+      assert.match(await body.innerText(), /Confirmed: 45% improvement\./);
+      assert.doesNotMatch(await body.innerText(), /Internal fixture guidance|window\.__unsafePreview|\*\*Confirmed/);
+      assert.equal(await body.getByRole('link', { name: 'Evidence' }).getAttribute('href'), 'https://example.com/proof');
+      if (content.startsWith('#')) assert.equal(await body.locator('hr').count(), 1);
+      else assert.equal(await body.getByRole('link', { name: 'Unsafe' }).count(), 0);
+      assert.equal(await page.evaluate(() => window.__unsafePreview), undefined);
+      await page.getByRole('button', { name: 'Source', exact: true }).click();
+      assert.equal(await page.getByRole('textbox', { name: 'Markdown source', exact: true }).inputValue(), content);
+      assert.equal(await page.getByRole('button', { name: 'Save', exact: true }).isDisabled(), true);
+      await page.close();
+    }
+  } finally { await browser.close(); }
+});
+
 test('rich editor controls preserve source and neutralise pasted unsafe links', { skip: !process.env.EDITOR_MARKDOWN_TEST_URL, timeout: 90_000 }, async () => {
   const target = new URL(process.env.EDITOR_MARKDOWN_TEST_URL);
   assert.ok(['localhost', '127.0.0.1', '[::1]'].includes(target.hostname));
@@ -120,7 +228,7 @@ test('rich editor controls preserve source and neutralise pasted unsafe links', 
     return route.fulfill({ json: new URL(route.request().url()).searchParams.has('document') ? doc : { documents: [doc] } });
   });
   try {
-    await page.goto(`${target.origin}/context`);
+    await page.goto(`${target.origin}/context?document=context`);
     const editor = page.getByRole('textbox', { name: 'Page content', exact: true });
     await editor.waitFor();
     assert.equal(writes.length, 0);
@@ -173,6 +281,15 @@ test('rich editor controls preserve source and neutralise pasted unsafe links', 
     await page.getByRole('button', { name: 'Source', exact: true }).click();
     assert.ok((await source.inputValue()).startsWith('Second paragraph.'));
 
+    await source.fill('**Keep this 45% claim**\n');
+    await page.getByRole('button', { name: 'Rich text', exact: true }).click();
+    await editor.focus();
+    await page.keyboard.press('ControlOrMeta+Home');
+    await page.getByRole('button', { name: 'Bold', exact: true }).click();
+    await editor.pressSequentially('--- ');
+    await page.getByRole('button', { name: 'Source', exact: true }).click();
+    assert.match(await source.inputValue(), /\*\*Keep this 45% claim\*\*/, 'a divider shortcut preserves following formatted evidence');
+
     await source.fill('Safe text.');
     await page.getByRole('button', { name: 'Rich text', exact: true }).click();
     await editor.focus();
@@ -211,7 +328,7 @@ test('an open link form cannot mutate the editor while a save is pending', { ski
     return route.fulfill({ json: new URL(route.request().url()).searchParams.has('document') ? doc : { documents: [doc] } });
   });
   try {
-    await page.goto(`${target.origin}/context`);
+    await page.goto(`${target.origin}/context?document=context`);
     const editor = page.getByRole('textbox', { name: 'Page content', exact: true });
     await editor.waitFor();
     await editor.focus();
