@@ -12,6 +12,9 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+import { jobIdFromTarget } from '../linkedin-apply.mjs';
 import {
   APPLY_STORE_FILE,
   applyKindFromHtml,
@@ -116,4 +119,24 @@ test('store: a later check never erases a known employer URL, and a bad URL is n
   recordApply(root, { id: '8', applyUrl: 'javascript:alert(1)', kind: 'offsite', checkedAt: '2026-10-25' });
   assert.equal(loadApplyStore(root)['8'].applyUrl, '');
   assert.throws(() => recordApply(root, { id: '../x', applyUrl: ASHBY, kind: 'offsite' }), /id/);
+});
+
+const CLI = join(fileURLToPath(new URL('.', import.meta.url)), '..', 'linkedin-apply.mjs');
+
+test('linkedin-apply.mjs: takes a LinkedIn posting URL or a bare job id', () => {
+  assert.equal(jobIdFromTarget('4480683016'), '4480683016');
+  assert.equal(jobIdFromTarget('https://www.linkedin.com/jobs/view/4480683016/'), '4480683016');
+  assert.equal(jobIdFromTarget('https://de.linkedin.com/jobs/view/senior-em-at-secfix-4480683016'), '4480683016');
+  assert.equal(jobIdFromTarget('https://jobs.lever.co/acme/1'), null);
+  assert.equal(jobIdFromTarget('12ab'), null);
+});
+
+test('linkedin-apply.mjs: usage errors exit 2 before any browser starts', () => {
+  for (const args of [[], ['--resolve'], ['--resolve', 'https://jobs.lever.co/acme/1'], ['--bogus']]) {
+    const r = spawnSync(process.execPath, [CLI, ...args], { encoding: 'utf8' });
+    assert.equal(r.status, 2, `${args.join(' ')}: ${r.stderr}`);
+  }
+  const help = spawnSync(process.execPath, [CLI, '--help'], { encoding: 'utf8' });
+  assert.equal(help.status, 0);
+  assert.match(help.stdout, /--resolve/);
 });
