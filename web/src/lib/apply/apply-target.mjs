@@ -36,21 +36,73 @@ export function isLoginGatedBoard(url) {
 }
 
 /**
- * @param {string | undefined | null} url
- * @returns {{ kind: "none" } | { kind: "direct" | "proxy", host: string }}
+ * The LinkedIn job id of a posting URL, or null. The same four shapes as the
+ * core's lib/linkedin-url.mjs (/jobs/view/{id}, /jobs/view/{slug}-{id},
+ * /comm/jobs/view/{id}, ?currentJobId=), restated because suites under
+ * web/tests run on web/ alone. Digits only, LinkedIn hosts only.
+ * @param {string} url
+ * @returns {string|null}
  */
-export function applyTarget(url) {
+export function linkedInPostingId(url) {
+  let u;
+  try {
+    u = new URL(String(url ?? ""));
+  } catch {
+    return null;
+  }
+  if (!/(^|\.)linkedin\.com$/.test(u.hostname)) return null;
+  const path = u.pathname.match(/^\/(?:jobs\/view\/(?:.*-)?|comm\/jobs\/view\/)(\d+)\/?$/);
+  if (path) return path[1];
+  const current = u.searchParams.get("currentJobId");
+  return current && /^\d+$/.test(current) ? current : null;
+}
+
+function hostOf(url) {
+  return new URL(url).hostname.toLowerCase().replace(/^www\./, "");
+}
+
+/**
+ * Where Apply goes.
+ *
+ * `linkedinApply` is the posting's entry from the core's data/linkedin-apply.json
+ * (lib/linkedin-apply.mjs), which the LinkedIn crawl and linkedin-apply.mjs fill:
+ *   - an employer URL: the proxy opens the employer's own form, and the LinkedIn
+ *     link stays beside it as `boardUrl`;
+ *   - Easy Apply: LinkedIn is where the application happens, so it opens there;
+ *   - nothing usable yet: "resolve", the page offers to look the form up.
+ * Other login-gated boards open directly, as before.
+ *
+ * @param {string | undefined | null} url
+ * @param {{ applyUrl?: string, kind?: string } | null} [linkedinApply]
+ * @returns {{ kind: "none" }
+ *   | { kind: "proxy", host: string, url?: string, boardUrl?: string, boardHost?: string }
+ *   | { kind: "direct", host: string, easyApply?: boolean }
+ *   | { kind: "resolve", host: string }}
+ */
+export function applyTarget(url, linkedinApply = null) {
   if (!url || !/^https?:\/\//i.test(url)) return { kind: "none" };
   let host;
   try {
-    host = new URL(url).hostname.toLowerCase().replace(/^www\./, "");
+    host = hostOf(url);
   } catch {
     return { kind: "none" };
   }
-  return { kind: isLoginGatedBoard(url) ? "direct" : "proxy", host };
+  if (!isLoginGatedBoard(url)) return { kind: "proxy", host };
+  if (!linkedInPostingId(url)) return { kind: "direct", host };
+  const employer = linkedinApply?.applyUrl;
+  if (employer && /^https?:\/\//i.test(employer) && !isLoginGatedBoard(employer)) {
+    try {
+      return { kind: "proxy", host: hostOf(employer), url: employer, boardUrl: url, boardHost: host };
+    } catch {
+      /* unparseable stored URL: treat as not found */
+    }
+  }
+  if (linkedinApply?.kind === "easy-apply") return { kind: "direct", host, easyApply: true };
+  return { kind: "resolve", host };
 }
 
 /** The session route's refusal when a login-gated board URL is pasted into the Apply page. */
 export function loginGatedRefusal(host) {
-  return `This is a ${host} listing. ${host} shows its Apply flow only to a signed-in member, so career-ops can't read it here. Open it in your browser, or find the same role on the employer's careers page and paste that application URL.`;
+  const lookup = /(^|\.)linkedin\.com$/.test(host) ? " For a LinkedIn posting, the Apply button on its report page can look up the employer's form." : "";
+  return `This is a ${host} listing. ${host} shows its Apply flow only to a signed-in member, so career-ops can't read it here. Open it in your browser, or find the same role on the employer's careers page and paste that application URL.${lookup}`;
 }

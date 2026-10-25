@@ -4,6 +4,8 @@ import { resolveTailoredCover } from "@/lib/apply/cover";
 import { ReportView } from "@/components/report-view";
 import { pipelineQuery } from "@/lib/pipeline-navigation.mjs";
 import { reportNumberFor } from "@/lib/apply-checklist.mjs";
+import { parseReport } from "@/lib/format";
+import { lookupLinkedInApply } from "@/lib/apply/linkedin-apply";
 
 export const dynamic = "force-dynamic";
 
@@ -22,6 +24,9 @@ export default async function ReportPage({ params, searchParams }: {
   // identity to match on, and guessing one from the id would surface another
   // offer's cover.
   const coverReady = (await resolveTailoredCover(app?.company, id)) !== null;
+  // A LinkedIn posting's employer form, when the crawl or linkedin-apply.mjs read it.
+  const reportUrl = report ? parseReport(report.content).fields.find((f) => f.label === "URL")?.value : undefined;
+  const li = await lookupLinkedInApply(reportUrl);
   return (
     <ReportView
       id={id}
@@ -34,6 +39,7 @@ export default async function ReportPage({ params, searchParams }: {
       backHref={`/pipeline${query ? `?${query}` : ""}`}
       applyHref={`/pipeline/${encodeURIComponent(id)}/apply${query ? `?${query}` : ""}`}
       reportNum={reportNumberFor(id, app, report?.file ?? null)}
+      linkedinApply={li ? { applyUrl: li.applyUrl, kind: li.kind } : null}
     />
   );
 }

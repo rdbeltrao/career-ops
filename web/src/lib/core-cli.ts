@@ -27,14 +27,14 @@ function boundedLockWait(): Record<string, string> {
 
 export type CliResult = { code: number; stdout: string; stderr: string; spawnFailed: boolean; timedOut: boolean };
 
-export function runCoreCli(script: string, args: string[]): Promise<CliResult> {
+export function runCoreCli(script: string, args: string[], { timeoutMs = CORE_CLI_TIMEOUT_MS }: { timeoutMs?: number } = {}): Promise<CliResult> {
   return new Promise((resolve) => {
     execFile(
       process.execPath,
       [rootScript(script), ...args],
       {
         cwd: careerOpsRoot(),
-        timeout: CORE_CLI_TIMEOUT_MS,
+        timeout: timeoutMs,
         env: { ...process.env, ...boundedLockWait() },
       },
       (err, stdout, stderr) => {
