@@ -2,6 +2,8 @@ import { openSession } from "@/lib/apply/session";
 import { cliSubstitutionNotice, resolveCliOrFallback } from "@/lib/clis";
 import { blockedApplyUrlResponse, isUnsafeApplyUrlError, APPLY_URL_BLOCKED_MESSAGE } from "@/lib/apply/url-guard.mjs";
 import { readJsonObject } from "@/lib/json-body";
+import { applyTarget, aggregatorRefusal } from "@/lib/apply/apply-target.mjs";
+import { loadIsJobBoard } from "@/lib/apply/board-check";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -17,6 +19,10 @@ export async function POST(req: Request) {
   const url = (body.url ?? "").trim();
   const blocked = await blockedApplyUrlResponse(url);
   if (blocked) return Response.json({ error: blocked.error }, { status: blocked.status });
+  // A job board never shows its Apply flow to this signed-out browser, so it is
+  // refused before Chrome launches instead of after it wanders into a login page.
+  const target = applyTarget(url, await loadIsJobBoard());
+  if (target.kind === "direct") return Response.json({ error: aggregatorRefusal(target.host) }, { status: 400 });
   // A stale saved id falls back to the sole installed CLI, as on every other AI
   // route (#4607). Unresolvable → pass it through unchanged: the interpreter
   // already treats a missing CLI as "no agentic fallback".
