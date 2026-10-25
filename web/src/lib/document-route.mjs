@@ -10,8 +10,10 @@ function json(data, status = 200) {
 
 export function documentRequestGuard(req) {
   const allowedOrigins = parseAllowedOrigins(process.env.CAREER_OPS_ALLOWED_ORIGINS);
+  const requestUrl = new URL(req.url);
+  const host = req.headers.get('host') ?? requestUrl.host;
   const result = checkRequest({
-    host: req.headers.get('host') ?? new URL(req.url).host,
+    host,
     origin: req.headers.get('origin'),
     secFetchSite: req.headers.get('sec-fetch-site'),
     allowedHosts: parseAllowedHosts(process.env.CAREER_OPS_WEB_ALLOWED_HOSTS),
@@ -21,7 +23,11 @@ export function documentRequestGuard(req) {
   const origin = req.headers.get('origin');
   // checkRequest's legacy fallback compares host only; file mutations also
   // require the complete scheme/host/port origin unless explicitly allowed.
-  if (origin && origin !== new URL(req.url).origin && !allowedOrigins.has(origin)) {
+  // Next may rewrite Request.url to its internal localhost hostname while
+  // preserving the browser's Host header. Compare the already validated Host
+  // so http://127.0.0.1 remains its own legitimate origin in that deployment.
+  const publicOrigin = new URL(`${requestUrl.protocol}//${host}`).origin;
+  if (origin && origin !== publicOrigin && !allowedOrigins.has(origin)) {
     return json({ error: 'Cross-origin document access is not allowed.' }, 403);
   }
   return null;

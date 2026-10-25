@@ -61,3 +61,18 @@ test('DELETE then POST restore recovers document; stale delete conflicts', async
   assert.equal(restored.status, 200);
   assert.equal((await restored.json()).filename, 'cv.pdf');
 });
+
+test('Next internal URL hostname does not replace the validated public Host origin', async (t) => {
+  const { id, store } = fixture(t);
+  const request = (origin, site = 'same-origin') => new Request(`http://localhost:3207/api/documents/${id}`, {
+    method: 'PUT', headers: {
+      host: '127.0.0.1:3207', origin, 'sec-fetch-site': site, 'content-type': 'application/pdf',
+    }, body: pdf(),
+  });
+  // Missing If-Match must reach the edit precondition instead of a false403.
+  assert.equal((await handleDocumentRequest(request('http://127.0.0.1:3207'), id, { store })).status, 428);
+  assert.equal((await handleDocumentRequest(request('http://localhost:3207'), id, { store })).status, 403);
+  assert.equal((await handleDocumentRequest(request('https://127.0.0.1:3207'), id, { store })).status, 403);
+  assert.equal((await handleDocumentRequest(request('http://127.0.0.1:9999'), id, { store })).status, 403);
+  assert.equal((await handleDocumentRequest(request('http://127.0.0.1:3207', 'cross-site'), id, { store })).status, 403);
+});
