@@ -107,10 +107,13 @@ test('BentoPDF iframe loads local assets, selects, rewrites, exports and undoes 
   page.on('pageerror', (error) => errors.push(error.message));
   const origin = `http://127.0.0.1:${server.address().port}`;
   await page.goto(origin);
-  await page.waitForFunction(() => window.messages.some((message) => message.type === 'ready'));
+  await page.waitForFunction(() => window.messages.some((message) => ['ready','error'].includes(message.type)));
+  const initialization = await page.evaluate(() => window.messages.find((message) => ['ready','error'].includes(message.type)));
+  assert.equal(initialization.type, 'ready', initialization.message);
   const load = await page.evaluate(async (bytes) => command('load', { bytes: new Uint8Array(bytes).buffer, filename: 'fixture.pdf' }), Array.from(syntheticPdf()));
   assert.equal(load.type, 'loaded');
   await page.frameLocator('iframe').getByRole('button', { name: 'Edit paragraph: Original profile sentence.', exact: true }).click();
+  await page.frameLocator('iframe').getByRole('textbox', { name: 'Edit paragraph on page', exact: true }).waitFor({ timeout: 1500 });
   await page.waitForFunction(() => window.messages.some((message) => message.type === 'selection'));
   const selected = await page.evaluate(() => window.messages.filter((message) => message.type === 'selection').at(-1));
   assert.equal(selected.text, 'Original profile sentence.');
@@ -137,9 +140,9 @@ test('BentoPDF iframe loads local assets, selects, rewrites, exports and undoes 
   const failedSnapshot = await page.evaluate((paragraphId) => command('replace', { paragraphId, expectedText: 'Original profile sentence.', text: 'Unrecoverable edit sentence.' }), selected.paragraphId);
   assert.equal(failedSnapshot.type, 'error');
   assert.equal(failedSnapshot.message, 'Injected snapshot failure');
-  assert.equal(await page.frameLocator('iframe').getByRole('button', { name: 'Edit paragraph: Original profile sentence.', exact: true }).count(), 1, 'Failed post-edit snapshot restores the previous PDF');
+  assert.match(await page.frameLocator('iframe').getByRole('textbox', { name: 'Edit paragraph on page' }).innerText(), /Original profile sentence/, 'Failed post-edit snapshot restores the previous PDF');
   assert.equal(await selectionCount(), beforeFailureSelectionCount, 'Failed replacement must not erase the host text draft with a selection event');
-  assert.equal(await page.frameLocator('iframe').getByRole('button', { name: 'Edit paragraph: Original profile sentence.', exact: true, pressed: true }).count(), 1, 'Failed replacement keeps the visual selection');
+  assert.equal(await page.frameLocator('iframe').getByRole('textbox', { name: 'Edit paragraph on page' }).count(), 1, 'Failed replacement keeps the inline editor');
   const replaced = await page.evaluate(async (paragraphId) => {
     const reply = await command('replace', { paragraphId, expectedText: 'Original profile sentence.', text: 'Updated profile sentence.' });
     return { ...reply, bytes: Array.from(new Uint8Array(reply.bytes)) };
@@ -147,7 +150,7 @@ test('BentoPDF iframe loads local assets, selects, rewrites, exports and undoes 
   assert.equal(replaced.type, 'changed', replaced.message);
   assert.equal(replaced.canUndo, true);
   assert.ok(replaced.bytes.length > 0, 'Mutation reply carries a durable PDF snapshot before resolving');
-  await page.waitForFunction(() => window.messages.filter((message) => message.type === 'selection').at(-1)?.text === 'Updated profile sentence.');
+  await page.frameLocator('iframe').getByRole('button', { name: 'Edit paragraph: Updated profile sentence.', exact: true }).waitFor();
   const overflow = await page.evaluate((paragraphId) => command('replace', { paragraphId, expectedText: 'Updated profile sentence.', text: 'Longer text '.repeat(500) }), selected.paragraphId);
   assert.equal(overflow.type, 'error');
   assert.match(overflow.message, /page|overlap/);
@@ -165,7 +168,7 @@ test('BentoPDF iframe loads local assets, selects, rewrites, exports and undoes 
     await failNextChangedSnapshot();
     assert.equal((await page.evaluate(() => command('undo'))).type, 'error');
     assert.equal(await selectionCount(), beforeUndoFailureSelectionCount, 'Failed undo must not erase the host draft');
-    assert.equal(await page.frameLocator('iframe').getByRole('button', { name: 'Edit paragraph: Updated profile sentence.', exact: true, pressed: true }).count(), 1);
+    assert.equal(await page.frameLocator('iframe').getByRole('button', { name: 'Edit paragraph: Updated profile sentence.', exact: true }).count(), 1);
     const failedUndoBytes = await page.evaluate(async () => Array.from(new Uint8Array((await command('export')).bytes)));
     engine.open(new Uint8Array(failedUndoBytes));
     assert.match(engine.buildModel().map(paragraphText).join('\n'), /Updated profile sentence/);
@@ -185,7 +188,7 @@ test('BentoPDF iframe loads local assets, selects, rewrites, exports and undoes 
     await failNextChangedSnapshot();
     assert.equal((await page.evaluate(() => command('redo'))).type, 'error');
     assert.equal(await selectionCount(), beforeRedoFailureSelectionCount, 'Failed redo must not erase the host draft');
-    assert.equal(await page.frameLocator('iframe').getByRole('button', { name: 'Edit paragraph: Original profile sentence.', exact: true, pressed: true }).count(), 1);
+    assert.match(await page.frameLocator('iframe').getByRole('textbox', { name: 'Edit paragraph on page' }).innerText(), /Original profile sentence/);
     const failedRedoBytes = await page.evaluate(async () => Array.from(new Uint8Array((await command('export')).bytes)));
     engine.open(new Uint8Array(failedRedoBytes));
     assert.match(engine.buildModel().map(paragraphText).join('\n'), /Original profile sentence/);
@@ -199,6 +202,7 @@ test('BentoPDF iframe loads local assets, selects, rewrites, exports and undoes 
     await producer.close();
     const secondLoad = await page.evaluate(async (bytes) => command('load', { bytes: new Uint8Array(bytes).buffer, filename: 'two-pages.pdf' }), Array.from(twoPages));
     assert.equal(secondLoad.pageCount, 2);
+    await page.frameLocator('iframe').getByRole('button', { name: 'Next page', exact: true }).click();
     await page.frameLocator('iframe').getByRole('button', { name: 'Edit paragraph: Second page original sentence.', exact: true }).click();
     await page.waitForFunction(() => window.messages.filter((message) => message.type === 'selection').at(-1)?.text === 'Second page original sentence.');
     const secondSelection = await page.evaluate(() => window.messages.filter((message) => message.type === 'selection').at(-1));
@@ -218,16 +222,110 @@ test('BentoPDF iframe loads local assets, selects, rewrites, exports and undoes 
     await page.evaluate(() => { document.querySelector('iframe').style.maxWidth = '100%'; });
     await page.setViewportSize({ width: 390, height: 844 });
     const editorFrame = page.frames().find((frame) => frame.url().includes('/pdf-editor/'));
-    await editorFrame.waitForFunction(() => [...document.querySelectorAll('.page')].every((page) => {
+    await editorFrame.waitForFunction(() => [...document.querySelectorAll('#pageWrap')].every((page) => {
       const rect = page.getBoundingClientRect();
-      return rect.left >= 0 && rect.width <= document.documentElement.clientWidth - 28 && rect.right <= document.documentElement.clientWidth;
+      return rect.left >= 0 && rect.width <= document.documentElement.clientWidth && rect.right <= document.documentElement.clientWidth;
     }));
     assert.equal(await selectionCount(), beforeResizeSelectionCount, 'Resizing must not reset the host text draft');
-    assert.equal(await page.frameLocator('iframe').getByRole('button', { name: 'Edit paragraph: Second page résumé sentence.', exact: true, pressed: true }).count(), 1, 'Responsive redraw retains the selected paragraph');
+    assert.match(await page.frameLocator('iframe').getByRole('textbox', { name: 'Edit paragraph on page' }).innerText(), /Second page résumé sentence/, 'Responsive redraw retains the inline editor');
     const afterResize = await page.evaluate(async () => Array.from(new Uint8Array((await command('export')).bytes)));
     engine.open(new Uint8Array(afterResize));
     engine.loadPage(1);
     assert.match(engine.buildModel().map(paragraphText).join('\n'), /Second page résumé sentence/);
+    await page.setViewportSize({ width: 1200, height: 1000 });
+    await page.evaluate(async (bytes) => command('load', { bytes: new Uint8Array(bytes).buffer, filename: 'typing.pdf' }), Array.from(syntheticPdf()));
+    const iframe = page.frameLocator('iframe');
+    await iframe.getByRole('button', { name: 'Edit paragraph: Original profile sentence.', exact: true }).click({ position: { x: 2, y: 8 } });
+    const inline = iframe.getByRole('textbox', { name: 'Edit paragraph on page' });
+    await inline.waitFor();
+    await page.keyboard.insertText('New ');
+    await page.waitForFunction(() => window.messages.some(message => message.type === 'draft' && message.text.startsWith('New Original')));
+    await inline.press('End');
+    await inline.press('Enter');
+    await page.waitForFunction(() => window.messages.filter(message => message.type === 'draft').at(-1)?.text.includes('\n'));
+    const breakDraft = await page.evaluate(() => window.messages.filter(message => message.type === 'draft').at(-1));
+    assert.ok(breakDraft.inlineState.runs.length, 'Programmatic Enter produces a rich, recoverable draft');
+    const typedBytes = await page.evaluate(async () => Array.from(new Uint8Array((await command('export')).bytes)));
+    engine.open(new Uint8Array(typedBytes));
+    assert.match(engine.buildModel().map(paragraphText).join('\n'), /New\s+Original profile sentence/);
+
+    // Preview is real on-page ink but does not alter exported bytes or mutation history.
+    await page.evaluate(async (bytes) => command('load', { bytes: new Uint8Array(bytes).buffer, filename: 'preview.pdf' }), Array.from(syntheticPdf()));
+    const beforePreviewChanges = await page.evaluate(() => window.messages.filter(message => message.type === 'changed').length);
+    const proposal = { paragraphId: '0:0', expectedText: 'Original profile sentence.', text: 'Clear profile sentence.' };
+    assert.equal((await page.evaluate(target => command('preview-many', { targets: [target] }), proposal)).type, 'previewed');
+    await iframe.getByRole('img', { name: 'AI preview: Clear profile sentence.', exact: true }).waitFor();
+    await iframe.locator('#page').click({position:{x:10,y:10}});
+    assert.equal(await iframe.getByRole('img', { name:'AI preview: Clear profile sentence.',exact:true }).count(),1,'Clicking the page cannot erase an active proposal');
+    const previewBytes = await page.evaluate(async () => Array.from(new Uint8Array((await command('export')).bytes)));
+    assert.deepEqual(previewBytes, Array.from(syntheticPdf()));
+    assert.equal(await page.evaluate(() => window.messages.filter(message => message.type === 'changed').length), beforePreviewChanges);
+    assert.equal((await page.evaluate(() => command('clear-preview'))).type, 'previewed');
+    assert.equal(await iframe.getByRole('img', { name: 'AI preview: Clear profile sentence.', exact: true }).count(), 0);
+    await editorFrame.evaluate(async()=>{
+      const {PdfEngine}=await import('/vendor/bentopdf/core.js');const original=PdfEngine.prototype.renderParagraphLive;
+      PdfEngine.prototype.renderParagraphLive=function(...args){PdfEngine.prototype.renderParagraphLive=original;throw new Error('Injected preview failure');};
+    });
+    const failedPreview=await page.evaluate(target=>command('preview-many',{targets:[target]}),proposal);
+    assert.equal(failedPreview.type,'error');assert.equal(failedPreview.message,'Injected preview failure');
+    assert.equal(await iframe.locator('.career-ai-preview').count(),0);
+    assert.equal(await editorFrame.locator('body.ai-preview').count(),0,'Failed rendering exits preview mode');
+    const failedBatch = await page.evaluate(target => command('replace-many', { targets: [target, { paragraphId:'0:1',expectedText:'Untouched experience sentence.',text:'Overflow '.repeat(900) }] }), proposal);
+    assert.equal(failedBatch.type, 'error');
+    assert.deepEqual(await page.evaluate(async () => Array.from(new Uint8Array((await command('export')).bytes))), Array.from(syntheticPdf()), 'A failed later paragraph restores the whole batch');
+    assert.equal((await page.evaluate(target => command('replace-many', { targets:[target,{paragraphId:'0:1',expectedText:'Untouched experience sentence.',text:'Revised experience sentence.'}] }), proposal)).type, 'changed');
+    engine.open(new Uint8Array(await page.evaluate(async () => Array.from(new Uint8Array((await command('export')).bytes)))));
+    assert.match(engine.buildModel().map(paragraphText).join('\n'), /Clear profile sentence/);
+    assert.match(engine.buildModel().map(paragraphText).join('\n'), /Revised experience sentence/);
+
+    await page.evaluate(async bytes=>command('load',{bytes:new Uint8Array(bytes).buffer,filename:'style.pdf'}),Array.from(syntheticPdf()));
+    await iframe.getByRole('button',{name:'Edit paragraph: Original profile sentence.',exact:true}).click();
+    const inlineState=await editorFrame.evaluate(async()=>{
+      const {careerNative}=await import('/vendor/bentopdf/app.js');const draft=careerNative.draft();
+      return {runs:draft.runs.map(run=>({...run,bold:2})),format:draft.format};
+    });
+    const styleDraft=await page.evaluate(inlineState=>command('restore-draft',{paragraphId:'0:0',expectedText:'Original profile sentence.',text:'Original profile sentence.',inlineState}),inlineState);
+    assert.equal(styleDraft.type,'draft');assert.equal(styleDraft.modified,true);
+    engine.open(new Uint8Array(await page.evaluate(async()=>Array.from(new Uint8Array((await command('export')).bytes)))));
+    assert.ok(engine.buildModel().find(paragraph=>paragraphText(paragraph)==='Original profile sentence.').runs.some(run=>run.bold),'Style-only recovered draft is committed');
+
+    const sectionProducer = await browser.newPage();
+    await sectionProducer.setContent('<style>@page{size:letter;margin:50px}body{font:14px Arial}h2{font-size:20px;margin:0 0 14px}p{margin:0 0 42px}.next{break-before:page}hr{border:0;background:#0066dd;height:3px;margin:0 0 12px}</style><h2>Professional Summary</h2><p>Experienced product leader.</p><h2>Work Experience</h2><p>Delivered reliable services.</p><h2 class="next">Education</h2><hr><p>Computer science degree.</p>'+ '<div style="break-before:page;height:1px"></div>'.repeat(5));
+    const sectionPdf = await sectionProducer.pdf({ preferCSSPageSize:true,printBackground:true });
+    await sectionProducer.close();
+    await page.evaluate(async bytes => command('load',{bytes:new Uint8Array(bytes).buffer,filename:'sections.pdf'}),Array.from(sectionPdf));
+    await iframe.getByRole('button',{name:'Next page',exact:true}).click();
+    const sectionHandle=iframe.getByRole('button',{name:'Select section: Education',exact:true});
+    await sectionHandle.click();
+    await page.waitForFunction(()=>window.messages.some(message=>message.type==='section-selection'&&message.title==='Education'));
+    const wholeSection=await page.evaluate(()=>window.messages.filter(message=>message.type==='section-selection').at(-1));
+    assert.ok(wholeSection.targets.some(target=>target.text==='Computer science degree.'),JSON.stringify(wholeSection));
+    const beforeDrag=await page.evaluate(()=>({changes:window.messages.filter(m=>m.type==='changed').length,errors:window.messages.filter(m=>m.type==='error').length}));
+    const start=await sectionHandle.boundingBox();
+    await page.mouse.move(start.x+start.width/2,start.y+start.height/2);await page.mouse.down();
+    await page.mouse.move(start.x+start.width/2+15,start.y+start.height/2+5,{steps:8});
+    const target=iframe.getByRole('button',{name:'Drop section before work experience',exact:true});
+    await target.waitFor({state:'visible'});
+    const destination=await target.boundingBox();
+    await page.mouse.move(destination.x+destination.width/2,destination.y+destination.height/2,{steps:15});await page.mouse.up();
+    await page.waitForFunction(before=>window.messages.filter(m=>m.type==='changed').length>before.changes||window.messages.filter(m=>m.type==='error').length>before.errors,beforeDrag);
+    const dragResult=await page.evaluate(()=>window.messages.filter(m=>['changed','error'].includes(m.type)).at(-1));
+    assert.equal(dragResult.type,'changed',dragResult.message);
+    const movedBytes=await page.evaluate(async()=>Array.from(new Uint8Array((await command('export')).bytes)));
+    engine.open(new Uint8Array(movedBytes));
+    assert.equal(engine.pageCount,7,'Reorder remains correct after the six-page native cache evicts early handles');
+    const movedText=engine.buildModel().map(paragraphText).join('\n');
+    assert.match(movedText,/Computer science degree/);assert.match(movedText,/Delivered reliable services/);
+    const bluePixels=image=>Array.from({length:image.data.length/4},(_,i)=>i*4).filter(i=>image.data[i]<60&&image.data[i+1]>60&&image.data[i+1]<150&&image.data[i+2]>160).length;
+    assert.ok(bluePixels(engine.renderPage(1))>500,'Section decoration transfers to destination page');
+    engine.loadPage(1);
+    assert.doesNotMatch(engine.buildModel().map(paragraphText).join('\n'),/Education|Computer science/);
+    assert.equal(bluePixels(engine.renderPage(1)),0,'Source page loses the transferred decoration');
+    assert.equal((await page.evaluate(()=>command('undo'))).type,'changed');
+    engine.open(new Uint8Array(await page.evaluate(async()=>Array.from(new Uint8Array((await command('export')).bytes)))));
+    assert.doesNotMatch(engine.buildModel().map(paragraphText).join('\n'),/Computer science/);
+    engine.loadPage(1);assert.match(engine.buildModel().map(paragraphText).join('\n'),/Computer science/);
+    assert.ok(bluePixels(engine.renderPage(1))>500,'Undo restores both section text and decoration');
   } finally { engine.close(); }
   assert.deepEqual(errors, []);
   assert.ok(requests.every((url) => url.startsWith(origin)), 'No document, font or editor request leaves localhost');

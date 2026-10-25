@@ -1,6 +1,6 @@
 # BentoPDF visual PDF editor: source and notices
 
-This directory contains BentoPDF's PDF text-editing engine, used by career-ops' optional visual editor. The classic CV Studio remains available independently.
+This directory contains BentoPDF's native text-editing interface and PDF engine, used by career-ops' optional visual editor. The classic CV Studio remains available independently.
 
 ## Exact upstream sources
 
@@ -15,10 +15,12 @@ This directory contains BentoPDF's PDF text-editing engine, used by career-ops' 
 - `engine-loader.js` resolves the supplied JavaScript and WebAssembly files from this directory, with no CDN, package install, or runtime download from a third-party host.
 - `core.js` imports `./freetext-script.js` instead of the upstream TypeScript path.
 - `freetext-script.js` retains only the upstream `needsFontEmbedding` helper and its regular expression, with TypeScript annotations removed.
+- `app.js` comes from the pinned `src/js/editcore/app.js`. The original contenteditable editor, embedded-font rendering, caret geometry, live glyph previews, and input-method support are retained. Local changes import the whitespace-preserving paragraph reader, route paragraph opening/commit through the career-ops bridge, keep Enter inside the current paragraph, and export a small `careerNative` adapter. Native file opening, export, general design controls, and history controls are hidden or intercepted by the integration; all accepted edits use transactional whole-document snapshots.
+- `native.html` is the editor subtree of pinned `src/pages/edit-pdf-text.html`, excluding the surrounding upload page and scripts. `native.css` is pinned `src/css/edit-pdf-text.css`. Both retain the upstream structure and styles; career-ops overrides are in `../../pdf-editor/editor.css`.
 - `package.json` declares native ES modules for Node-based verification.
-- The career-ops visual interface and message bridge are provided as readable source at [`../../pdf-editor/bridge.mjs`](../../pdf-editor/bridge.mjs), [`../../pdf-editor/model.mjs`](../../pdf-editor/model.mjs), [`../../pdf-editor/index.html`](../../pdf-editor/index.html), and [`../../pdf-editor/editor.css`](../../pdf-editor/editor.css). These new integration files are provided under AGPL-3.0-only.
+- The career-ops visual interface and message bridge are provided as readable source at [`../../pdf-editor/bridge.mjs`](../../pdf-editor/bridge.mjs), [`../../pdf-editor/model.mjs`](../../pdf-editor/model.mjs), [`../../pdf-editor/index.html`](../../pdf-editor/index.html), [`../../pdf-editor/editor.css`](../../pdf-editor/editor.css), and [`../../pdf-editor/sections.mjs`](../../pdf-editor/sections.mjs). These new integration files are provided under AGPL-3.0-only.
 - `SHA256SUMS.json` records hashes for the supplied upstream and locally adapted assets.
 
 No source files are minified beyond the prebuilt upstream Emscripten loader. The full AGPL license is in `LICENSE`; original EmbedPDF, HarfBuzz and PDFium notices are preserved in the adjacent license files and `NOTICE.pdfium-viewer`.
 
-The editor does not automatically paginate or rebuild a CV's source document. It changes existing PDF paragraph content and rejects detectable paragraph overlaps and page overflow. PDF text, images and font data are processed locally; AI requests, storage and document-management actions are handled separately by career-ops.
+The editor does not rebuild a CV's source document. Direct typing reflows within the existing paragraph area and rejects detectable overlaps and page overflow. Whole CV sections, including their PDF decoration objects and continuation fragments, can be reordered across existing pages when the complete section fits; ambiguous layouts are blocked. AI proposals are temporary on-page bitmap previews until accepted, and undo restores complete PDF snapshots. PDF text, images and font data are processed locally; AI requests, storage and document-management actions are handled separately by career-ops.

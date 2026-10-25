@@ -1,16 +1,5 @@
 <!doctype html>
-<html lang="en">
-  <head>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self'; connect-src 'self'; font-src 'self'; img-src 'self' blob:; base-uri 'none'; form-action 'none'; object-src 'none'">
-    <title>Visual PDF editor</title>
-    <link rel="stylesheet" href="./editor.css">
-  </head>
-  <body>
-    <div id="status" role="status">Loading PDF editor…</div>
-    <main id="pages" aria-label="PDF pages"></main>
-    <footer>Powered by BentoPDF · <a href="../vendor/bentopdf/SOURCE.md" target="_blank" rel="noreferrer">Source and licenses</a></footer>
-    <script type="module" src="./bridge.mjs"></script>
-  </body>
-</html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self'; connect-src 'self'; font-src 'self' blob:; img-src 'self' blob: data:; base-uri 'none'; form-action 'none'; object-src 'none'">
+<title>Visual CV editor</title><link rel="stylesheet" href="../vendor/bentopdf/native.css"><link rel="stylesheet" href="./editor.css"></head>
+<body><div id="career-toolbar"><div class="career-controls"><button id="career-prev" type="button" aria-label="Previous page">‹ Previous</button><span id="career-page">Loading PDF…</span><button id="career-next" type="button" aria-label="Next page">Next ›</button><button id="career-fit" type="button">Fit page</button><button id="career-undo" type="button">Undo</button><button id="career-redo" type="button">Redo</button></div><div id="career-destinations" aria-label="Section drop destinations"></div><div id="career-status" role="status">Loading local PDF editor…</div></div><div id="native"></div><footer>Powered by BentoPDF · <a href="../vendor/bentopdf/SOURCE.md" target="_blank" rel="noreferrer">Source and licenses</a></footer><script type="module" src="./bridge.mjs"></script></body></html>
