@@ -158,6 +158,37 @@ test('large meaningful artwork and unproved rectangles are never treated as page
   assert.equal(isPageUnderlay(background, { ...p, objects: [] }), false, 'Missing paint-order evidence fails closed');
 });
 
+test('native ink containment proves an underlay even when paragraph leading extends above it', () => {
+  const p = page(0, [paragraph(1, 'Fictional Candidate', 803.631), paragraph(2, 'Summary', 720), paragraph(3, 'Builds software.', 680)]);
+  p.width = 594.96; p.height = 841.92;
+  const background = underlay({ x: 43.5, y: 43.17, w: 509.25, h: 755.25 });
+  p.objects = [background, ...p.objects.map((object) => ({ ...object, index: object.index + 1 }))];
+  p.objects[1].box = { x: 50, top: 794.895, w: 480, h: 12 };
+  assert.equal(isPageUnderlay(background, p), true);
+  assert.ok(analyzeCvSections([p]).sections.every((section) => section.movable));
+  const escapedInk = { ...p, objects: p.objects.map((object) => object.index === 1 ? { ...object, box: { ...object.box, top: 810 } } : object) };
+  assert.equal(isPageUnderlay(background, escapedInk), false, 'Visible ink outside the rectangle remains unsafe');
+  const missingInk = { ...p, objects: p.objects.map((object) => object.index === 1 ? { ...object, box: null } : object) };
+  assert.equal(isPageUnderlay(background, missingInk), false, 'Unknown native ink bounds cannot justify an underlay');
+  assert.equal(isPageUnderlay(background, { ...p, paragraphs: [{ ...p.paragraphs[0], box: null }] }), false);
+});
+
+test('an original page emptied by reflow can retain only a proven white underlay without blocking section moves', () => {
+  const p = page(0, [paragraph(1, 'Experience', 720), paragraph(2, 'Fictional role.', 680), paragraph(3, 'Education', 600), paragraph(4, 'Example degree.', 560)]);
+  const background = underlay({ x: 40, y: 40, w: 532, h: 712 });
+  const empty = page(1, []);
+  empty.objects = [background];
+  assert.equal(isPageUnderlay(background, empty), true);
+  const analysis = analyzeCvSections([p, empty]);
+  assert.ok(analysis.sections.every((section) => section.movable));
+  assert.doesNotThrow(() => planSectionReorder([p, empty], analysis.sections[1].id, analysis.sections[0].id));
+  const artwork = { ...background, fillColor: { r: 0, g: 30, b: 180, a: 255 } };
+  assert.equal(isPageUnderlay(artwork, { ...empty, objects: [artwork] }), false);
+  assert.ok(analyzeCvSections([p, { ...empty, objects: [artwork] }]).sections.some((section) => !section.movable));
+  assert.equal(isPageUnderlay(background, { ...empty, paragraphs: [paragraph(9, 'Missing native body.', 700)] }), false);
+  assert.ok(analyzeCvSections([p, { ...empty, annotations: [{ box: { x: 50, top: 700, w: 200, h: 40 } }] }]).sections.some((section) => !section.movable));
+});
+
 test('section artwork below its last paragraph travels, but a footer rule stays fixed', () => {
   const pages = singlePage();
   pages[0].objects.push({ index: 99, handle: 999, type: 3, box: { x: 50, top: 240, w: 150, h: 60 } });

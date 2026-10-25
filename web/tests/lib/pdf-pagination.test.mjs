@@ -164,6 +164,17 @@ test('a first-page contact header does not reduce the printable area of newly ge
   assertOwnedOnce(plan, blocks);
 });
 
+test('explicit continuation counter obstacles remain protected inside the printable bounds', () => {
+  const counter = { x: 500, top: 770, w: 50, h: 20 };
+  const blocks = [block(1, 720, 600), block(2, 100, 300)];
+  const plan = planPdfPagination({ pages: [page(0)], blocks,
+    continuationPage: { contentTop: 764, contentBottom: 50, fixedBoxes: [counter] } });
+  assert.deepEqual(plan.addedPages[0].fixedBoxes, [counter]);
+  assert.equal(plan.placements[1].toPage, 1);
+  assert.equal(plan.placements[1].box.top, 750);
+  assertOwnedOnce(plan, blocks);
+});
+
 test('existing spacing survives, inter-page gaps do not preserve obsolete page breaks', () => {
   const blocks = [block(1, 720, 100, { gapBefore: undefined }), block(2, 580, 100, { gapBefore: undefined }), block(3, 720, 100, { pageIndex: 1, gapBefore: undefined })];
   const plan = planPdfPagination({ pages: [page(0), page(1)], blocks });

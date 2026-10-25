@@ -151,9 +151,12 @@ export function planPdfPagination({ pages: inputPages, blocks: inputBlocks, temp
   const continuation = normalizePages([{ ...templateSource, ...continuationPage, pageIndex: 0 }])[0];
   // A continuation repeats page scaffolding, not unrelated fixed body artwork.
   // The executor may override its content bounds and fixedBoxes to exclude a
-  // first-page-only name/contact header. Existing page bounds remain unchanged.
+  // first-page-only name/contact header. Explicit obstacles (such as a repeated
+  // counter extending into the body) must remain protected. Filter only inherited
+  // artwork; existing page bounds remain unchanged.
   const template = { ...continuation, templatePageIndex: templateSource.index,
-    fixedBoxes: continuation.fixedBoxes.filter((box) => bottom(box) >= continuation.contentTop || box.top <= continuation.contentBottom) };
+    fixedBoxes: continuationPage?.fixedBoxes !== undefined ? continuation.fixedBoxes
+      : continuation.fixedBoxes.filter((box) => bottom(box) >= continuation.contentTop || box.top <= continuation.contentBottom) };
   const blocks = normalizeBlocks(inputBlocks, pages);
   const placements = [];
   let pagePosition = 0;
