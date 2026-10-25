@@ -49,7 +49,7 @@ test('career workspace edits canonical sections, guards drafts, and supports mob
   async function select(title, waitForPage = true) {
     const nav = page.getByRole('navigation', { name: 'Workspace pages' });
     await nav.getByRole('button', { name: title, exact: true }).first().click();
-    if (waitForPage) await page.getByRole('heading', { name: title, exact: true, level: 1 }).waitFor();
+    if (waitForPage) await page.waitForFunction((title) => document.querySelector('section[aria-label="Page editor"] h1')?.textContent === title, title);
   }
   async function shot(name) {
     if (!process.env.CAREER_WORKSPACE_ARTIFACT_DIR) return;
@@ -109,7 +109,7 @@ test('career workspace edits canonical sections, guards drafts, and supports mob
     await page.getByRole('alert').filter({ hasText: /changed elsewhere/ }).waitFor();
     assert.match(await editor.innerText(), /Unsaved local draft/);
     assert.match((await read()).content, /External update preserved/);
-    await page.getByRole('button', { name: 'Reload from disk', exact: true }).click();
+    await page.getByRole('button', { name: 'Open saved version', exact: true }).click();
     await page.getByRole('button', { name: 'Discard changes', exact: true }).click();
 
     const achievements = documents.find((d) => d.id === 'achievements').title;
@@ -164,7 +164,7 @@ test('career workspace edits canonical sections, guards drafts, and supports mob
     await page.getByRole('button', { name: 'Save', exact: true }).click();
     await page.getByRole('alert').filter({ hasText: /changed elsewhere/ }).waitFor();
     assert.match((await read()).content, /Revision after draft recovery/);
-    await page.getByRole('button', { name: 'Reload from disk', exact: true }).click();
+    await page.getByRole('button', { name: 'Open saved version', exact: true }).click();
     await page.getByRole('button', { name: 'Discard changes', exact: true }).click();
     await saved();
     await page.setViewportSize({ width: 390, height: 844 });
@@ -172,6 +172,7 @@ test('career workspace edits canonical sections, guards drafts, and supports mob
     const search = page.getByRole('textbox', { name: 'Search pages', exact: true });
     await search.fill('Example Labs');
     await select('Example Labs');
+    await page.getByRole('button', { name: 'Hide pages', exact: true }).click();
     await editor.waitFor();
     assert.match(await editor.innerText(), /4 engineers/);
     assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1), 'mobile fits viewport');

@@ -1,6 +1,6 @@
 import { fromMarkdown } from 'mdast-util-from-markdown';
+import { normalizeWorkspaceLinks, neutralizeImportNotes } from './workspace-links.mjs';
 
-const UUID = /^[a-f0-9]{32}$/;
 const MAX_BODY_BYTES = 200_000;
 const MAX_MANIFEST_BYTES = 1_000_000;
 const VOID_TAGS = new Set(['br', 'hr', 'col', 'img', 'empty-block', 'table_of_contents', 'table-of-contents', 'breadcrumb', 'mention-date', 'date', 'unknown', 'custom-block']);
@@ -37,15 +37,6 @@ function safeUrl(value) {
   }
   if (/^(?:\/[^/]|#|\.\/|\.\.\/)/.test(decoded) && !decoded.includes('://')) return decoded;
   return null;
-}
-
-function notionId(url) {
-  try {
-    const parsed = new URL(url);
-    if (!/(?:^|\.)(?:notion\.so|notion\.com|notion\.site)$/.test(parsed.hostname)) return null;
-    const match = parsed.pathname.match(/([a-f\d]{32}|[a-f\d]{8}-[a-f\d]{4}-[a-f\d]{4}-[a-f\d]{4}-[a-f\d]{12})\/?$/i);
-    return match ? idOf(match[1]) : null;
-  } catch { return null; }
 }
 
 /** Preserve literal code before interpreting the XML-like Notion wrappers. */
@@ -138,16 +129,12 @@ function convertPage(page, knownIds) {
   const destination = (value) => {
     const safe = safeUrl(value);
     if (!safe) { warnings.add('An unsafe or unavailable URL was retained only in the original source archive.'); return null; }
-    const id = notionId(safe);
-    return id && knownIds.has(id) ? `/context?document=source-${id}` : safe;
+    return safe;
   };
   const linked = (text, url, image = false) => {
     const dest = destination(url);
     return dest ? `${image ? '!' : ''}[${label(text)}](${dest})` : label(text);
   };
-  // An unavailable attachment must open the actual source, not loop back to the
-  // imported page through the ordinary internal page-link rewrite.
-  const originalLink = (text) => protectedCode.hold(`[${label(text)}](${safeUrl(page.url)})`);
   const children = (node) => node.children.map(render).join('');
   const originalMarkup = (node) => typeof node === 'string' ? node : `${node.raw || ''}${node.children.map(originalMarkup).join('')}${node.close || ''}`;
   const block = (text) => `\n\n${dedent(text).trim()}\n\n`;
@@ -218,8 +205,8 @@ function convertPage(page, knownIds) {
         const caption = inner() || node.attrs.alt || 'Image';
         const source = node.attrs.src || node.attrs.source;
         if (safeUrl(source)) return linked(caption, source, true);
-        warnings.add('Private or unavailable images are linked to their original Notion page.');
-        return block(originalLink(`Image: ${caption.trim()} (view in Notion)`));
+        warnings.add('Some images were unavailable during import; their captions are preserved.');
+        return block(`Image: ${label(caption)}`);
       }
       case 'audio': case 'video': case 'pdf': case 'file': case 'embed': case 'bookmark': {
         warnings.add('Media and embedded content are linked to the original resource.');
@@ -227,7 +214,7 @@ function convertPage(page, knownIds) {
         const source = node.attrs.src || node.attrs.url || node.attrs.href || node.attrs.source;
         if (safeUrl(source)) return block(linked(caption, source));
         warnings.add('An unsafe or unavailable URL was retained only in the original source archive.');
-        return block(originalLink(`${caption.trim()} (view in Notion)`));
+        return block(label(caption));
       }
       case 'table_of_contents': case 'table-of-contents': case 'breadcrumb': warnings.add('The generated table of contents or breadcrumb remains available in Notion.'); return '';
       case 'synced_block': return block(inner());
@@ -263,7 +250,7 @@ function convertPage(page, knownIds) {
   }
   inspect(fromMarkdown(markdown));
   for (const replacement of replacements.sort((a, b) => b.start - a.start)) markdown = markdown.slice(0, replacement.start) + replacement.value + markdown.slice(replacement.end);
-  return { content: `${protectedCode.restore(markdown)}\n`, warnings: [...warnings] };
+  return { content: `${normalizeWorkspaceLinks(protectedCode.restore(markdown), knownIds)}\n`, warnings: neutralizeImportNotes([...warnings]) };
 }
 
 /**

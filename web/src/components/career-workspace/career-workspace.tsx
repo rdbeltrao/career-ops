@@ -4,7 +4,7 @@ import dynamic from "next/dynamic";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ArrowDown, ArrowUp, BookOpen, Check, ChevronRight, ExternalLink, Files, ListChecks, Loader2, PanelLeft, Pencil, Plus, RotateCcw, X } from "lucide-react";
+import { ArrowDown, ArrowUp, BookOpen, Check, ChevronRight, Files, ListChecks, Loader2, PanelLeft, Pencil, Plus, X } from "lucide-react";
 import { SkillGaps } from "@/components/skill-gaps";
 import { cn } from "@/lib/cn";
 import { collapsedPageKeys, collapsedSourcePageIds, initialWorkspaceDocument, navigationSections, pageBreadcrumbs, selectedPageContent, siblingAvailability, sourcePageBreadcrumbs, sourcePageMovement } from "@/lib/workspace-view.mjs";
@@ -22,7 +22,7 @@ const MarkdownEditor = dynamic(() => import("@/components/editor/markdown-editor
 });
 
 const TRUST: Record<string, { label: string; text: string }> = {
-  context: { label: "App summary", text: "The local profile this app uses for applications. It summarizes career facts and preferences; it is not a complete copy of your Notion records." },
+  context: { label: "App summary", text: "The local profile this app uses for applications. It summarizes career facts and preferences." },
   cv: { label: "Résumé output", text: "Your working CV draft. Keep its facts consistent with your application profile and original career records." },
   achievements: { label: "App summary", text: "Local professional examples and proof points used for applications. Preserve source links and confirmation notes." },
   profile: { label: "App settings", text: "Role preferences and positioning for your search. Preferences are not evidence of past work." },
@@ -68,7 +68,7 @@ export function CareerWorkspace({ initialDocument = "context" }: { initialDocume
   const [mobilePages, setMobilePages] = useState(false);
   const [form, setForm] = useState<ActionForm>(null);
   const [confirmOpen, setConfirmOpen] = useState(false);
-  const [confirmReload, setConfirmReload] = useState(false);
+  const [confirmOpenSaved, setConfirmOpenSaved] = useState(false);
   const [recovered, setRecovered] = useState<RecoveredDraft | null>(null);
   const [recoveryWarning, setRecoveryWarning] = useState(false);
   const pagesDialog = useRef<HTMLDialogElement>(null);
@@ -130,7 +130,6 @@ export function CareerWorkspace({ initialDocument = "context" }: { initialDocume
       if (request !== requestNumber.current) return;
       acceptDocument(body, selection.section);
       setRecovered(workspaceDrafts.read(draftStorage(), body.workspaceId, body.id));
-      setMobilePages(false);
     } catch (problem) {
       if (request === requestNumber.current) setError(problem instanceof Error ? problem.message : "This page could not be opened.");
     } finally { if (request === requestNumber.current) { loadingRef.current = false; setLoading(false); } }
@@ -178,13 +177,6 @@ export function CareerWorkspace({ initialDocument = "context" }: { initialDocume
     else if (!mobilePages && dialog?.open) dialog.close();
   }, [mobilePages]);
 
-  useEffect(() => {
-    const desktop = window.matchMedia("(min-width: 1280px)");
-    const closeDrawer = () => { if (desktop.matches) setMobilePages(false); };
-    desktop.addEventListener("change", closeDrawer);
-    return () => desktop.removeEventListener("change", closeDrawer);
-  }, []);
-
   // EVIDENCE: sessionStorage survives reloads within a tab (MDN, cited in
   // workspace-drafts.mjs). Explicit recovery covers browser Back/Forward without
   // patching Next's router or changing the authoritative files.
@@ -199,11 +191,11 @@ export function CareerWorkspace({ initialDocument = "context" }: { initialDocume
     setRecoveryWarning(!persisted);
   }, [current, hasEdits, loading, recovered, sectionId, draft, original, form]);
 
-  const beforeAction = useCallback((action: () => void, reload = false) => {
+  const beforeAction = useCallback((action: () => void, openSaved = false) => {
     if (busy) return;
     if (!hasEdits) { action(); return; }
     pending.current = action;
-    setConfirmReload(reload);
+    setConfirmOpenSaved(openSaved);
     setConfirmOpen(true);
   }, [busy, hasEdits]);
 
@@ -287,7 +279,7 @@ export function CareerWorkspace({ initialDocument = "context" }: { initialDocume
   }
 
   function selectPage(selection: PageSelection) {
-    if (current?.id === selection.document && sectionId === selection.section) { setMobilePages(false); return; }
+    if (current?.id === selection.document && sectionId === selection.section) return;
     beforeAction(() => void loadDocument(selection));
   }
 
@@ -334,7 +326,7 @@ export function CareerWorkspace({ initialDocument = "context" }: { initialDocume
     setEditorVersion((version) => version + 1);
     setRecovered(null);
     setConflict(revisionChanged);
-    setError(revisionChanged ? "The saved document changed while this draft was away. Your recovered draft is preserved; copy what you need before reloading." : "");
+    setError(revisionChanged ? "The saved document changed while this draft was away. Your recovered draft is preserved; copy what you need before opening the saved version." : "");
     setNotice("Draft restored. Save when ready.");
   }
 
@@ -346,8 +338,6 @@ export function CareerWorkspace({ initialDocument = "context" }: { initialDocume
 
   const displayedSelection = displaySections.find((section) => section.id === sectionId);
   const pageTitle = displayedSelection?.title || current?.title || (navigationView === "source" ? "Source pages" : initialDocument === "cv" ? "CV draft" : "Application profile");
-  const childPages: { id: string; title: string }[] = isSource ? documents.filter((document) => document.kind === "source" && document.parentDocumentId === current?.id).sort((a, b) => (a.order ?? 0) - (b.order ?? 0)) : displaySections.filter((section) => section.parentId === (displayedSelection?.id || null));
-  const sourceLink = current?.sourceUrl && /^https?:\/\//i.test(current.sourceUrl) ? current.sourceUrl : null;
   const selection = { document: current?.id || initialDocument, section: sectionId };
   const button = "inline-flex min-h-9 items-center justify-center gap-1.5 rounded-lg border border-border bg-surface px-3 py-1.5 text-sm text-muted transition-colors hover:bg-surface-hover focus-visible:outline-2 focus-visible:outline-brand disabled:opacity-40";
   const toggleCollapsed = (setter: typeof setCollapsed, key: string) => setter((previous) => { const next = new Set(previous); if (next.has(key)) next.delete(key); else next.add(key); return next; });
@@ -396,7 +386,6 @@ export function CareerWorkspace({ initialDocument = "context" }: { initialDocume
             <div className="min-w-0 flex-1">
               <h1 className="font-display text-3xl tracking-tight text-landing break-words sm:text-4xl">{pageTitle}</h1>
               <p className="mt-3 max-w-2xl text-sm leading-relaxed text-muted">{isSource ? "Local copy. Changes stay here." : trust?.text || current?.description || "Open a source page, or switch to App files for local summaries and drafts."}</p>
-              {isSource && sourceLink && <a href={sourceLink} target="_blank" rel="noopener noreferrer" className="mt-2 inline-flex items-center gap-1.5 rounded text-sm text-muted underline underline-offset-4 hover:text-foreground focus-visible:outline-2 focus-visible:outline-brand">Open in Notion<ExternalLink aria-hidden="true" className="size-3.5" /></a>}
               {isSource && Boolean(current?.importNotes?.length) && <details className="mt-3 max-w-2xl text-sm text-muted"><summary className="w-fit cursor-pointer rounded focus-visible:outline-2 focus-visible:outline-brand">About this local copy</summary><ul className="mt-2 list-disc space-y-1 pl-5 text-xs leading-relaxed">{current!.importNotes!.map((note, index) => <li key={index}>{note}</li>)}</ul></details>}
             </div>
             <button type="button" onClick={() => void mutate({ action: "replace", content: draft })} disabled={busy || !dirty || !current} className={cn("inline-flex min-h-10 items-center justify-center gap-2 rounded-full px-5 py-2 text-sm font-medium transition-colors focus-visible:outline-2 focus-visible:outline-brand disabled:opacity-50", dirty ? "bg-brand text-brand-foreground hover:bg-brand-200" : "border border-border bg-surface text-muted")}>
@@ -408,7 +397,6 @@ export function CareerWorkspace({ initialDocument = "context" }: { initialDocume
             {trust && <span className="mr-1 rounded-full bg-surface-hover px-2.5 py-1 text-xs text-muted">{trust.label}</span>}
             {current && current.id !== "cv" && <button type="button" disabled={busy || Boolean(recovered) || Boolean(current.outlineWarning) || Boolean(selected && selected.level >= 6)} onClick={() => startForm("add")} className={button}><Plus aria-hidden="true" className="size-3.5" />{selected || isSource ? "New child page" : "New page"}</button>}
             {(selected || isSource) && <><button type="button" disabled={busy || Boolean(recovered) || Boolean(current?.outlineWarning)} onClick={() => startForm("rename")} className={button}><Pencil aria-hidden="true" className="size-3.5" />Rename page</button><button type="button" aria-label="Move page up" disabled={busy || Boolean(recovered) || !movement.up || Boolean(current?.outlineWarning)} onClick={() => beforeAction(() => void mutate({ action: "move", direction: "up" }))} className={button}><ArrowUp aria-hidden="true" className="size-3.5" /></button><button type="button" aria-label="Move page down" disabled={busy || Boolean(recovered) || !movement.down || Boolean(current?.outlineWarning)} onClick={() => beforeAction(() => void mutate({ action: "move", direction: "down" }))} className={button}><ArrowDown aria-hidden="true" className="size-3.5" /></button></>}
-            <button type="button" disabled={busy || !current} onClick={() => beforeAction(() => void loadDocument(selection), true)} className={cn(button, "ml-auto")}><RotateCcw aria-hidden="true" className="size-3.5" />Reload from disk</button>
           </div>
 
           {form && <form onSubmit={(event) => { event.preventDefault(); if (form.title.trim()) void mutate({ action: form.kind, title: form.title.trim() }); }} className="mb-5 rounded-xl border border-border bg-surface p-4">
@@ -417,7 +405,7 @@ export function CareerWorkspace({ initialDocument = "context" }: { initialDocume
             <div className="mt-3 flex justify-end gap-2"><button type="button" disabled={busy} onClick={() => setForm(null)} className={button}>Cancel</button><button type="submit" disabled={busy || !form.title.trim()} className={cn(button, "border-brand bg-brand text-brand-foreground")}>{form.kind === "add" ? "Create page" : "Rename"}</button></div>
           </form>}
 
-          {error && <div role="alert" className="mb-4 rounded-xl border border-red-500/30 bg-red-500/5 px-4 py-3 text-sm text-foreground"><p>{error}</p>{conflict && <p className="mt-2 text-muted">Your draft is unchanged. Copy anything you need, then reload the latest page before trying again.</p>}{!current && <button type="button" onClick={() => void loadIndex(true)} className={cn(button, "mt-3")}>Retry opening page</button>}</div>}
+          {error && <div role="alert" className="mb-4 rounded-xl border border-red-500/30 bg-red-500/5 px-4 py-3 text-sm text-foreground"><p>{error}</p>{conflict && <><p className="mt-2 text-muted">Your draft is unchanged. Copy anything you need before opening the saved version.</p><button type="button" disabled={busy || !current} onClick={() => beforeAction(() => void loadDocument(selection), true)} className={cn(button, "mt-3")}>Open saved version</button></>}{!current && <button type="button" onClick={() => void loadIndex(true)} className={cn(button, "mt-3")}>Retry opening page</button>}</div>}
           {recovered && <section aria-label="Recovered draft" className="mb-4 rounded-xl border border-brand/40 bg-brand/5 p-4">
             <h2 className="text-sm font-medium text-foreground">Unsaved draft found</h2>
             <p className="mt-2 text-sm text-muted">A draft from this browser tab is available. Restore it to keep editing, or discard it to use the saved page.</p>
@@ -434,12 +422,11 @@ export function CareerWorkspace({ initialDocument = "context" }: { initialDocume
             <MarkdownEditor value={draft} onChange={(value) => { if (!busy && !form && !recovered) { setDraft(value); setNotice(""); } }} documentKey={`${current.id}:${sectionId || "root"}:${editorVersion}`} disabled={busy || Boolean(form) || Boolean(recovered)} />
           </div>}
 
-          {childPages.length > 0 && <div className="mt-6"><h2 className="mb-3 text-xs font-medium uppercase tracking-wider text-faint">{isSource ? "Child pages" : "Pages in this section"}</h2><div className="grid gap-2 sm:grid-cols-2">{childPages.map((page) => <button key={page.id} type="button" title={page.title} disabled={busy} onClick={() => selectPage(isSource ? { document: page.id, section: null } : { document: current!.id, section: page.id })} className="flex min-w-0 items-center gap-3 rounded-xl border border-border bg-surface/50 p-3 text-left text-sm text-muted hover:bg-surface-hover focus-visible:outline-2 focus-visible:outline-brand disabled:opacity-50"><BookOpen aria-hidden="true" className="size-4 shrink-0" /><span className="min-w-0 flex-1 break-words">{page.title}</span><ChevronRight aria-hidden="true" className="size-3.5 shrink-0" /></button>)}</div></div>}
           {current?.id === "cv" && <SkillGaps />}
         </section>
       </div>
 
-      <UnsavedDialog open={confirmOpen} busy={saving} reload={confirmReload} onKeep={() => { pending.current = null; setConfirmOpen(false); }} onDiscard={discardAndContinue} onSave={() => void saveAndContinue()} />
+      <UnsavedDialog open={confirmOpen} busy={saving} openSaved={confirmOpenSaved} onKeep={() => { pending.current = null; setConfirmOpen(false); }} onDiscard={discardAndContinue} onSave={() => void saveAndContinue()} />
     </div>
   );
 }

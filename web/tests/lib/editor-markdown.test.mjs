@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { $createParagraphNode, $createTextNode, $getRoot, createEditor } from 'lexical';
-import { $removeSlashQuery, analyzeMarkdown, EDITOR_NODES, EDITOR_TRANSFORMERS, roundTripMarkdown, safeLinkUrl } from '../../src/lib/editor-markdown.mjs';
+import { $createLinkNode, $isLinkNode } from '@lexical/link';
+import { $removeSlashQuery, analyzeMarkdown, EDITOR_NODES, EDITOR_TRANSFORMERS, registerAllowedLinkTransform, roundTripMarkdown, safeLinkUrl } from '../../src/lib/editor-markdown.mjs';
 
 test('slash cleanup uses the live range after a stale typeahead split without deleting preceding prose', () => {
   for (let split = 1; split < '/heading'.length; split++) {
@@ -117,12 +118,104 @@ test('source checks do not confuse fenced examples with document syntax', () => 
 });
 
 test('links accept web, email, fragments and relative references, rejecting executable protocols', () => {
-  for (const url of ['https://example.com', 'http://localhost:3000/context', 'mailto:person@example.com', '#source', '/context']) {
+  for (const url of ['https://example.com', 'http://localhost:3000/context', 'mailto:person@example.com', '#source', '/context', '/context?document=source-abc', 'https://notion.so.example.com/proof']) {
     assert.equal(safeLinkUrl(url), true, url);
   }
   for (const url of ['javascript:alert(1)', 'data:text/html,test', 'file:///etc/passwd', ' vbscript:test', '//evil.test', 'java\nscript:alert(1)']) {
     assert.equal(safeLinkUrl(url), false, url);
   }
+});
+
+test('outbound Notion links stay inert without changing canonical Markdown', () => {
+  for (const url of [
+    'https://notion.so/Page', 'https://www.notion.so/Page', 'https://notion.com/Page',
+    'https://app.notion.com/p/Page', 'https://notes.notion.site/Page', 'HTTPS://APP.NOTION.COM/Page',
+    '//notion.so/Page', '//notes.notion.site/Page', 'https://notion.so./Page',
+    'notion.so/Page', 'app.notion.com/Page', 'notion://notion.so/Page',
+  ]) {
+    assert.equal(safeLinkUrl(url), false, url);
+    const markdown = `# Context\n\n**Confirmed:** 45%.\n\n[Source](${url})\n`;
+    const analysis = analyzeMarkdown(markdown);
+    assert.equal(analysis.safe, false, url);
+    assert.equal(analysis.source, markdown, 'opening never rewrites source links');
+  }
+});
+
+test('imported rich links lose only blocked destinations, preserving text and formatting', () => {
+  const editor = createEditor({ nodes: EDITOR_NODES, onError: (error) => { throw error; } });
+  const unregister = registerAllowedLinkTransform(editor);
+  editor.update(() => {
+    const blocked = $createLinkNode('https://app.notion.com/p/Original').append($createTextNode('Confirmed 45%').toggleFormat('bold'));
+    const local = $createLinkNode('/context?document=source-abc').append($createTextNode('Local page'));
+    const external = $createLinkNode('https://example.com/proof').append($createTextNode('Independent evidence'));
+    $getRoot().append($createParagraphNode().append(blocked, local, external));
+  }, { discrete: true });
+  editor.getEditorState().read(() => {
+    const [claim, local, external] = $getRoot().getFirstChild().getChildren();
+    assert.equal(claim.getTextContent(), 'Confirmed 45%');
+    assert.equal($isLinkNode(claim), false);
+    assert.equal(claim.hasFormat('bold'), true);
+    assert.equal(local.getURL(), '/context?document=source-abc');
+    assert.equal(external.getURL(), 'https://example.com/proof');
+  });
+  unregister();
+});
+
+test('Notion destinations remain inert on open and rich paste while local links stay usable', { skip: !process.env.EDITOR_MARKDOWN_TEST_URL, timeout: 90_000 }, async () => {
+  const target = new URL(process.env.EDITOR_MARKDOWN_TEST_URL);
+  assert.ok(['localhost', '127.0.0.1', '[::1]'].includes(target.hostname));
+  const { chromium } = await import('playwright-core');
+  const browser = await chromium.launch({ channel: 'chrome', headless: true });
+  const page = await browser.newPage();
+  const content = '# Context\n\n**Confirmed:** 45%.\n\n[Legacy source](https://app.notion.com/p/Original)\n\n[Legacy published page](//notes.notion.site/Page)\n\nhttps://notion.so/Original\n\n[Local page](/context?document=source-abc)\n\n[Independent evidence](https://example.com/proof)\n';
+  const doc = { id: 'context', title: 'Career context', group: 'Context', description: 'Fictional local link test', exists: true, content, revision: 'fixture', sections: [] };
+  const writes = [];
+  const outboundNotionRequests = [];
+  page.on('request', (request) => {
+    if (/(^|\.)(notion\.so|notion\.com|notion\.site)$/i.test(new URL(request.url()).hostname)) outboundNotionRequests.push(request.url());
+  });
+  await page.route('https://**/*', (route) => route.abort());
+  await page.route('**/api/workspace**', (route) => {
+    if (route.request().method() !== 'GET') writes.push(route.request().postDataJSON());
+    return route.fulfill({ json: new URL(route.request().url()).searchParams.has('document') ? doc : { documents: [doc] } });
+  });
+  try {
+    await page.goto(`${target.origin}/context?document=context`);
+    await page.getByRole('button', { name: 'Source', exact: true }).waitFor();
+    const preview = page.getByRole('article', { name: 'Formatted page', exact: true });
+    assert.equal(await preview.count(), 1, 'original Notion Markdown opens without lossy rich import');
+    assert.match(await preview.innerText(), /Legacy source/);
+    assert.equal(await preview.getByRole('link', { name: 'Legacy source', exact: true }).count(), 0);
+    assert.equal(await preview.getByRole('link', { name: 'Legacy published page', exact: true }).count(), 0);
+    assert.deepEqual(await preview.locator('a[href]').evaluateAll((anchors) => anchors.map((anchor) => anchor.getAttribute('href'))), ['/context?document=source-abc', 'https://example.com/proof']);
+    assert.equal(await page.getByRole('button', { name: 'Save', exact: true }).isDisabled(), true);
+    await page.getByRole('button', { name: 'Source', exact: true }).click();
+    const source = page.getByRole('textbox', { name: 'Markdown source', exact: true });
+    assert.equal(await source.inputValue(), content, 'opening preserves canonical document bytes');
+    await page.getByRole('button', { name: 'Preview', exact: true }).click();
+    assert.equal(await page.getByRole('button', { name: 'Save', exact: true }).isDisabled(), true);
+    assert.equal(writes.length, 0);
+    await page.getByRole('button', { name: 'Source', exact: true }).click();
+    await source.fill('Fresh paragraph.');
+    await page.getByRole('button', { name: 'Preview', exact: true }).click();
+    const editor = page.getByRole('textbox', { name: 'Page content', exact: true });
+    await editor.fill('');
+    await editor.evaluate((element) => {
+      const data = new DataTransfer();
+      data.setData('text/html', '<p><a href="https://app.notion.com/p/Original"><strong>Legacy proof 45%</strong></a> <a href="/context?document=source-abc">Local page</a> <a href="https://example.com/proof">Independent evidence</a></p>');
+      data.setData('text/plain', 'Legacy proof 45% Local page Independent evidence');
+      element.dispatchEvent(new ClipboardEvent('paste', { clipboardData: data, bubbles: true, cancelable: true }));
+    });
+    assert.match(await editor.innerText(), /Legacy proof 45%/);
+    assert.equal(await editor.getByRole('link', { name: 'Legacy proof 45%', exact: true }).count(), 0);
+    assert.equal(await editor.getByRole('link', { name: 'Local page', exact: true }).getAttribute('href'), '/context?document=source-abc');
+    assert.equal(await editor.getByRole('link', { name: 'Independent evidence', exact: true }).getAttribute('href'), 'https://example.com/proof');
+    await page.getByRole('button', { name: 'Source', exact: true }).click();
+    assert.match(await source.inputValue(), /\*\*Legacy proof 45%\*\*/);
+    assert.doesNotMatch(await source.inputValue(), /https:\/\/app\.notion\.com/);
+    assert.equal(writes.length, 0);
+    assert.deepEqual(outboundNotionRequests, []);
+  } finally { await browser.close(); }
 });
 
 test('unsupported pages open formatted and source remains an explicit lossless view', { skip: !process.env.EDITOR_MARKDOWN_TEST_URL, timeout: 90_000 }, async () => {

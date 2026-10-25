@@ -1,9 +1,10 @@
 "use client";
 
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { LexicalComposer } from "@lexical/react/LexicalComposer";
+import { useLexicalComposerContext } from "@lexical/react/LexicalComposerContext";
 import { RichTextPlugin } from "@lexical/react/LexicalRichTextPlugin";
 import { ContentEditable } from "@lexical/react/LexicalContentEditable";
 import { LexicalErrorBoundary } from "@lexical/react/LexicalErrorBoundary";
@@ -14,7 +15,7 @@ import { MarkdownShortcutPlugin } from "@lexical/react/LexicalMarkdownShortcutPl
 import { OnChangePlugin } from "@lexical/react/LexicalOnChangePlugin";
 import type { EditorState } from "lexical";
 import { Code2, PenLine } from "lucide-react";
-import { analyzeMarkdown, EDITOR_NODES, EDITOR_TRANSFORMERS, exportMarkdown, importMarkdown, roundTripMarkdown, safeLinkUrl } from "@/lib/editor-markdown.mjs";
+import { analyzeMarkdown, EDITOR_NODES, EDITOR_TRANSFORMERS, exportMarkdown, importMarkdown, registerAllowedLinkTransform, roundTripMarkdown, safeLinkUrl } from "@/lib/editor-markdown.mjs";
 import { EditorToolbar } from "./editor-toolbar";
 import { BlockMovePlugin, EditablePlugin, SlashMenuPlugin } from "./editor-plugins";
 
@@ -82,6 +83,12 @@ function FormattedPage({ value }: { value: string }) {
   </article>;
 }
 
+function AllowedLinksPlugin() {
+  const [editor] = useLexicalComposerContext();
+  useEffect(() => registerAllowedLinkTransform(editor), [editor]);
+  return null;
+}
+
 function RichEditor({ initialValue, disabled, onChange, onError }: { initialValue: string; disabled: boolean; onChange: (markdown: string) => void; onError: () => void }) {
   const [anchor, setAnchor] = useState<HTMLDivElement | null>(null);
   const original = useRef(initialValue);
@@ -118,6 +125,7 @@ function RichEditor({ initialValue, disabled, onChange, onError }: { initialValu
     </div>
     <HistoryPlugin />
     <ListPlugin />
+    <AllowedLinksPlugin />
     <LinkPlugin validateUrl={safeLinkUrl} />
     <MarkdownShortcutPlugin transformers={EDITOR_TRANSFORMERS} />
     <OnChangePlugin ignoreSelectionChange ignoreHistoryMergeTagChange={false} onChange={handleChange} />
