@@ -212,6 +212,22 @@ test('BentoPDF iframe loads local assets, selects, rewrites, exports and undoes 
     const finalText = engine.buildModel().map(paragraphText).join('\n');
     assert.match(finalText, /Second page résumé sentence/);
     assert.doesNotMatch(finalText, /Second page original sentence/);
+    await page.frameLocator('iframe').getByRole('button', { name: 'Edit paragraph: Second page résumé sentence.', exact: true }).click();
+    await page.waitForFunction(() => window.messages.filter((message) => message.type === 'selection').at(-1)?.text === 'Second page résumé sentence.');
+    const beforeResizeSelectionCount = await selectionCount();
+    await page.evaluate(() => { document.querySelector('iframe').style.maxWidth = '100%'; });
+    await page.setViewportSize({ width: 390, height: 844 });
+    const editorFrame = page.frames().find((frame) => frame.url().includes('/pdf-editor/'));
+    await editorFrame.waitForFunction(() => [...document.querySelectorAll('.page')].every((page) => {
+      const rect = page.getBoundingClientRect();
+      return rect.left >= 0 && rect.width <= document.documentElement.clientWidth - 28 && rect.right <= document.documentElement.clientWidth;
+    }));
+    assert.equal(await selectionCount(), beforeResizeSelectionCount, 'Resizing must not reset the host text draft');
+    assert.equal(await page.frameLocator('iframe').getByRole('button', { name: 'Edit paragraph: Second page résumé sentence.', exact: true, pressed: true }).count(), 1, 'Responsive redraw retains the selected paragraph');
+    const afterResize = await page.evaluate(async () => Array.from(new Uint8Array((await command('export')).bytes)));
+    engine.open(new Uint8Array(afterResize));
+    engine.loadPage(1);
+    assert.match(engine.buildModel().map(paragraphText).join('\n'), /Second page résumé sentence/);
   } finally { engine.close(); }
   assert.deepEqual(errors, []);
   assert.ok(requests.every((url) => url.startsWith(origin)), 'No document, font or editor request leaves localhost');
