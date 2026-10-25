@@ -92,3 +92,15 @@ test("linkedInPostingId: digits only, LinkedIn hosts only", () => {
   assert.equal(linkedInPostingId("https://www.linkedin.com/feed/"), null);
   assert.equal(linkedInPostingId("nope"), null);
 });
+
+test("session route: a stored employer URL still goes through the URL guard after the LinkedIn mapping", async () => {
+  // A stored URL comes from LinkedIn's page, which is untrusted content: a
+  // private host there must be refused exactly like a pasted one.
+  const { readFileSync } = await import("node:fs");
+  const { fileURLToPath } = await import("node:url");
+  const src = readFileSync(fileURLToPath(new URL("../../src/app/api/apply/session/route.ts", import.meta.url)), "utf8");
+  const mapped = src.indexOf("applyTarget(pasted");
+  const guarded = src.indexOf("blockedApplyUrlResponse(url)");
+  assert.ok(mapped > 0 && guarded > mapped, "the guard must run on the mapped URL, after applyTarget");
+  assert.match(src, /const url = target\.kind === "proxy" && target\.url \? target\.url : pasted;/);
+});

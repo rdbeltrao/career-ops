@@ -56,6 +56,9 @@ export function ApplyButton({
   // filter and the row anchor live.
   const openProxy = (formUrl: string) => {
     const { pathname, search, hash } = window.location;
+    // The report page computed its Apply target on the server; refresh it so
+    // coming back shows the employer form instead of offering the lookup again.
+    router.refresh();
     apply.open(formUrl, { prefill: true, company, n, from: `${pathname}${search}${hash}` });
     router.push("/apply");
   };
@@ -73,8 +76,8 @@ export function ApplyButton({
     );
   }
 
-  const boardLink = (href: string, host: string, label = host) => (
-    <a href={href} target="_blank" rel="noopener noreferrer" className={look}>
+  const boardLink = (href: string, label: string, title: string) => (
+    <a href={href} target="_blank" rel="noopener noreferrer" className={look} title={title}>
       <ExternalLink className="size-3.5" /> {label}
     </a>
   );
@@ -82,16 +85,12 @@ export function ApplyButton({
   if (t.kind === "direct" || lookup?.easyApply) {
     const host = t.kind === "proxy" ? "" : t.host;
     const easy = lookup?.easyApply || (t.kind === "direct" && t.easyApply);
-    return (
-      <span
-        title={
-          easy
-            ? "This posting uses LinkedIn Easy Apply: the application happens on LinkedIn itself, so it opens there."
-            : `Opens the posting on ${host || "the job board"} in your browser. Job boards show their Apply flow only when you're signed in, so career-ops can't read or pre-fill it. If the employer has its own careers page, applying there is better.`
-        }
-      >
-        {boardLink(url!, host, easy ? `Easy Apply on ${host || "linkedin.com"}` : `Apply on ${host || "job board"}`)}
-      </span>
+    return boardLink(
+      url!,
+      easy ? `Easy Apply on ${host || "linkedin.com"}` : `Apply on ${host || "job board"}`,
+      easy
+        ? "This posting uses LinkedIn Easy Apply: the application happens on LinkedIn itself, so it opens there."
+        : `Opens the posting on ${host || "the job board"} in your browser. Job boards show their Apply flow only when you're signed in, so career-ops can't read or pre-fill it. If the employer has its own careers page, applying there is better.`,
     );
   }
 
@@ -100,8 +99,12 @@ export function ApplyButton({
       <span className="inline-flex flex-wrap items-center gap-2">
         <button
           type="button"
-          disabled={looking}
+          // aria-disabled, not disabled: a disabled button drops keyboard focus
+          // to the page body mid-lookup. Clicks are ignored while it runs.
+          aria-disabled={looking}
+          aria-busy={looking}
           onClick={async () => {
+            if (looking) return;
             setLooking(true);
             setLookup(null);
             try {
@@ -123,7 +126,7 @@ export function ApplyButton({
           {looking ? "Finding the employer's form…" : "Apply"}
         </button>
         {lookup?.error && (
-          <span className="inline-flex flex-wrap items-center gap-2 text-xs text-amber-700 dark:text-amber-400">
+          <span role="status" aria-live="polite" className="inline-flex flex-wrap items-center gap-2 text-xs text-amber-700 dark:text-amber-400">
             {lookup.error}
             <a href={url} target="_blank" rel="noopener noreferrer" className={subtle}>
               Open on {t.host} <ExternalLink className="size-3" />
