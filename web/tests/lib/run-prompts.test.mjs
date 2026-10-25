@@ -586,3 +586,13 @@ test("buildPrompt: evaluate without a prefetched JD keeps the WebFetch path", ()
   assert.match(prompt, /unconfirmed \(batch mode\)/);
   assert.doesNotMatch(prompt, /jd-prefetch/);
 });
+
+test("buildPrompt: a JD from the scanner's store is read from the file but stays unconfirmed", () => {
+  const jdFile = "/data/.career-ops-web/jd-prefetch/jd-0123456789abcdef.md";
+  const prompt = buildPrompt({ kind: "evaluate", input: "https://www.linkedin.com/jobs/view/1/", memory: "", today: "2026-10-25", jdFile, jdSource: "scan-store" });
+  assert.ok(prompt.includes(JSON.stringify(jdFile)));
+  assert.match(prompt, /scanner saved it/);
+  assert.match(prompt, /Do NOT WebFetch the posting page/);
+  assert.match(prompt, /Verification: unconfirmed \(saved scan text\)/);
+  assert.doesNotMatch(prompt, /so the posting is live/);
+});

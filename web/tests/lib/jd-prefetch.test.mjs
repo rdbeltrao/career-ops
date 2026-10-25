@@ -118,3 +118,65 @@ test("prefetchJd: a spawn that throws counts as a miss, never an exception", asy
   });
   assert.equal(result.ok, false);
 });
+
+// ── fallback: the description the scanner already saved (lib/jd-store.mjs) ──
+// LinkedIn has no public API, but the scanner keeps each posting's description in
+// jds/feeder/*.json. Without this fallback those runs still WebFetched a login wall.
+
+const STORED = {
+  title: "Engineering Manager Scheduling Team (x/f/m)",
+  company: "Doctolib",
+  location: "Berlin, Berlin, Germany",
+  workplace: "hybrid",
+  description: "Set a new pulse for healthcare! ".repeat(20),
+};
+
+test("prefetchJd: an API miss falls back to the scanner's saved description", async () => {
+  const outDir = tmpDir();
+  const seen = [];
+  const result = await prefetchJd({
+    ...fakeSpawn({ code: 1 }), execPath: "node", codeRoot: "/c", dataRoot: "/data",
+    url: "https://www.linkedin.com/jobs/view/4482489802/", outDir,
+    readStoredJd: (url) => { seen.push(url); return STORED; },
+  });
+  assert.equal(result.ok, true);
+  assert.equal(result.source, "scan-store");
+  assert.deepEqual(seen, ["https://www.linkedin.com/jobs/view/4482489802/"]);
+  const text = fs.readFileSync(result.file, "utf8");
+  assert.match(text, /^Engineering Manager Scheduling Team \(x\/f\/m\)\nCompany: Doctolib\nLocation: Berlin/);
+  assert.ok(text.includes(STORED.description.trim()));
+});
+
+test("prefetchJd: an API hit wins over the saved description", async () => {
+  let consulted = false;
+  const result = await prefetchJd({
+    ...fakeSpawn({ stdout: JD }), execPath: "node", codeRoot: "/c", dataRoot: "/data",
+    url: "https://jobs.ashbyhq.com/acme/123", outDir: tmpDir(),
+    readStoredJd: () => { consulted = true; return STORED; },
+  });
+  assert.equal(result.source, "ats-api");
+  assert.equal(consulted, false);
+});
+
+test("prefetchJd: a stored object without a description, or a store that throws, is a miss", async () => {
+  for (const readStoredJd of [() => ({ title: "x" }), () => null, () => { throw new Error("bad index"); }]) {
+    const result = await prefetchJd({
+      ...fakeSpawn({ code: 1 }), execPath: "node", codeRoot: "/c", dataRoot: "/data",
+      url: "https://www.linkedin.com/jobs/view/1/", outDir: tmpDir(), readStoredJd,
+    });
+    assert.equal(result.ok, false);
+  }
+});
+
+test("prefetchJd: the default store reader finds a description through lib/jd-store.mjs", async () => {
+  const dataRoot = tmpDir();
+  const codeRoot = path.resolve(import.meta.dirname, "../../..");
+  const { writeJd } = await import(path.join(codeRoot, "lib", "jd-store.mjs"));
+  const url = "https://www.linkedin.com/jobs/view/4482489802/";
+  writeJd({ ...STORED, url, source: "linkedin", source_id: "4482489802" }, { dataRoot, today: "2026-10-25" });
+  const result = await prefetchJd({
+    ...fakeSpawn({ code: 1 }), execPath: "node", codeRoot, dataRoot, url, outDir: tmpDir(),
+  });
+  assert.equal(result.ok, true);
+  assert.equal(result.source, "scan-store");
+});

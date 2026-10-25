@@ -161,11 +161,13 @@ export async function POST(req: Request) {
       spawnFn: spawn,
       execPath: process.execPath,
       codeRoot,
+      dataRoot,
       url: input,
       outDir: path.join(/* turbopackIgnore: true */ dataRoot, ".career-ops-web", "jd-prefetch"),
     })
     : null;
   const jdFile = jdPrefetch?.ok ? jdPrefetch.file : undefined;
+  const jdSource = jdPrefetch?.ok ? jdPrefetch.source : undefined;
   const prompt = buildPrompt({
     kind,
     input,
@@ -179,6 +181,7 @@ export async function POST(req: Request) {
     profile: profileRef(careerOpsRoot()),
     dataRoot: splitLayout ? dataRoot : undefined,
     jdFile,
+    jdSource,
   });
 
   const isClaude = cliId === "claude";
@@ -338,7 +341,14 @@ export async function POST(req: Request) {
       const fencing = fencingReport({ cliId, cliName: spec.name, capabilities: capabilitiesFor(kind) });
       if (fencing.notice) send({ type: "status", label: fencing.notice });
       if (substitution) send({ type: "status", label: substitution });
-      if (jdFile) send({ type: "status", label: "Read the posting from the ATS's public API" });
+      if (jdFile) {
+        send({
+          type: "status",
+          label: jdSource === "scan-store"
+            ? "Using the job description the scanner saved"
+            : "Read the posting from the ATS's public API",
+        });
+      }
       // Time-based keepalive. The stream is silent whenever the agent is thinking
       // or inside a long tool call, and in pdf mode it is silent for the whole
       // 15-25 KB <<cv-html>> envelope (cvFilter swallows every byte). Measured
