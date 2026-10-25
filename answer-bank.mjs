@@ -305,9 +305,20 @@ export function companyHistory(records, company, { exclude = {} } = {}) {
     if (companyKey(r.company) !== key) continue;
     const appKey = applicationKey(r);
     if (skip.has(appKey) || (exclude.url && r.url === exclude.url)) continue;
-    // A fill saved after the application was submitted does not un-submit it.
+    // Saves of one application accumulate: a later save updates the questions it
+    // carries and keeps the rest, and a fill saved after the application was
+    // submitted does not un-submit it.
     const prev = latest.get(appKey);
-    latest.set(appKey, prev?.state === 'submitted' && r.state !== 'submitted' ? { ...r, state: 'submitted' } : r);
+    if (!prev) {
+      latest.set(appKey, r);
+      continue;
+    }
+    const newer = new Set(r.answers.map((a) => normalizeQuestion(a.q)));
+    latest.set(appKey, {
+      ...r,
+      state: prev.state === 'submitted' ? 'submitted' : r.state,
+      answers: [...prev.answers.filter((a) => !newer.has(normalizeQuestion(a.q))), ...r.answers],
+    });
   }
   return [...latest.values()].reverse().map((r) => ({ date: r.date, state: r.state, role: r.role, report: r.report, url: r.url, answers: r.answers }));
 }

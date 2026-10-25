@@ -287,7 +287,12 @@ test('companyHistory: one entry per application, newest first, latest state wins
 
   const refilled = companyHistory([...records, rec({ date: '2026-06-01', company: 'Acme', report: '010', state: 'filled', role: 'EM', answers: [{ q: 'Why?', a: 'v4', kind: 'free' }] })], 'acme');
   assert.equal(refilled.find((h) => h.report === '010').state, 'submitted', 'a later fill keeps the application submitted');
-  assert.equal(refilled.find((h) => h.report === '010').answers[0].a, 'v4');
+  assert.deepEqual(refilled.find((h) => h.report === '010').answers.map((a) => a.a), ['v4'], 'the newer answer replaces the older one for the same question');
+  const partial = companyHistory([
+    rec({ company: 'Acme', report: '020', state: 'submitted', answers: [{ q: 'Why?', a: 'a', kind: 'free' }, { q: 'Notice period', a: '3 months', kind: 'field' }] }),
+    rec({ company: 'Acme', report: '020', state: 'filled', answers: [{ q: 'Why?', a: 'b', kind: 'free' }] }),
+  ], 'acme');
+  assert.deepEqual(partial[0].answers.map((a) => `${a.q}=${a.a}`), ['Notice period=3 months', 'Why?=b'], 'a partial later save keeps the answers it did not carry');
 
   const others = companyHistory(records, 'acme', { exclude: { report: '10', url: '' } });
   assert.deepEqual(others.map((h) => h.role), ['Director'], 'the application being filled is not an earlier one');
