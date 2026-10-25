@@ -13,6 +13,7 @@ import assert from "node:assert/strict";
 import * as yaml from "js-yaml";
 import {
   addSearchText,
+  applySearchOp,
   describeSearchUrl,
   listLinkedInSearches,
   updateSearchText,
@@ -146,4 +147,38 @@ test("edits refuse a file whose shape the line editor does not handle", () => {
   const flow = 'tracked_companies: [{ name: "LinkedIn x", provider: linkedin-browser, search_url: "https://www.linkedin.com/jobs/search/?keywords=x" }]\n';
   assert.equal(updateSearchText(flow, "LinkedIn x", { enabled: false }), null);
   assert.equal(addSearchText(flow, { name: "L", searchUrl: DE_URL, maxPages: 3, maxApplyLookups: null, enabled: true }), null);
+});
+
+test("applySearchOp: add, edit and toggle from a request body, with validation", () => {
+  const added = applySearchOp(SOURCE, { op: "add", search: { name: "LinkedIn director-de-24h", searchUrl: DE_URL, maxPages: 2 } });
+  assert.equal(added.ok, true);
+  assert.equal(yaml.load(added.text).tracked_companies.at(-1).name, "LinkedIn director-de-24h");
+
+  const toggled = applySearchOp(SOURCE, { op: "toggle", name: "LinkedIn em-germany-7d", enabled: false });
+  assert.equal(yaml.load(toggled.text).tracked_companies[1].enabled, false);
+
+  const edited = applySearchOp(SOURCE, { op: "update", name: "LinkedIn em-germany-7d", search: { name: "LinkedIn em-de", searchUrl: DE_URL, maxPages: 1, maxApplyLookups: "", enabled: true } });
+  assert.equal(edited.ok, true);
+  const e = yaml.load(edited.text).tracked_companies[1];
+  assert.deepEqual([e.name, e.max_pages, "max_apply_lookups" in e], ["LinkedIn em-de", 1, false]);
+});
+
+test("applySearchOp: refusals carry a status the route can return", () => {
+  const cases = [
+    [{ op: "nope" }, 400],
+    [{ op: "add", search: { name: "Acme", searchUrl: DE_URL } }, 400],
+    [{ op: "add", search: { name: "x", searchUrl: "https://example.com" } }, 400],
+    [{ op: "toggle", name: "LinkedIn missing", enabled: true }, 404],
+    [{ op: "toggle", name: "LinkedIn em-germany-7d", enabled: "no" }, 400],
+    [{ op: "update", name: "LinkedIn missing", search: { name: "y", searchUrl: DE_URL } }, 404],
+    [{ op: "update", name: "LinkedIn em-germany-7d", search: { name: "LinkedIn head-of-eng-berlin-30d", searchUrl: DE_URL } }, 400],
+  ];
+  for (const [body, status] of cases) {
+    const r = applySearchOp(SOURCE, body);
+    assert.equal(r.ok, false, JSON.stringify(body));
+    assert.equal(r.status, status, JSON.stringify(body));
+    assert.ok(r.error);
+  }
+  const flow = 'tracked_companies: [{ name: "LinkedIn x", provider: linkedin-browser, search_url: "https://www.linkedin.com/jobs/search/?keywords=x" }]\n';
+  assert.equal(applySearchOp(flow, { op: "toggle", name: "LinkedIn x", enabled: false }).status, 409);
 });

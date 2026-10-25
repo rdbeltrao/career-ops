@@ -254,3 +254,50 @@ export function updateSearchText(source, name, patch) {
   }
   return verified(source, lines, expected);
 }
+
+const SHAPE_ERROR = "portals.yml has a layout this page cannot edit safely. Edit that entry by hand, or ask the assistant.";
+
+/**
+ * One request from the LinkedIn page, as a portals.yml edit.
+ *   { op: "add", search }                       a new search
+ *   { op: "update", name, search }              replace one search's fields
+ *   { op: "toggle", name, enabled }             switch one search on or off
+ * @param {string} source portals.yml text
+ * @param {unknown} body
+ * @returns {{ ok: true, text: string } | { ok: false, status: number, error: string }}
+ */
+export function applySearchOp(source, body) {
+  let doc;
+  try {
+    doc = yaml.load(source) ?? {};
+  } catch (err) {
+    return { ok: false, status: 409, error: `portals.yml does not parse: ${err.message}` };
+  }
+  const names = (Array.isArray(doc?.tracked_companies) ? doc.tracked_companies : []).filter((c) => isMapping(c) && typeof c.name === "string").map((c) => c.name);
+  const searches = listLinkedInSearches(doc);
+  const op = isMapping(body) ? body.op : undefined;
+
+  if (op === "add") {
+    const v = validateSearch(body.search, { existingNames: names });
+    if (!v.ok) return { ok: false, status: 400, error: v.error };
+    const text = addSearchText(source, v.value);
+    return text ? { ok: true, text } : { ok: false, status: 409, error: SHAPE_ERROR };
+  }
+
+  const name = typeof body?.name === "string" ? body.name.trim() : "";
+  if (op === "toggle" || op === "update") {
+    if (!searches.some((s) => s.name === name)) return { ok: false, status: 404, error: `There is no LinkedIn search named "${name}" in portals.yml.` };
+  }
+  if (op === "toggle") {
+    if (typeof body.enabled !== "boolean") return { ok: false, status: 400, error: "enabled must be true or false." };
+    const text = updateSearchText(source, name, { enabled: body.enabled });
+    return text ? { ok: true, text } : { ok: false, status: 409, error: SHAPE_ERROR };
+  }
+  if (op === "update") {
+    const v = validateSearch(body.search, { existingNames: names, editing: name });
+    if (!v.ok) return { ok: false, status: 400, error: v.error };
+    const text = updateSearchText(source, name, v.value);
+    return text ? { ok: true, text } : { ok: false, status: 409, error: SHAPE_ERROR };
+  }
+  return { ok: false, status: 400, error: "op must be add, update or toggle." };
+}
