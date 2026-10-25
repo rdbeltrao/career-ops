@@ -111,6 +111,15 @@ test('row grouping never merges headings, unrelated sections or overlapping text
   assert.equal(groupFlowRows([a, { ...b, box: a.box }]).length, 2);
 });
 
+test('separate native bullet glyphs align to their text baseline despite different ink tops', () => {
+  const dot = block(1, 700, 3, { baseline: 694, box: { x: 40, top: 700, w: 3, h: 3 } });
+  const text = block(2, 704, 12, { baseline: 694, box: { x: 54, top: 704, w: 250, h: 12 } });
+  const rows = groupFlowRows([text, dot]);
+  assert.equal(rows.length, 1);
+  assert.deepEqual(rows[0].objectIndices, [2, 1]);
+  assert.equal(groupFlowRows([text, { ...dot, baseline: 684 }]).length, 2, 'Different text baselines remain distinct rows');
+});
+
 test('explicit row decoration attaches without becoming a separately spaced flow block', () => {
   const row = groupFlowRows([
     block(1, 700, 20, { rowId: 'skills-row', box: { x: 50, top: 700, w: 120, h: 20 } }),

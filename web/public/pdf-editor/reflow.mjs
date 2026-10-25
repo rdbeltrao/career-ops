@@ -4,6 +4,14 @@ import { readParagraphs, paragraphText, replacementRuns, removeParagraphWhitespa
 import { analyzeCvSections, isPageUnderlay } from './sections.mjs';
 import { planPdfPagination, groupFlowRows } from './pagination.mjs';
 import { appendPage, inspectParagraphLines, generatedPageMarkerIndices, removeTrailingPages } from './page-engine.mjs';
+import { protectPatternArtwork } from '../vendor/bentopdf/shadingsurgery.js';
+import { consolidateContentArrays } from '../vendor/bentopdf/type3surgery.js';
+
+/** Preserve original vector pattern streams before a scratch engine regenerates pages. */
+export async function preparePdfForReflow(bytes) {
+  const consolidated=await consolidateContentArrays(bytes)??bytes;
+  return await protectPatternArtwork(consolidated)??consolidated;
+}
 
 const bottom = box => box.top - box.h;
 const rect = box => ({ x:box.x, top:box.top ?? box.y + box.h, w:box.w, h:box.h });
@@ -33,9 +41,9 @@ function objectsOnPage(engine) {
     return {...object,box:rect(bounds),...(object.type===2?describePath(engine,object.handle):{})};
   });
 }
-function paragraphsOnPage(engine,objects) {
+function paragraphsOnPage(engine,objects,paragraphs) {
   const byHandle=new Map(objects.map(object=>[object.handle,object.index]));
-  return readParagraphs(engine).map(paragraph=>({...paragraph,objectIndices:[...new Set([...engine.paragraphObjects(paragraph.id),...(paragraph.whitespaceObjects??[])])]
+  return paragraphs.map(paragraph=>({...paragraph,runs:paragraph.runs.map((run,sourceIndex)=>({...run,sourceIndex})),objectIndices:[...new Set([...engine.paragraphObjects(paragraph.id),...(paragraph.whitespaceObjects??[])])]
     .map(handle=>byHandle.get(handle)).filter(Number.isInteger)}));
 }
 
@@ -76,7 +84,9 @@ export function captureFlow(engine) {
   for(let pageIndex=0;pageIndex<engine.pageCount;pageIndex++) {
     engine.loadPage(pageIndex);
     if(engine.M._FPDFPage_GetRotation(engine.page)!==0)throw new Error('Automatic pagination does not support rotated PDF pages.');
-    const objects=objectsOnPage(engine),paragraphs=paragraphsOnPage(engine,objects);
+    // A regenerated pattern page can reload native handles while building its
+    // model. Capture objects afterwards, so ownership uses the current handles.
+    const model=readParagraphs(engine),objects=objectsOnPage(engine),paragraphs=paragraphsOnPage(engine,objects,model);
     const markerIndices=generatedPageMarkerIndices(engine);
     pages.push({pageIndex,width:engine.pageWidth,height:engine.pageHeight,objects,paragraphs,markerIndices,generated:markerIndices.length>0,annotations:annotationBoxes(engine)});
   }
@@ -93,7 +103,10 @@ export function captureFlow(engine) {
   for(const page of pages) {
     const underlays=page.objects.filter(object=>isPageUnderlay(object,page));
     const left=Math.max(12,Math.min(...page.paragraphs.filter(paragraph=>!paragraph.invisible).map(paragraph=>paragraph.box.x),48));
-    page.contentRight=underlays.length?Math.max(...underlays.map(object=>object.box.x+object.box.w)):page.width-left;
+    // Long section rules expose the actual content edge more precisely than a
+    // page underlay, which often includes internal CSS padding.
+    const rules=page.objects.filter(object=>object.type===2&&object.box.h<4&&object.box.w>page.width*.6);
+    page.contentRight=rules.length?Math.max(...rules.map(object=>object.box.x+object.box.w)):underlays.length?Math.max(...underlays.map(object=>object.box.x+object.box.w)):page.width-left;
     const fixedBoxes=[],claimed=new Set([...page.markerIndices,...underlays.map(object=>object.index)]);page.backgrounds=[];
     const pageBlocks=[];
     for(const [index,paragraph] of page.paragraphs.entries()) {
@@ -106,20 +119,37 @@ export function captureFlow(engine) {
       // the native paragraph rectangle so selection and draft recovery stay stable.
       const objectIndices=paragraph.objectIndices;
       for(const id of objectIndices)claimed.add(id);
+      const ink=union(objectIndices.map(index=>page.objects[index].box));
+      const measuredWidth=paragraph.box.w+Math.max(...paragraph.runs.map(run=>run.size||0))/2;
       pageBlocks.push({id:`paragraph:${page.pageIndex}:${index}`,pageIndex:page.pageIndex,sectionId:section?.id??'body',
-        kind:section?.title===text.trim()?'heading':'paragraph',paragraphIds:[paragraph.id],objectIndices:[...objectIndices],
-        handles:objectIndices.map(index=>page.objects[index].handle),wrapWidth:page.contentRight-paragraph.box.x,box:union(objectIndices.map(index=>page.objects[index].box)),originalBox:rect(paragraph.box),text,paragraph});
+        kind:section?.title===text.trim()?'heading':'paragraph',baseline:paragraph.lines?.[0]?.y,lineCount:paragraph.lines?.length??1,paragraphIds:[paragraph.id],objectIndices:[...objectIndices],
+        handles:objectIndices.map(index=>page.objects[index].handle),wrapWidth:Math.min(page.contentRight-paragraph.box.x,paragraph.lines?.length>1?measuredWidth:Infinity),box:ink,inkBox:ink,originalBox:rect(paragraph.box),text,paragraph});
     }
     for(const object of page.objects) {
       if(claimed.has(object.index))continue;
       if(object.box.w>=page.width*.95&&object.box.h>=page.height*.95){engine.loadPage(page.pageIndex);page.backgrounds.push({type:object.type,color:engine.objectFill(object.handle)});continue;}
       const section=sections.find(section=>section.fragments.some(fragment=>fragment.pageIndex===page.pageIndex&&fragment.objectIndices.includes(object.index)));
       const candidates=pageBlocks.filter(block=>!section||block.sectionId===section.id);
-      const ranked=candidates.map(block=>({block,distance:Math.max(bottom(object.box)-block.box.top,bottom(block.box)-object.box.top,0)})).sort((a,b)=>a.distance-b.distance||b.block.box.top-a.block.box.top);
+      const ranked=candidates.map(block=>{
+        const ink=block.inkBox;
+        const width=Math.max(0,Math.min(object.box.x+object.box.w,ink.x+ink.w)-Math.max(object.box.x,ink.x));
+        const height=Math.max(0,Math.min(object.box.top,ink.top)-Math.max(bottom(object.box),bottom(ink)));
+        return {block,coverage:width*height/Math.max(ink.w*ink.h,1),
+          distance:Math.hypot(Math.max(bottom(object.box)-ink.top,bottom(ink)-object.box.top,0),Math.max(object.box.x-ink.x-ink.w,ink.x-object.box.x-object.box.w,0))};
+      }).sort((a,b)=>b.coverage-a.coverage||a.distance-b.distance||b.block.inkBox.top-a.block.inkBox.top);
       if(!ranked.length||(!section&&(object.box.top<45||bottom(object.box)>page.height-30))){fixedBoxes.push(object.box);continue;}
       const target=ranked[0].block;target.objectIndices.push(object.index);target.handles.push(object.handle);target.box=union([target.box,object.box]);
     }
-    for(const group of groupFlowRows(pageBlocks))if(group.memberIds)for(const id of group.memberIds){const block=pageBlocks.find(item=>item.id===id);block.wrapWidth=block.box.w;}
+    for(const group of groupFlowRows(pageBlocks))if(group.memberIds){
+      const members=group.memberIds.map(id=>pageBlocks.find(item=>item.id===id)).sort((a,b)=>a.box.x-b.box.x);
+      for(const [index,block]of members.entries()){
+        const backing=block.objectIndices.map(id=>page.objects[id]).filter(object=>object.type===2&&object.box.x<=block.inkBox.x&&object.box.x+object.box.w>=block.inkBox.x+block.inkBox.w&&object.box.top>=block.inkBox.top&&bottom(object.box)<=bottom(block.inkBox));
+        // Chip text stays within its painted backing. Plain columns may use
+        // their existing whitespace, stopping before the neighboring column.
+        const right=backing.length?Math.min(...backing.map(object=>object.box.x+object.box.w-Math.max(0,block.originalBox.x-object.box.x))):members[index+1]?members[index+1].box.x-4:page.contentRight;
+        block.wrapWidth=Math.min(block.wrapWidth,Math.max(block.originalBox.w,right-block.originalBox.x));
+      }
+    }
     pageBlocks.sort((a,b)=>b.box.top-a.box.top||a.box.x-b.box.x);
     const top=pageBlocks.length?Math.max(...pageBlocks.map(block=>block.box.top)):page.height-48;
     const margin=Math.max(24,Math.min(72,page.height-top));
@@ -138,30 +168,91 @@ export function captureFlow(engine) {
   return {pages,blocks,sections,continuationPage:{width:last.width,height:last.height,contentTop:counterBox&&counterBox.top>last.height-65?Math.min(last.height-outerMargin,bottom(counterBox)-12):last.height-outerMargin,contentBottom:outerMargin,fixedBoxes:counterBox?[counterBox]:[]}};
 }
 
-function updateBlock(engine,block,runs,format) {
+async function sourceFonts(engine,paragraph,runs){
+  const records=[];
+  for(const sourceIndex of new Set(runs.map(run=>run.sourceIndex).filter(index=>Number.isInteger(index)&&index>=0))){
+    const sourceRuns=runs.filter(run=>run.sourceIndex===sourceIndex);
+    if(sourceRuns.every(run=>{const local=PdfEngine.localFonts.get(`${run.family}|${run.bold?'1':'0'}${run.italic?'1':'0'}`);return local&&sfntCovers(local,[...run.text].map(char=>char.codePointAt(0)));}))continue;
+    const bytes=engine.synthRunFont(paragraph.id,sourceIndex);
+    if(!(bytes instanceof Uint8Array)){
+      records.push({sourceIndex,unavailable:!!engine.runFontData(paragraph.id,sourceIndex)});continue;
+    }
+    const digest=btoa(String.fromCharCode(...new Uint8Array(await crypto.subtle.digest('SHA-256',bytes)))).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');
+    records.push({sourceIndex,bytes,digest,sourceRuns});
+  }
+  const identities=new Map();
+  for(const record of records)for(const run of record.sourceRuns??[]){const key=`${run.family}|${!!run.bold}|${!!run.italic}`;const fonts=identities.get(key)??new Set();fonts.add(record.digest);identities.set(key,fonts);}
+  const collision=[...identities.values()].some(fonts=>fonts.size>1);
+  const aliases=new Map(),entries=new Map();
+  for(const record of collision?records:[])for(const run of record.sourceRuns??[]){
+    if(identities.get(`${run.family}|${!!run.bold}|${!!run.italic}`)?.size<2)continue;
+    if(!sfntCovers(record.bytes,[...run.text].filter(char=>! /\s/u.test(char)).map(char=>char.codePointAt(0))))throw new Error('The original font cannot preserve this text safely. Try another character.');
+    const style=run.bold?(run.italic?'BoldItalic':'Bold'):(run.italic?'Italic':'Regular');
+    // The native family buffer is bounded. A 180-bit source-byte fingerprint
+    // and style fit within it without appending to a previously edited alias.
+    const family=`COF ${style} ${record.digest.slice(0,30)}`;
+    aliases.set(run,{...run,family,sourceIndex:-1});
+    entries.set(`${family}|${run.bold?'1':'0'}${run.italic?'1':'0'}`,record.bytes);
+  }
+  return {collision,runs:runs.map(run=>aliases.get(run)??run),entries,
+    unavailable:records.some(record=>record.unavailable)};
+}
+function withSourceFonts(fonts,fn){
+  // Register only around synchronous native operations. No await may occur in
+  // this scope, so concurrent scratch previews cannot remove each other's font.
+  const previous=new Map([...fonts.entries].map(([key])=>[key,PdfEngine.localFonts.get(key)]));
+  for(const [key,bytes]of fonts.entries)PdfEngine.localFonts.set(key,bytes);
+  try{return fn();}finally{for(const [key,bytes]of previous)if(bytes)PdfEngine.localFonts.set(key,bytes);else PdfEngine.localFonts.delete(key);}
+}
+
+async function updateBlock(engine,block,runs,format) {
   engine.loadPage(block.pageIndex);
   const original=block.paragraph;
   runs=ensureRenderableRuns(engine,original,runs);
-  const preview=engine.previewParagraph(original.id,runs,format??original.format);
+  const fonts=await sourceFonts(engine,original,runs),renderRuns=runs;
+  if(fonts.collision)runs=fonts.runs;
+  const preview=withSourceFonts(fonts,()=>engine.previewParagraph(original.id,runs,format??original.format));
   if(!preview?.lines?.length)throw new Error('Could not lay out the updated text.');
-  const paragraph=engine.editStep('Reflow CV text',()=>{
+  const paragraph=withSourceFonts(fonts,()=>engine.editStep('Reflow CV text',()=>{
+    if(preview.lines.length===original.lines?.length&&preview.width<=block.wrapWidth+1){
+      const updated=engine.commitParagraph(original.id,runs,format??original.format);
+      if(updated){removeParagraphWhitespace(engine,original);if(!engine.generateContent())throw new Error('Could not save the edited paragraph.');return updated;}
+    }
     // The native surgical path can ignore wrapping or use the page edge instead
     // of the CV margin. Every replacement gets the same bounded native layout.
+    if(fonts.collision&&fonts.unavailable)throw new Error('The original embedded font cannot be preserved while wrapping this text.');
+    if(fonts.collision)runs=fonts.runs;
     const previous=[...new Set([...engine.paragraphObjects(original.id),...(original.whitespaceObjects??[])])];
     const updated=engine.addParagraph(original.box.x,original.box.top,Math.min(block.wrapWidth,engine.pageWidth-original.box.x-2),runs,format??original.format);
     if(!updated)return null;
     for(const handle of previous)if(!engine.historyRemoveObject(handle))throw new Error('Could not replace all original paragraph objects.');
     if(!engine.generateContent())throw new Error('Could not rebuild the wrapped paragraph.');
     return updated;
-  });
+  }));
   if(!paragraph)throw new Error('Could not update the paragraph.');
+  // Native paragraph creation uses font metrics that can differ from the
+  // original leading. Preserve the original baselines when the line count still
+  // fits, then validate visible ink before choosing the stable-layout edit path.
+  const nativeLines=inspectParagraphLines(engine,paragraph);
+  if(nativeLines.length===original.lines?.length){
+    for(const [index,line]of nativeLines.entries()){
+      const dy=original.lines[index].y-line.baseline;
+      for(const objectIndex of line.objectIndices)engine.translateObject(engine.objectAt(objectIndex).handle,0,dy);
+      paragraph.lines[index].y+=dy;
+    }
+    if(!engine.generateContent())throw new Error('Could not preserve the paragraph baselines.');
+  }
   const text=runs.map(run=>run.text).join(''),objects=objectsOnPage(engine);
   const handles=new Set(engine.paragraphObjects(paragraph.id));
   const oldTextHandles=new Set(block.paragraph.objectIndices.map(index=>block.sourceObjects[index]?.handle));
   const decorations=block.handles.filter(handle=>!oldTextHandles.has(handle)&&objects.some(object=>object.handle===handle));
   block.handles=[...handles,...decorations];block.paragraph=paragraph;block.text=text;block.edited=true;block.previewLines=preview.lines;
-  block.renderRuns=runs;block.editPreview=engine.previewParagraph(paragraph.id,runs,format??original.format);
+  // The main editor uses the original source families/indices for its live
+  // overlay after this scratch engine and its temporary provider entries close.
+  block.renderRuns=renderRuns;block.editPreview=withSourceFonts(fonts,()=>engine.previewParagraph(paragraph.id,runs,format??original.format));
   block.box=union(objects.filter(object=>handles.has(object.handle)||decorations.includes(object.handle)).map(object=>object.box));
+  const newInk=union(objects.filter(object=>handles.has(object.handle)).map(object=>object.box));
+  block.fitsOriginalLayout=nativeLines.length===original.lines?.length&&newInk.x>=original.box.x-1&&newInk.x+newInk.w<=original.box.x+block.wrapWidth+1&&newInk.top<=original.box.top+1&&bottom(newInk)>=bottom(original.box)-1;
   block.lineFragments=inspectParagraphLines(engine,paragraph).map(line=>({...line,handles:line.objectIndices.map(index=>objects[index].handle)}));
 }
 
@@ -203,15 +294,17 @@ export async function reflowDocument(engine,{edits=[],sectionOrder=null,maxPages
       const block=flow.blocks.find(block=>block.pageIndex===edit.identity.pageIndex&&block.text===edit.identity.text&&near(block.originalBox,edit.identity.box));
       if(!block)throw new Error('This paragraph is outside the editable document flow.');
       const runs=edit.runs??replacementRuns(block.paragraph,edit.text);
-      updateBlock(engine,block,runs,edit.format??block.paragraph.format);
+      await updateBlock(engine,block,runs,edit.format??block.paragraph.format);
     }
     const indexed=new Map();
     for(const page of flow.pages){engine.loadPage(page.pageIndex);indexed.set(page.pageIndex,new Map(objectsOnPage(engine).map(object=>[object.handle,object.index])));}
+    const preserveLayout=!sectionOrder&&flow.blocks.filter(block=>block.edited).every(block=>block.fitsOriginalLayout&&
+      !flow.blocks.some(other=>other!==block&&other.pageIndex===block.pageIndex&&overlaps(block.box,other.box)&&!overlaps(block.inkBox,other.inkBox)));
     for(const block of flow.blocks) {
       block.objectIndices=block.handles.map(handle=>indexed.get(block.pageIndex).get(handle)).filter(Number.isInteger);
       if(!block.objectIndices.length)throw new Error('A complete paragraph could not be retained during pagination.');
       const page=flow.pages[block.pageIndex];
-      if(block.edited||block.paragraph.lines?.length>1||block.box.h>page.contentTop-page.contentBottom){
+      if(!preserveLayout&&(block.edited||block.paragraph.lines?.length>1||block.box.h>page.contentTop-page.contentBottom)){
         engine.loadPage(block.pageIndex);
         const lines=block.lineFragments??inspectParagraphLines(engine,block.paragraph);
         for(const line of lines)if(line.handles)line.objectIndices=line.handles.map(handle=>indexed.get(block.pageIndex).get(handle));
@@ -219,15 +312,25 @@ export async function reflowDocument(engine,{edits=[],sectionOrder=null,maxPages
         if(lines.length>1||block.box.h>page.contentTop-page.contentBottom) {
           const used=new Set(lines.flatMap(line=>line.objectIndices));
           const extra=block.objectIndices.filter(index=>!used.has(index));
+          const extras=lines.map(()=>[]),objects=objectsOnPage(engine);
+          for(const objectIndex of extra){
+            const object=objects[objectIndex];
+            const distances=lines.map((line,index)=>({index,distance:Math.max(bottom(object.box)-line.box.top,bottom(line.box)-object.box.top,0)})).sort((a,b)=>a.distance-b.distance);
+            if(distances.length>1&&Math.abs(distances[0].distance-distances[1].distance)<.01&&object.box.h>3)throw new Error('A paragraph decoration spans multiple lines and cannot be split safely.');
+            extras[distances[0].index].push(objectIndex);
+          }
           block.parts=lines.map((line,index)=>({id:`${block.id}:line:${index}`,pageIndex:block.pageIndex,sectionId:block.sectionId,kind:'line',
-            box:index===0&&extra.length?union([rect(line.box),...objectsOnPage(engine).filter(object=>extra.includes(object.index)).map(object=>object.box)]):rect(line.box),objectIndices:[...line.objectIndices,...(index===0?extra:[])],paragraphIds:[],lineIndex:index,gapBefore:index?Math.max(0,bottom(lines[index-1].box)-line.box.top):0}));
+            box:extras[index].length?union([rect(line.box),...extras[index].map(objectIndex=>objects[objectIndex].box)]):rect(line.box),objectIndices:[...line.objectIndices,...extras[index]],paragraphIds:[],lineIndex:index,
+            gapBefore:index?Math.max(0,bottom(lines[index-1].box)-line.box.top):0}));
+          for(let index=1;index<block.parts.length;index++)block.parts[index].gapBefore=Math.max(0,bottom(block.parts[index-1].box)-block.parts[index].box.top);
         }
       }
     }
     let ordered=flow.blocks;
     if(sectionOrder){const rank=new Map(sectionOrder.map((title,index)=>[title,index]));const titles=new Map(flow.sections.map(section=>[section.id,section.title]));ordered=[...ordered].sort((a,b)=>(rank.get(titles.get(a.sectionId))??-1)-(rank.get(titles.get(b.sectionId))??-1));}
     const grouped=groupFlowRows(ordered);
-    const plan=planPdfPagination({pages:flow.pages,blocks:grouped,continuationPage:flow.continuationPage,maxPages});
+    const plan=preserveLayout?{pages:flow.pages.map(page=>({...page,index:page.pageIndex})),addedPages:[],removedPages:[],moves:[],placements:flow.blocks.map(block=>({blockId:block.id,fromPage:block.pageIndex,toPage:block.pageIndex,objectIndices:block.objectIndices,paragraphIds:block.paragraphIds,dx:0,dy:0,box:block.box}))}
+      :planPdfPagination({pages:flow.pages,blocks:grouped,continuationPage:flow.continuationPage,maxPages});
     for(const block of flow.blocks){const moving=block.edited||plan.moves.some(move=>move.fromPage===block.pageIndex&&move.objectIndices.some(index=>block.objectIndices.includes(index)));if(moving&&flow.pages[block.pageIndex].annotations.some(annotation=>overlaps(annotation.box,block.originalBox)))throw new Error('This PDF contains a link or annotation in moving content. Its text cannot be moved safely.');}
     if(plan.pages.length>maxPages)throw new Error('This edit would exceed the 20-page document limit. Shorten the text and try again.');
     if(plan.addedPages.length&&flow.pages.some(page=>page.backgrounds.some(background=>background.type!==2||!background.color||background.color.a>0&&[background.color.r,background.color.g,background.color.b].some(channel=>channel<250))))throw new Error('This PDF has a page background that cannot be reproduced on continuation pages.');
@@ -236,7 +339,11 @@ export async function reflowDocument(engine,{edits=[],sectionOrder=null,maxPages
     const moved=new Set();
     for(const move of captured)for(const handle of move.handles){if(!handle||moved.has(handle))throw new Error('Pagination encountered a shared PDF object.');moved.add(handle);}
     for(const move of captured){engine.loadPage(move.fromPage);for(const handle of move.handles)if(!engine.M._FPDFPage_RemoveObject(engine.page,handle))throw new Error('Could not move the complete paragraph.');engine._pageDirty=true;}
-    for(const move of captured){engine.loadPage(move.toPage);for(const handle of move.handles){engine.M._FPDFPage_InsertObject(engine.page,handle);engine.translateObject(handle,move.dx,move.dy);}engine._pageDirty=true;}
+    // Preserve each source page's native paint order. Backgrounds generally
+    // precede text even though ownership collection discovers them afterwards.
+    const insertion=captured.flatMap(move=>move.handles.map((handle,index)=>({...move,handle,sourceIndex:move.objectIndices[index]})))
+      .sort((a,b)=>a.toPage-b.toPage||a.fromPage-b.fromPage||a.sourceIndex-b.sourceIndex);
+    for(const item of insertion){engine.loadPage(item.toPage);engine.M._FPDFPage_InsertObject(engine.page,item.handle);engine.translateObject(item.handle,item.dx,item.dy);engine._pageDirty=true;}
     for(const page of plan.pages){engine.loadPage(page.index);if(!engine.generateContent())throw new Error('Could not save the repaginated page.');}
     updateCounters(engine,flow,plan.addedPages,plan.removedPages);
     if(plan.removedPages.length)removeTrailingPages(engine,Math.min(...plan.removedPages));
@@ -245,7 +352,7 @@ export async function reflowDocument(engine,{edits=[],sectionOrder=null,maxPages
     if(!bytes)throw new Error('Could not prepare the repaginated PDF.');
     const liveLines=[];
     for(const block of flow.blocks.filter(block=>block.edited)){
-      const placements=plan.placements.filter(placement=>placement.blockId===block.id||placement.parentBlockId===block.id||placement.blockId.startsWith(`${block.id}:line:`));
+      const placements=plan.placements.filter(placement=>placement.fromPage===block.pageIndex&&placement.objectIndices.some(index=>block.objectIndices.includes(index)));
       for(const [lineIndex,line] of (block.lineFragments??[]).entries()){
         const placement=placements.find(item=>line.objectIndices.some(index=>item.objectIndices.includes(index)));
         if(placement)liveLines.push({blockId:block.id,lineIndex,pageIndex:placement.toPage,x:line.box.x+placement.dx,baseline:line.baseline+placement.dy,top:line.box.top+placement.dy,h:line.box.h});

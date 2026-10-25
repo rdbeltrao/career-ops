@@ -691,6 +691,89 @@ export const dictAt = (body, at) => {
   return null;
 };
 
+// PDF content operands can contain the strings "q", "Q" and "cm" as data.
+// Read only operator tokens outside literal/hex strings, names and arrays.
+function* graphicsTokens(content) {
+  let index = 0, arrayDepth = 0;
+  while (index < content.length) {
+    const start = index, char = content[index];
+    if (/\s/.test(char)) { index++; continue; }
+    if (char === '%') { while (index < content.length && !/[\r\n]/.test(content[index])) index++; continue; }
+    if (char === '(') {
+      let depth = 1; index++;
+      while (index < content.length && depth) {
+        if (content[index] === '\\') { index += 2; continue; }
+        if (content[index] === '(') depth++;
+        if (content[index] === ')') depth--;
+        index++;
+      }
+      if (depth) throw new Error('Cannot preserve pattern artwork with malformed PDF strings.');
+      yield { token: 'data', start }; continue;
+    }
+    if (char === '<' && content[index + 1] !== '<') {
+      index = content.indexOf('>', index + 1);
+      if (index < 0) throw new Error('Cannot preserve pattern artwork with malformed PDF data.');
+      index++; yield { token: 'data', start }; continue;
+    }
+    if (char === '[') { arrayDepth++; index++; yield { token: 'data', start }; continue; }
+    if (char === ']') { arrayDepth--; index++; yield { token: 'data', start }; continue; }
+    if (char === '/' || '<>'.includes(char)) {
+      index++;
+      while (char === '/' && index < content.length && !/[\s()[\]<>/%]/.test(content[index])) index++;
+      yield { token: char==='/'?'name':'data', start }; continue;
+    }
+    while (index < content.length && !/[\s()[\]<>/%]/.test(content[index])) index++;
+    if (index === start) index++;
+    if (!arrayDepth) yield { token: content.slice(start, index), start };
+  }
+}
+const multiplyTransform = (a, b) => [
+  a[0]*b[0]+a[2]*b[1], a[1]*b[0]+a[3]*b[1], a[0]*b[2]+a[2]*b[3], a[1]*b[2]+a[3]*b[3],
+  a[0]*b[4]+a[2]*b[5]+a[4], a[1]*b[4]+a[3]*b[5]+a[5],
+];
+export function graphicsTransformAt(content, end = content.length) {
+  let matrix = [1, 0, 0, 1, 0, 0], operands = [];
+  const stack = [];
+  for (const { token, start } of graphicsTokens(content)) {
+    if (start >= end) break;
+    if (/^[+-]?(?:\d+\.?\d*|\.\d+)$/.test(token)) { operands.push(Number(token)); continue; }
+    if (token === 'q') stack.push([...matrix]);
+    else if (token === 'Q') {
+      if (!stack.length) throw new Error('Cannot preserve pattern artwork with unbalanced graphics state.');
+      matrix = stack.pop();
+    } else if (token === 'cm') {
+      if (operands.length !== 6) throw new Error('Cannot preserve pattern artwork with an invalid transform.');
+      matrix = multiplyTransform(matrix, operands);
+    } else if (token === 'BI') throw new Error('Pattern artwork mixed with inline image data cannot be preserved safely.');
+    operands = [];
+  }
+  return matrix;
+}
+function inverseTransform(matrix) {
+  const [a,b,c,d,e,f] = matrix, determinant = a*d-b*c;
+  if (!Number.isFinite(determinant) || Math.abs(determinant) < 1e-12) throw new Error('Pattern artwork has a singular transform.');
+  return [d/determinant,-b/determinant,-c/determinant,a/determinant,(c*f-d*e)/determinant,(b*e-a*f)/determinant];
+}
+
+function patternBlocks(content) {
+  const stack=[],blocks=[];
+  let previous;
+  for(const item of graphicsTokens(content)){
+    if(item.token==='q')stack.push({innerStart:item.start,pattern:false});
+    else if(item.token==='scn'&&previous?.token==='name'){
+      if(!stack.length)throw new Error('Pattern artwork without an isolated graphics state cannot be preserved safely.');
+      stack.at(-1).pattern=true;
+    }else if(item.token==='Q'){
+      const block=stack.pop();
+      if(block?.pattern)blocks.push({...block,innerEnd:item.start+1});
+    }
+    previous=item;
+  }
+  // Nested blocks inside an already protected graphics group stay in that one
+  // Form. Candidate discovery uses tokens, never q/scn/Q-looking literal text.
+  return blocks.filter(block=>!blocks.some(other=>other!==block&&other.innerStart<block.innerStart&&other.innerEnd>=block.innerEnd));
+}
+
 export async function protectPatternArtwork(bytes) {
   const probe = probePdfBytes(bytes);
   if (!probe.pattern && !probe.shading && !probe.objStm) return null;
@@ -709,7 +792,7 @@ export async function protectPatternArtwork(bytes) {
     if (!cOne) continue;
     const pc = await pageContent(bytes, src, op, pi);
     if (pc == null) continue;
-    const pats = shBlocks(pc.content).filter((b) => b.isPattern);
+    const pats = patternBlocks(pc.content);
     if (!pats.length) continue;
 
     const rref = pg.body.match(/\/Resources\s+(\d+)\s+\d+\s+R/);
@@ -723,13 +806,23 @@ export async function protectPatternArtwork(bytes) {
     let content = pc.content;
     const added = [];
     for (const b of [...pats].sort((x, y) => y.innerStart - x.innerStart)) {
-      const ops = content.slice(b.innerStart, b.innerEnd);
+      const originalOps = pc.content.slice(b.innerStart, b.innerEnd);
+      if ([...graphicsTokens(originalOps)].some(({token}) => ['BT','ET','Tj','TJ',"'",'"','Do','BI'].includes(token))) {
+        throw new Error('Pattern artwork mixed with text or nested content cannot be preserved safely.');
+      }
+      // EVIDENCE: PDFium regenerates Image/Form/Path/Text objects but cannot
+      // serialize pattern paint. Preserve the original vector operators in an
+      // opaque text-free Form. Cancel the parent CTM at the Form boundary, then
+      // restore it inside, so page BBox and Pattern matrices are applied once.
+      // https://pdfium.googlesource.com/pdfium/+/refs/heads/main/core/fpdfapi/edit/cpdf_pagecontentgenerator.cpp
+      const matrix = graphicsTransformAt(pc.content,b.innerStart);
+      const ops = `${matrix.join(' ')} cm\n${originalOps}`;
       const num = next++;
       const name = `ECBG${num}`;
       newObjs.push({
         num,
         body:
-          `<< /Type /XObject /Subtype /Form /FormType 1 /BBox [ ${box[1].trim()} ]` +
+          `<< /Type /XObject /Subtype /Form /FormType 1 /BBox [ ${box[1].trim()} ] /Matrix [ ${inverseTransform(matrix).join(' ')} ]` +
           ` /Resources ${resDict} /Length ${ops.length + 1} >>\nstream\n${ops}\nendstream`,
       });
       content =

@@ -39,7 +39,7 @@ export function groupFlowRows(blocks) {
     const explicit = sameContext && block.rowId != null && members.every((member) => member.rowId === block.rowId);
     const inline = sameContext && block.kind !== 'decoration' && block.box.h <= 32 && (block.lineCount ?? 1) === 1 &&
       members.every((member) => member.kind !== 'decoration' && member.box.h <= 32 && (member.lineCount ?? 1) === 1 &&
-        Math.abs(member.box.top - block.box.top) <= 2 &&
+        (Number.isFinite(member.baseline)&&Number.isFinite(block.baseline)?Math.abs(member.baseline-block.baseline)<=1.5:Math.abs(member.box.top-block.box.top)<=2) &&
         Math.min(member.box.x + member.box.w, block.box.x + block.box.w) <= Math.max(member.box.x, block.box.x) + EPSILON);
     if (explicit || inline) {
       members.push(block);
