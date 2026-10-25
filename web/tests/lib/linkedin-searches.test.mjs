@@ -183,3 +183,46 @@ test("applySearchOp: refusals carry a status the route can return", () => {
   const flow = 'tracked_companies: [{ name: "LinkedIn x", provider: linkedin-browser, search_url: "https://www.linkedin.com/jobs/search/?keywords=x" }]\n';
   assert.equal(applySearchOp(flow, { op: "toggle", name: "LinkedIn x", enabled: false }).status, 409);
 });
+
+// ── Review findings ──────────────────────────────────────────────────────────
+
+test("listLinkedInSearches reads numbers the way the crawl does, and resolve_apply_url: false", () => {
+  const src = 'tracked_companies:\n  - name: L\n    provider: linkedin-browser\n    search_url: "https://www.linkedin.com/jobs/search/?keywords=x"\n    max_pages: "6"\n    max_apply_lookups: "10"\n    resolve_apply_url: false\n';
+  const [s] = listLinkedInSearches(yaml.load(src));
+  assert.deepEqual([s.maxPages, s.maxApplyLookups, s.resolveApplyUrl], [6, 10, false]);
+});
+
+test("updateSearchText: an entry written provider-first, with a comment inside, in a CRLF file", () => {
+  const src = 'tracked_companies:\r\n  - provider: linkedin-browser\r\n    # my favourite search\r\n    name: LinkedIn x\r\n    search_url: "https://www.linkedin.com/jobs/search/?keywords=x"\r\n    enabled: true\r\n';
+  const text = updateSearchText(src, "LinkedIn x", { enabled: false, maxPages: 2 });
+  assert.ok(text, "refused");
+  assert.ok(text.includes("\r\n") && !/[^\r]\n/.test(text), "line endings kept");
+  assert.match(text, /# my favourite search/);
+  assert.deepEqual(yaml.load(text).tracked_companies[0], { provider: "linkedin-browser", name: "LinkedIn x", search_url: "https://www.linkedin.com/jobs/search/?keywords=x", enabled: false, max_pages: 2 });
+});
+
+test("updateSearchText: a quoted value containing ' #' is replaced whole", () => {
+  const src = 'tracked_companies:\n  - name: "LI #1 EM"\n    provider: linkedin-browser\n    search_url: "https://www.linkedin.com/jobs/search/?keywords=x"  # pasted Monday\n';
+  const text = updateSearchText(src, "LI #1 EM", { name: "LI two", searchUrl: "https://www.linkedin.com/jobs/search/?keywords=y" });
+  assert.match(text, /- name: "LI two"\n/);
+  assert.match(text, /search_url: "https:\/\/www\.linkedin\.com\/jobs\/search\/\?keywords=y" {2}# pasted Monday/);
+});
+
+test("updateSearchText: removing a line keeps its trailing comment as a line of its own", () => {
+  const src = 'tracked_companies:\n  - name: L\n    provider: linkedin-browser\n    search_url: "https://www.linkedin.com/jobs/search/?keywords=x"\n    max_apply_lookups: 5  # keep low, account safety\n';
+  const text = updateSearchText(src, "L", { maxApplyLookups: null });
+  assert.equal("max_apply_lookups" in yaml.load(text).tracked_companies[0], false);
+  assert.match(text, /\n {4}# keep low, account safety/);
+});
+
+test("a tracked_companies that is a mapping is refused (409), not a crash", () => {
+  const src = "tracked_companies:\n  acme:\n    careers_url: https://x.example\n";
+  assert.equal(applySearchOp(src, { op: "add", search: { name: "L", searchUrl: DE_URL } }).status, 409);
+});
+
+test("applySearchOp: string-valued numbers round-trip through an edit as their real values", () => {
+  const src = 'tracked_companies:\n  - name: L\n    provider: linkedin-browser\n    search_url: "https://www.linkedin.com/jobs/search/?keywords=x"\n    max_pages: "6"\n';
+  const [s] = listLinkedInSearches(yaml.load(src));
+  const r = applySearchOp(src, { op: "update", name: "L", search: { name: "L2", searchUrl: s.searchUrl, maxPages: String(s.maxPages), maxApplyLookups: "", enabled: true } });
+  assert.equal(yaml.load(r.text).tracked_companies[0].max_pages, 6);
+});

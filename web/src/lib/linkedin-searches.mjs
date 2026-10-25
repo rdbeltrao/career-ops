@@ -22,8 +22,16 @@ const indentOf = (line) => line.length - line.trimStart().length;
 const isTopLevelKey = (line) => /^[^\s#-]/.test(line);
 
 /**
- * @typedef {{ name: string, searchUrl: string, maxPages: number|null, maxApplyLookups: number|null, enabled: boolean }} LinkedInSearch
+ * @typedef {{ name: string, searchUrl: string, maxPages: number|null, maxApplyLookups: number|null, enabled: boolean, resolveApplyUrl?: boolean }} LinkedInSearch
  */
+
+// The crawl reads these with Number() (providers.local/linkedin-browser.mjs
+// resolveMaxPages / resolveApplyLookups), so "6" counts as 6 there and here.
+function crawlInt(v, min) {
+  if (v === undefined || v === null || v === "") return null;
+  const n = Number(v);
+  return Number.isInteger(n) && n >= min ? n : null;
+}
 
 /** @returns {LinkedInSearch[]} */
 export function listLinkedInSearches(doc) {
@@ -33,9 +41,10 @@ export function listLinkedInSearches(doc) {
     .map((c) => ({
       name: c.name.trim(),
       searchUrl: typeof c.search_url === "string" ? c.search_url : "",
-      maxPages: Number.isInteger(c.max_pages) ? c.max_pages : null,
-      maxApplyLookups: Number.isInteger(c.max_apply_lookups) ? c.max_apply_lookups : null,
+      maxPages: crawlInt(c.max_pages, 1),
+      maxApplyLookups: crawlInt(c.max_apply_lookups, 0),
       enabled: c.enabled !== false,
+      resolveApplyUrl: c.resolve_apply_url !== false,
     }));
 }
 
@@ -108,6 +117,22 @@ export function validateSearch(input, { existingNames = [], editing } = {}) {
 const FIELD = { name: "name", searchUrl: "search_url", maxPages: "max_pages", maxApplyLookups: "max_apply_lookups", enabled: "enabled" };
 const fmt = (v) => (typeof v === "string" ? JSON.stringify(v) : String(v));
 
+/**
+ * Split what follows "key:" into its value and a trailing comment. A quoted
+ * value is matched as a whole string, so a " #" inside the quotes is part of
+ * the value, not a comment.
+ * @returns {{ value: string, comment: string }}
+ */
+function splitValue(rest) {
+  const quoted = /^"(?:[^"\\]|\\.)*"|^'(?:[^']|'')*'/.exec(rest);
+  if (quoted) {
+    const tail = rest.slice(quoted[0].length);
+    return { value: quoted[0], comment: /^\s+#/.test(tail) ? tail : "" };
+  }
+  const hash = rest.search(/\s+#/);
+  return hash < 0 ? { value: rest, comment: "" } : { value: rest.slice(0, hash), comment: rest.slice(hash) };
+}
+
 /** The tracked_companies section and its entry blocks, or null for a shape this editor does not handle. */
 function sections(lines, doc) {
   const head = lines.findIndex((l) => /^tracked_companies:\s*(#.*)?$/.test(l));
@@ -128,7 +153,9 @@ function sections(lines, doc) {
     }
     blocks.push({ start: i, last });
   }
-  const list = Array.isArray(doc?.tracked_companies) ? doc.tracked_companies : [];
+  const raw = doc?.tracked_companies;
+  if (raw !== null && raw !== undefined && !Array.isArray(raw)) return null; // a mapping or a scalar: not a list of entries
+  const list = Array.isArray(raw) ? raw : [];
   if (blocks.length !== list.length) return null;
   return { head, end, entryIndent, fieldIndent: entryIndent + 2, blocks };
 }
@@ -225,7 +252,7 @@ export function updateSearchText(source, name, patch) {
   for (const [field, value] of Object.entries(patch)) {
     const key = FIELD[field];
     if (!key || value === undefined) continue;
-    const keyRe = new RegExp(`^(\\s*(?:- )?${key}:\\s*)(.*?)(\\s+#.*)?$`);
+    const leadRe = new RegExp(`^(\\s*(?:- )?${key}:\\s*)`);
     let lineAt = -1;
     for (let i = start; i <= last; i++) {
       if (isNote(lines[i])) continue;
@@ -240,14 +267,23 @@ export function updateSearchText(source, name, patch) {
       if (key === "name") return null;
       if (lineAt >= 0) {
         if (lineAt === start) return null;
-        lines.splice(lineAt, 1);
-        last -= 1;
+        const lead = leadRe.exec(lines[lineAt])?.[1] ?? "";
+        const { comment } = splitValue(lines[lineAt].slice(lead.length));
+        // A trailing comment outlives its line, as a comment line of its own.
+        if (comment.trim()) lines[lineAt] = `${pad}${comment.trim()}`;
+        else {
+          lines.splice(lineAt, 1);
+          last -= 1;
+        }
       }
       delete entry[key];
       continue;
     }
     if (lineAt >= 0) {
-      lines[lineAt] = lines[lineAt].replace(keyRe, (_m, lead, _old, comment = "") => `${lead}${fmt(value)}${comment}`);
+      const lead = leadRe.exec(lines[lineAt])?.[1];
+      if (lead === undefined) return null;
+      const { comment } = splitValue(lines[lineAt].slice(lead.length));
+      lines[lineAt] = `${lead}${fmt(value)}${comment}`;
     } else {
       lines.splice(last + 1, 0, `${pad}${key}: ${fmt(value)}`);
       last += 1;
