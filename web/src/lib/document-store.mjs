@@ -203,7 +203,7 @@ export function createDocumentStore(root) {
     const { filename, revision } = readDocument(root, id);
     return { id, filename, revision, versions: historyFiles(root, id, 'versions') };
   }
-  function replace(id, bytes, expected) {
+  function replaceDocument(id, bytes, expected) {
     const original = readDocument(root, id);
     assertRevision(expected, original.revision);
     assertPdf(bytes);
@@ -221,7 +221,7 @@ export function createDocumentStore(root) {
     metadata,
     read: (id) => readDocument(root, id),
     trash: () => listDocumentTrash(root),
-    save: (id, bytes, revision) => withDocumentLock(root, id, () => replace(id, bytes, revision)),
+    save: (id, bytes, revision) => withDocumentLock(root, id, () => replaceDocument(id, bytes, revision)),
     remove: (id, revision) => withDocumentLock(root, id, () => {
       const original = readDocument(root, id);
       assertRevision(revision, original.revision);
@@ -252,7 +252,7 @@ export function createDocumentStore(root) {
       const dir = historyDirectory(root, id, 'versions');
       if (!dir) throw new DocumentStoreError(404, 'Saved version not found.');
       const bytes = readRegular(path.join(dir, `${versionId}.pdf`), 'Saved version not found.');
-      return replace(id, bytes, revision);
+      return replaceDocument(id, bytes, revision);
     }),
   };
 }

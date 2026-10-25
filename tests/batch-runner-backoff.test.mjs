@@ -109,7 +109,7 @@ function runLoop({ invoke, dir }, { cap = 300, retries = 0, max = 2, log = '429'
     worker() {
       local retries=${retries} id=1 url=https://example.com started_at=start report_num=001 log_file=worker.log
       local -a claude_args=(-p) model_args=()
-      local full_prompt=fixture
+      local full_prompt=fixture full_prompt_file='' large_prompt=false
       ${loop}
       printf 'END:%s:%s:%s:%s\n' "$calls" "$retries" "$terminal_failure_recorded" "$exit_code"
     }
