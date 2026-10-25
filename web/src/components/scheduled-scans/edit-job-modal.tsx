@@ -2,9 +2,10 @@
 
 import { useEffect, useRef, useState } from "react";
 import { Edit3, Loader2, X } from "lucide-react";
-import type { ScheduledJob, ScanEngine } from "@/lib/scheduled-jobs";
+import type { ScheduledJob, ScanEngine, LinkedInSchedule } from "@/lib/scheduled-jobs";
 import { DEFAULT_FILTERS, type ExploreFilters } from "@/lib/explore";
 import { FilterBuilder } from "@/components/explore/filter-builder";
+import { LinkedInScheduleFields } from "./linkedin-schedule-fields";
 import { ScheduledOverlay } from "./scheduled-overlay";
 import { cadenceMinimum, cadenceValueForUnit, updateScheduledJobRequest } from "@/lib/scheduled-job-client.mjs";
 
@@ -24,6 +25,7 @@ export function EditJobModal({
   const [every, setEvery] = useState(6);
   const [unit, setUnit] = useState<"minutes" | "hours" | "days">("hours");
   const [filters, setFilters] = useState<ExploreFilters>({ ...DEFAULT_FILTERS, ats: [...DEFAULT_FILTERS.ats] });
+  const [linkedin, setLinkedIn] = useState<LinkedInSchedule>({ searches: [], useSearchWindow: true });
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
   const nameRef = useRef<HTMLInputElement>(null);
@@ -46,6 +48,7 @@ export function EditJobModal({
         alwaysAllow: job.filters?.alwaysAllow || [],
         ats: job.filters?.ats?.length ? [...job.filters.ats] : [...DEFAULT_FILTERS.ats],
       });
+      setLinkedIn(job.linkedin ? { searches: [...job.linkedin.searches], useSearchWindow: job.linkedin.useSearchWindow } : { searches: [], useSearchWindow: true });
     }
   }, [job]);
 
@@ -63,6 +66,7 @@ export function EditJobModal({
         every,
         unit,
         filters,
+        ...(engine === "linkedin" ? { linkedin } : {}),
       });
 
       onUpdated();
@@ -155,7 +159,11 @@ export function EditJobModal({
 
           {/* ─── Reuse FilterBuilder from Explore ─── */}
           <div className="rounded-xl border border-border bg-surface/30 p-4">
-            <FilterBuilder filters={filters} onChange={setFilters} />
+            {engine === "linkedin" ? (
+              <LinkedInScheduleFields filters={filters} onFiltersChange={setFilters} linkedin={linkedin} onLinkedInChange={setLinkedIn} />
+            ) : (
+              <FilterBuilder filters={filters} onChange={setFilters} />
+            )}
           </div>
 
           {/* ─── Actions ─── */}

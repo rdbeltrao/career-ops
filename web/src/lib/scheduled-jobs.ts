@@ -31,7 +31,11 @@ export type ScheduledJob = {
   lastRunAt?: string;
   lastError?: string;
   rolesFoundCount?: number;
+  /** LinkedIn engine only: which searches run (empty = every search that is on) and whether each keeps its own date window. */
+  linkedin?: LinkedInSchedule;
 };
+
+export type LinkedInSchedule = { searches: string[]; useSearchWindow: boolean };
 
 export type JobRun = {
   id: string;
@@ -47,7 +51,29 @@ export type JobRun = {
 
 type QueueItem = { id: string; jobId: string; queuedAt: string };
 type Store = { jobs: ScheduledJob[]; runs: JobRun[]; queue: QueueItem[] };
-type JobFields = Pick<ScheduledJob, "name" | "engine" | "filters" | "timezone" | "startAt" | "every" | "unit">;
+type JobFields = Pick<ScheduledJob, "name" | "engine" | "filters" | "timezone" | "startAt" | "every" | "unit" | "linkedin">;
+
+const MAX_LINKEDIN_SEARCHES = 50;
+
+/** The LinkedIn engine's options from a request, else the stored ones, else every search in its own window. */
+function parseLinkedInSchedule(raw: unknown, base?: LinkedInSchedule): LinkedInSchedule {
+  const fallback: LinkedInSchedule = base ? { searches: [...base.searches], useSearchWindow: base.useSearchWindow } : { searches: [], useSearchWindow: true };
+  if (raw === undefined) return fallback;
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new ScheduledJobValidationError("linkedin must be an object.");
+  const input = raw as Record<string, unknown>;
+  let searches = fallback.searches;
+  if (input.searches !== undefined) {
+    if (!Array.isArray(input.searches) || input.searches.length > MAX_LINKEDIN_SEARCHES) throw new ScheduledJobValidationError(`linkedin.searches must be a list of at most ${MAX_LINKEDIN_SEARCHES} search names.`);
+    const names: string[] = [];
+    for (const item of input.searches) {
+      if (typeof item !== "string" || !item.trim() || item.trim().length > 80 || /[\r\n]/.test(item)) throw new ScheduledJobValidationError("Each LinkedIn search name must be one line of 1 to 80 characters.");
+      if (!names.includes(item.trim())) names.push(item.trim());
+    }
+    searches = names;
+  }
+  if (input.useSearchWindow !== undefined && typeof input.useSearchWindow !== "boolean") throw new ScheduledJobValidationError("linkedin.useSearchWindow must be true or false.");
+  return { searches, useSearchWindow: input.useSearchWindow === undefined ? fallback.useSearchWindow : (input.useSearchWindow as boolean) };
+}
 
 export class ScheduledJobValidationError extends Error {
   constructor(message: string) {
@@ -111,7 +137,8 @@ export function parseScheduledJobInput(raw: unknown, base?: ScheduledJob): JobFi
     base?.filters || DEFAULT_FILTERS,
   );
 
-  return { name, engine, unit, every, timezone, startAt, filters };
+  const linkedin = engine === "linkedin" ? parseLinkedInSchedule(input.linkedin, base?.linkedin) : undefined;
+  return { name, engine, unit, every, timezone, startAt, filters, linkedin };
 }
 
 export function listScheduledJobs(): Pick<Store, "jobs" | "runs"> {
