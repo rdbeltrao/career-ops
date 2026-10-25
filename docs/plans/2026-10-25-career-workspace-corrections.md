@@ -16,7 +16,7 @@ Conservative rich-editor fallbacks opened ordinary documents as raw source.
   Switching views never rewrites the source or marks it dirty.
 - Support ordinary horizontal rules in Lexical using the same transformer for
   import, export and shortcuts. Preserve the semantic round-trip check.
-- Use a compact, expandable app rail on document routes, a wider document pane,
+- Keep the main app sidebar fully visible, use a wider document pane,
   and a drawer when both panes cannot fit. Hide redundant single-H1 wrappers in
   navigation only; cap indentation and expand only active ancestry by default.
 - Label app summaries, settings and CV drafts honestly. A local summary is not a
@@ -88,8 +88,47 @@ Conservative rich-editor fallbacks opened ordinary documents as raw source.
 
 ## Deliberate boundaries
 
-This is a local source library, not ongoing Notion synchronization. Local source
-edits do not automatically change facts used for matching or generated CVs.
-Toggles are expanded, columns stack in source order, and private attachments link
-to their original Notion page. Conversion notes remain available on each affected
-page, alongside the original-source link.
+This is an internal source library. Local source edits do not automatically
+change facts used for matching or generated CVs. Toggles are expanded and columns
+stack in source order. Private attachments unavailable locally retain their
+captions, without outbound Notion links. Conversion notes remain available on
+each affected page, and original snapshots are retained as private provenance.
+
+## Navigation simplification follow-up
+
+The user requested five further corrections after using the workspace:
+
+- The page drawer stays open when switching Source pages/App files or selecting
+  pages, including the current page. Only explicit close controls dismiss it.
+- The app has no outbound Notion navigation. Known imported page links resolve
+  internally; unmatched references keep their labels as text. Original snapshots
+  remain private provenance. Canonical app files are never rewritten on open.
+- Remove the duplicate child-page cards below the editor. The page sidebar owns
+  navigation, with breadcrumbs for ancestry.
+- Restore the full main app sidebar at desktop widths. Remove the compact rail
+  and manual expansion controls.
+- Remove the permanent "Reload from disk" control. A conflicting saved version
+  offers "Open saved version" only when needed, with explicit draft protection.
+
+Verification covers repeated drawer navigation, visible app labels, absence of
+duplicate cards/vendor links, internal-link resolution, safe pasted HTML, and
+conflict recovery. Existing imported page bodies receive a backed-up link-only
+migration that preserves their content and hierarchy.
+
+### Follow-up validation
+
+- The new navigation assertion failed against the previous build (`72 !== 240`)
+  before the layout change, then passed against the corrected production build.
+- Full web suite: 2,139 tests, 2,114 passed, 25 skipped, zero failures.
+  All eight browser scenarios passed: three workspace scenarios and five editor
+  scenarios, including pasted HTML and preserving unsupported source text.
+  The editor run also passed all 13 unit checks. Typecheck and production build
+  passed.
+- Live read-only verification confirms a 240-pixel main sidebar, no outbound
+  Notion anchors, no duplicate child-page lists and no reload control.
+- Applied the link-only migration to 39 of 65 imported page bodies and neutralized
+  conversion notes on eight pages. Created 40 backups and verified every changed
+  file after writing. Page titles, parents, order and original snapshots remain
+  unchanged. The six canonical career files were not touched.
+- Final spec and code review found no actionable issues. Existing root-suite
+  failures remain recorded in the original workspace plan; they were not changed.

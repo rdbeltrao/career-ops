@@ -39,7 +39,7 @@ test('source workspace preserves real page ancestry and separates application fi
   function navigation() { return page.getByRole('navigation', { name: 'Workspace pages' }); }
   async function select(title) {
     await navigation().getByRole('button', { name: title, exact: true }).click();
-    await page.getByRole('heading', { name: title, exact: true, level: 1 }).waitFor();
+    await page.waitForFunction((title) => document.querySelector('section[aria-label="Page editor"] h1')?.textContent === title, title);
   }
   async function saved() {
     await page.getByRole('status', { name: 'Page save status' }).filter({ hasText: /Saved\.|Page (created|renamed|moved)\./ }).waitFor();
@@ -56,11 +56,15 @@ test('source workspace preserves real page ancestry and separates application fi
     assert.equal(await navigation().getByRole('button', { name: 'CV draft', exact: true }).count(), 0);
     assert.equal(await navigation().getByRole('button', { name: 'Career context', exact: true }).count(), 0, 'landing headings never become pages');
     assert.ok((await page.locator('#workspace-sidebar').boundingBox()).width >= 300, 'source navigation has room');
+    assert.equal((await page.getByRole('complementary', { name: 'App sidebar' }).boundingBox()).width, 240, 'main navigation remains fully visible');
+    assert.equal(await page.getByRole('button', { name: /Expand app navigation|Collapse app navigation|Reload from disk/ }).count(), 0);
+    assert.equal(await page.getByRole('heading', { name: /Child pages|Pages in this section/i }).count(), 0, 'no duplicate page navigation below the editor');
     await select('Career History');
     await select('Example Labs');
     const breadcrumbs = page.getByRole('navigation', { name: 'Page breadcrumbs' });
     assert.match(await breadcrumbs.innerText(), /Example job applications[\s\S]*Career History[\s\S]*Example Labs/);
-    await page.getByRole('link', { name: 'Open in Notion', exact: true }).waitFor();
+    assert.equal(await page.getByRole('link', { name: 'Open in Notion', exact: true }).count(), 0);
+    assert.equal(await page.locator('a[href*="notion.so"], a[href*="notion.com"], a[href*="notion.site"]').count(), 0);
     const editor = page.getByRole('textbox', { name: 'Page content', exact: true });
     await editor.fill('Fictional employer record. Edited locally.');
     await page.getByRole('button', { name: 'Save', exact: true }).click();
@@ -100,14 +104,28 @@ test('source workspace preserves real page ancestry and separates application fi
     await page.goto(`${origin}/context`);
     await page.setViewportSize({ width: 1024, height: 900 });
     await page.getByRole('button', { name: 'Show pages', exact: true }).click();
-    await page.getByRole('dialog', { name: 'Workspace page navigation' }).waitFor();
+    const drawer = page.getByRole('dialog', { name: 'Workspace page navigation' });
+    await drawer.waitFor();
+    await drawer.getByRole('button', { name: 'App files', exact: true }).click();
+    await drawer.getByRole('button', { name: 'App files', exact: true }).filter({ hasText: 'App files' }).waitFor();
+    await page.waitForFunction(() => document.querySelector('section[aria-label="Page editor"] h1')?.textContent === 'Application profile');
+    assert.equal(await drawer.isVisible(), true, 'switching to App files keeps navigation open');
+    await drawer.getByRole('button', { name: 'Source pages', exact: true }).click();
+    await page.waitForFunction(() => document.querySelector('section[aria-label="Page editor"] h1')?.textContent === 'Example job applications');
+    assert.equal(await drawer.isVisible(), true, 'switching to Source pages keeps navigation open');
     await select('Career History');
+    assert.equal(await drawer.isVisible(), true, 'selecting a page keeps navigation open');
+    await select('Career History');
+    assert.equal(await drawer.isVisible(), true, 'selecting the active page keeps navigation open');
+    await drawer.getByRole('button', { name: 'Hide pages', exact: true }).click();
     assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1));
     await shot('source-workspace-narrow');
     await page.setViewportSize({ width: 390, height: 844 });
     await page.getByRole('button', { name: 'Show pages', exact: true }).click();
     await page.getByRole('textbox', { name: 'Search pages', exact: true }).fill('Example Labs');
     await select('Example Labs');
+    assert.equal(await drawer.isVisible(), true, 'mobile page navigation stays open');
+    await drawer.getByRole('button', { name: 'Hide pages', exact: true }).click();
     assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1));
     await shot('source-workspace-mobile');
     assert.deepEqual(errors, []);
