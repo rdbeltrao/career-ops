@@ -11,6 +11,7 @@ export type ApplyField = {
   combobox?: boolean; // react-select-style widget → fill via click+type+Enter, not selectOption
   nativeId?: string; // the live element's id/name — used to match ATS API schemas (Greenhouse)
   nativeName?: string;
+  password?: boolean; // an <input type="password">, mapped to type "text"; never saved
 };
 
 export type ExtractedForm = { title: string; url: string; fields: ApplyField[] };
@@ -179,9 +180,10 @@ export async function extractForm(ctx: Page | Frame): Promise<ExtractedForm> {
         label: clean(labelFor(el)),
         required,
         maxLength: ml && ml > 0 ? ml : undefined,
-        value: (el as HTMLInputElement).value || undefined,
+        value: itype === "password" ? undefined : (el as HTMLInputElement).value || undefined,
         nativeId,
         nativeName,
+        password: itype === "password" || undefined,
       });
     }
     return { title: document.title, fields };

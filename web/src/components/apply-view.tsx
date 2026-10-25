@@ -174,6 +174,8 @@ export function ApplyView() {
                   field={f}
                   value={a.answers[f.id] ?? ""}
                   needs={!!a.meta[f.id]?.needsConfirmation}
+                  suggestion={a.meta[f.id]?.suggestion}
+                  suggestionFrom={a.meta[f.id]?.suggestionFrom}
                   index={i}
                   drafting={prefilling}
                   onChange={(v) => a.setAnswer(f.id, v)}
@@ -289,6 +291,9 @@ function ApplyExitBar() {
   async function markApplied() {
     setMarking(true);
     setError("");
+    // Record what was submitted before the row changes. A failed save shows on
+    // the page as its own warning and does not hold the status update back.
+    if (a.fields.length) await a.saveAnswers("submitted");
     try {
       const res = await fetch("/api/status", {
         method: "POST",
@@ -537,6 +542,8 @@ function FieldRow({
   index,
   drafting,
   onChange,
+  suggestion,
+  suggestionFrom,
 }: {
   field: ApplyField;
   value: string;
@@ -544,6 +551,9 @@ function FieldRow({
   index: number;
   drafting: boolean;
   onChange: (v: string) => void;
+  /** A saved answer from an earlier application, offered and never pre-set: clicking it is the confirmation. */
+  suggestion?: string;
+  suggestionFrom?: string;
 }) {
   const controlId = useId();
   const confirmationId = `${controlId}-confirmation`;
@@ -617,6 +627,19 @@ function FieldRow({
         )
       ) : (
         <input {...controlProps} type={["email", "tel", "url", "number", "date"].includes(f.type) ? f.type : "text"} maxLength={f.maxLength} value={value} onChange={(e) => onChange(e.target.value)} placeholder={needs ? "You fill this one." : "…"} className={base} />
+      )}
+      {suggestion && value !== suggestion && !drafting && (
+        <button
+          type="button"
+          onClick={() => onChange(suggestion)}
+          className="mt-1.5 inline-flex max-w-full items-center gap-1.5 rounded-md border border-amber-500/40 bg-amber-500/10 px-2 py-1 text-left text-xs text-amber-800 transition-colors hover:bg-amber-500/20 dark:text-amber-300"
+          title="Your answer on an earlier application. Use it only if it is still true for this employer."
+        >
+          <RotateCcw className="size-3 shrink-0" />
+          <span className="truncate">
+            Use your earlier answer{suggestionFrom ? ` (${suggestionFrom})` : ""}: “{suggestion}”
+          </span>
+        </button>
       )}
     </div>
   );
