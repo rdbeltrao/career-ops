@@ -32,3 +32,11 @@ Each inline input immediately emits a draft with original paragraph identity, te
 6. Real browser acceptance on fictional data: click/type directly on the PDF, retain spaces and styling, drag a section with its divider across pages, inspect saved PDF and untouched content, undo/redo, reject/accept AI previews, recover an uncommitted inline draft after navigation, save/version restore/Trash regression. Inspect desktop/mobile screenshots. Run web suite, typecheck, build, and independent review; fix findings before completion.
 
 Supporting `superpowers` skills are unavailable; the explicitly invoked autonomous-implementation workflow is followed directly with bounded subagents, red/green tests, saved design, independent review, and commits. This work starts from `origin/main` on `renato/cv-direct-editing` and preserves other checkouts.
+
+## Verification and limits
+
+The complete app browser scenario passes against a temporary fictional CV: direct typing, exact italic paragraph spacing, navigation recovery, an intentional failed save followed by keyboard Save, real pointer dragging of Education from page 2 before Work Experience, saved-PDF extraction and grouped undo/redo, section AI preview/reject/accept, version restore, and Trash/restore. Desktop and 390-pixel mobile screenshots were inspected after the PDF fit operation settled. No real candidate PDF was changed. The browser AI response is controlled; provider invocation and factual safeguards are covered by server tests rather than a paid live provider call.
+
+Native engine/browser tests additionally cover a seven-page document (forcing page-cache eviction), moved divider pixels, failed batch rollback, first-click caret placement, Enter-only recovery, style-only edits, and preview isolation/cleanup. Independent review approved after all reported findings were fixed. The web test suite, TypeScript check, and production build pass.
+
+The visual editor edits existing PDF pages. Whole-section movement includes recognized headings, body text, and contained decorations; it refuses ambiguous columns, shared/cropped objects, annotations, and moves that cannot fit existing pages. Paragraph growth is blocked when it would overlap another paragraph or leave the page. Automatic pagination and CV source editing remain in Classic.

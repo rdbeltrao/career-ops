@@ -3,7 +3,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { isEditorMessage } from "@/lib/document-editing.mjs";
 
-export type EditorEvent = { type: string; requestId?: string; paragraphId?: string; text?: string; pageIndex?: number; bytes?: ArrayBuffer; message?: string; warnings?: string[]; canUndo?: boolean; canRedo?: boolean };
+export type InlineState = { runs: Record<string, unknown>[]; format?: Record<string, unknown> };
+export type PdfTarget = { paragraphId: string; text: string; pageIndex: number };
+export type EditorEvent = { type: string; modified?: boolean; requestId?: string; paragraphId?: string; text?: string; original?: string; pageIndex?: number; bytes?: ArrayBuffer; message?: string; warnings?: string[]; canUndo?: boolean; canRedo?: boolean; inlineState?: InlineState; sectionId?: string; title?: string; targets?: PdfTarget[] };
 type Pending = { resolve: (event: EditorEvent) => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout> };
 
 export function usePdfEditor(id: string, onEvent: (event: EditorEvent) => void) {

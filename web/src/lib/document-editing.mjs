@@ -30,7 +30,7 @@ export function isEditorMessage(event, expected) {
   if (d.channel !== 'career-ops-pdf-editor' || d.session !== expected.session) return false;
   if (d.type === 'selection') return typeof d.paragraphId === 'string' && typeof d.text === 'string' && Number.isInteger(d.pageIndex) && d.pageIndex >= 0;
   if (d.type === 'draft') {
-    if (!/^\d+:\d+$/.test(d.paragraphId) || typeof d.original !== 'string' || d.original.length > 12000 ||
+    if ((d.modified !== undefined && typeof d.modified !== 'boolean') || !/^\d+:\d+$/.test(d.paragraphId) || typeof d.original !== 'string' || d.original.length > 12000 ||
       typeof d.text !== 'string' || d.text.length > 12000 || !Number.isInteger(d.pageIndex) || d.pageIndex < 0 || d.pageIndex >= 20) return false;
     try { copyInlineState(d.inlineState); return true; } catch { return false; }
   }
@@ -38,7 +38,7 @@ export function isEditorMessage(event, expected) {
     typeof d.title === 'string' && d.title.length <= 200 && validPdfTargets(d.targets);
   if (d.type === 'exported') return d.bytes instanceof ArrayBuffer;
   if (d.type === 'error') return typeof d.message === 'string';
-  return ['ready','loaded','changed','selected','previewed'].includes(d.type);
+  return ['ready','loaded','changed','selected','previewed','save-request','section-selected','page-changed'].includes(d.type);
 }
 
 /** @param {{paragraphId:string,original:string}} proposal

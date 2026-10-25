@@ -46,6 +46,8 @@ test('inline drafts and section selections have bounded identities and content',
   const valid = data => isEditorMessage({source,origin:context.origin,data:{channel:'career-ops-pdf-editor',session:'s',...data}},context);
   const draft = {type:'draft',paragraphId:'0:2',pageIndex:0,original:'Original words',text:'Revised words',inlineState:{runs:[{text:'Revised words',italic:true,size:10.5}],format:{align:0}}};
   assert.equal(valid(draft),true);
+  assert.equal(valid({...draft,modified:false}),true);
+  assert.equal(valid({...draft,modified:'no'}),false);
   assert.equal(valid({...draft,original:42}),false);
   assert.equal(valid({...draft,paragraphId:'arbitrary'}),false);
   assert.equal(valid({...draft,inlineState:{runs:[{text:42}]}}),false);
@@ -55,4 +57,7 @@ test('inline drafts and section selections have bounded identities and content',
   assert.equal(valid({...section,targets:[]}),false);
   assert.equal(valid({...section,targets:[{paragraphId:'1:0',text:'a'.repeat(24001),pageIndex:1}]}),false);
   assert.equal(valid({type:'previewed'}),true);
+  assert.equal(valid({type:'save-request'}),true);
+  assert.equal(valid({type:'section-selected'}),true);
+  assert.equal(valid({type:'page-changed'}),true);
 });

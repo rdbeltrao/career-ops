@@ -10,9 +10,10 @@ const html = `<!doctype html><html><head><meta charset="utf-8"><style>
 @page {size:letter; margin:40pt} body{font:12pt Arial;color:#172434} h1{font-size:26pt;margin-bottom:8pt}
 .section{margin-top:24pt}.section-title{font-size:15pt;font-weight:bold;border-bottom:1px solid #aab9c8;padding-bottom:5pt;margin-bottom:12pt}
 .job-header{font-weight:bold} li{margin-top:14pt} p{margin-top:14pt} .next-page{break-before:page}
+.role-summary{font:italic 10.5px "Helvetica Neue",Arial;line-height:1.55;text-align:justify;width:500px}
 </style></head><body><h1>Fictional Candidate</h1><p>Fictional test CV — no personal data</p>
 <div class="section"><div class="section-title">Professional Summary</div><p>Engineering leader building reliable products.</p></div>
-<div class="section"><div class="section-title">Work Experience</div><div class="job"><div class="job-header"><span class="job-company">Fixture Alpha</span></div><ul><li>Built reliable services with the product team.</li><li>Improved delivery practices across engineering.</li></ul></div></div>
+<div class="section"><div class="section-title">Work Experience</div><div class="job"><div class="job-header"><span class="job-company">Fixture Alpha</span></div><p class="role-summary">Lead engineering across web and mobile products, working with <b>design teams</b> to improve delivery and build reliable services.</p><ul><li>Built reliable services with the product team.</li><li>Improved delivery practices across engineering.</li></ul></div></div>
 <div class="section next-page"><div class="section-title">Education</div><p>Fictional education entry for a browser test.</p></div></body></html>`;
 fs.writeFileSync(path.join(root, 'output/cv-fixture-alpha.html'), html);
 fs.writeFileSync(path.join(root, 'cv.md'), '# Fictional Candidate\n\n## Summary\nEngineering leader building reliable products.\n\n## Experience\n### Fixture Alpha\n- Built reliable services with the product team.\n- Improved delivery practices across engineering.\n');
