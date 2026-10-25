@@ -28,6 +28,31 @@ test('maps imported pages and preserves human labels, formatting and surrounding
   assert.equal(normalizeWorkspaceLinks(source, known), `Before.\r\n\r\n[**Career** notes](${internal} "Source title") and [Research](https://example.com/a "Keep title").\r\nAfter.\r\n`);
 });
 
+test('raw URL labels for the same imported page display its title without changing custom labels', () => {
+  const alias = `https://www.notion.so/Career-${ID}?source=copy_link`;
+  const source = `Before.\r\n[${url}](${url}) and [${alias}](${url} "Original").\r\n[Career proof](${url}) and [See ${url}](${url}) and [**${url}**](${url}).\r\n[${unknown}](${url})\r\n`;
+  const result = normalizeWorkspaceLinks(source, known);
+  assert.equal(result, `Before.\r\n[Career notes](${internal}) and [Career notes](${internal} "Original").\r\n[Career proof](${internal}) and [See ${url}](${internal}) and [**${url}**](${internal}).\r\n[${unknown}](${internal})\r\n`);
+  assert.ok(source.includes(`[${url}](${url})`), 'the pure display transform does not mutate the source');
+  assert.equal(normalizeWorkspaceLinks(result, known), result);
+});
+
+test('raw URL reference labels use escaped imported titles and retain reference titles', () => {
+  const source = `[${url}][career]\n\n[career]: ${url} "Original"\n`;
+  assert.equal(normalizeWorkspaceLinks(source, [{ id: ID, title: 'Career [facts] *confirmed*' }]), `[Career \\[facts\\] \\*confirmed\\*](${internal} "Original")\n\n\n`);
+  assert.equal(normalizeWorkspaceLinks(`[${url}](${url})`, [{ id: ID }]), `[${url}](${internal})`, 'a missing imported title preserves the URL label');
+});
+
+test('already-internal links replace only matching raw URL labels from known pages', () => {
+  const source = `[${url}](${internal} "Keep title")\r\n[Career proof](${internal})\r\n[${unknown}](${internal})\r\n[${url}](https://example.com${internal})\r\n`;
+  assert.equal(normalizeWorkspaceLinks(source, known), `[Career notes](${internal} "Keep title")\r\n[Career proof](${internal})\r\n[${unknown}](${internal})\r\n[${url}](https://example.com${internal})\r\n`);
+  assert.equal(normalizeWorkspaceLinks(`[${url}](${internal})`, []), `[${url}](${internal})`, 'unknown local IDs retain their label');
+  const reference = `[${url}][local]\n\n[local]: ${internal} "Reference title"\n`;
+  assert.equal(normalizeWorkspaceLinks(reference, known), `[Career notes](${internal} "Reference title")\n\n[local]: ${internal} "Reference title"\n`);
+  const result = normalizeWorkspaceLinks(source, known);
+  assert.equal(normalizeWorkspaceLinks(result, known), result);
+});
+
 test('unknown references become plain labels, while image links become page links or captions', () => {
   const result = normalizeWorkspaceLinks(`[Unknown **reference**](${unknown})\n![Career picture](${url})\n![Unavailable picture](${unknown})`, known);
   assert.equal(result, `Unknown **reference**\n[Career picture](${internal})\nUnavailable picture`);

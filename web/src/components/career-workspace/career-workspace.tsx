@@ -412,7 +412,7 @@ export function CareerWorkspace({ initialDocument = "context" }: { initialDocume
 
           {current && <div className={cn("min-w-0 rounded-2xl border border-border bg-surface", loading && "opacity-60")}>
             {!current.exists && <p className="border-b border-border px-5 py-3 text-sm text-muted">This document is empty. Start writing or add your first page.</p>}
-            <MarkdownEditor value={draft} onChange={(value) => { if (!busy && !form && !recovered) { setDraft(value); setNotice(""); } }} documentKey={`${current.id}:${sectionId || "root"}:${editorVersion}`} disabled={busy || Boolean(form) || Boolean(recovered)} />
+            <MarkdownEditor value={draft} linkPages={documents} onChange={(value) => { if (!busy && !form && !recovered) { setDraft(value); setNotice(""); } }} documentKey={`${current.id}:${sectionId || "root"}:${editorVersion}`} disabled={busy || Boolean(form) || Boolean(recovered)} />
           </div>}
 
           {current?.id === "cv" && <SkillGaps />}

@@ -128,6 +128,7 @@ test('Context has one real page hierarchy with CV as a separate output', { skip:
     await page.getByRole('navigation', { name: 'App navigation' }).getByRole('link', { name: 'CV draft', exact: true }).click();
     await page.waitForURL(`${origin}/cv`);
     await page.getByRole('heading', { name: 'CV draft', exact: true, level: 1 }).waitFor();
+    await page.getByRole('status', { name: 'Page save status' }).filter({ hasText: 'All changes saved' }).waitFor();
     assert.equal(await navigation().getByRole('button', { name: 'Example job applications', exact: true }).count(), 0, 'CV has only its own outline');
     assert.equal(await navigation().getByRole('button', { name: 'Application profile', exact: true }).count(), 0);
     assert.equal(await page.getByRole('button', { name: /^(Source pages|App files|New page|New child page)$/ }).count(), 0);
@@ -201,5 +202,51 @@ test('an unreadable Context hierarchy never silently exposes legacy files', { sk
     assert.equal(await page.getByRole('button', { name: 'Application profile', exact: true }).count(), 0);
     assert.equal(await page.getByRole('button', { name: /^(Source pages|App files)$/ }).count(), 0);
     assert.deepEqual(requestedDocuments, [], 'no hidden fallback document is loaded after a hierarchy error');
+  } finally { await browser.close(); }
+});
+
+test('already-internal Context links display page titles instead of raw source URLs', { skip: !target, timeout: 60_000 }, async () => {
+  const url = new URL(target);
+  assert.ok(['localhost', '127.0.0.1', '[::1]'].includes(url.hostname));
+  const catalog = await fetch(`${url.origin}/api/workspace`).then((response) => response.json());
+  assert.equal(catalog.documents.find((document) => document.id === employerId)?.title, 'Example Labs', 'use the fictional page library only');
+  const rawUrl = `https://app.notion.com/p/${'3'.repeat(32)}`;
+  const destination = `/context?document=${employerId}`;
+  const rawContent = `[${rawUrl}](${destination})\n\n[Read this career note](${destination})\n`;
+  let formatted = false;
+  const { chromium } = await import('playwright-core');
+  const browser = await chromium.launch({ channel: 'chrome', headless: true });
+  const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+  let writes = 0;
+  page.on('request', (request) => { if (request.method() === 'POST' && new URL(request.url()).pathname === '/api/workspace') writes++; });
+  try {
+    await page.route(`**/api/workspace?document=${historyId}`, async (route) => {
+      const response = await route.fetch();
+      const document = await response.json();
+      await route.fulfill({ json: { ...document, content: formatted ? `| Page |\n| --- |\n| [${rawUrl}](${destination}) |\n` : rawContent } });
+    });
+    await page.goto(`${url.origin}/context?document=${historyId}`);
+    await page.getByRole('status', { name: 'Page save status' }).filter({ hasText: 'All changes saved' }).waitFor();
+    const editor = page.getByRole('region', { name: 'Page editor' });
+    await editor.getByRole('link', { name: 'Example Labs', exact: true }).waitFor();
+    assert.equal(await editor.getByRole('link', { name: 'Example Labs', exact: true }).getAttribute('href'), destination);
+    assert.equal(await editor.getByRole('link', { name: 'Read this career note', exact: true }).getAttribute('href'), destination);
+    assert.doesNotMatch(await editor.innerText(), /https:\/\/app\.notion\.com/);
+    await page.getByRole('button', { name: 'Source', exact: true }).click();
+    assert.equal(await page.getByRole('textbox', { name: 'Markdown source', exact: true }).inputValue(), rawContent, 'display labels do not change the exact Source draft');
+    await page.getByRole('button', { name: 'Rich text', exact: true }).click();
+    const editable = page.getByRole('textbox', { name: 'Page content', exact: true });
+    await editable.click();
+    await editable.press('ControlOrMeta+End');
+    await editable.pressSequentially(' x');
+    await page.getByRole('status', { name: 'Page save status' }).filter({ hasText: 'Unsaved changes' }).waitFor();
+    await page.getByRole('button', { name: 'Undo', exact: true }).click();
+    await page.getByRole('status', { name: 'Page save status' }).filter({ hasText: 'All changes saved' }).waitFor();
+    await page.getByRole('button', { name: 'Source', exact: true }).click();
+    assert.equal(await page.getByRole('textbox', { name: 'Markdown source', exact: true }).inputValue(), rawContent, 'undo restores exact source rather than normalized display labels');
+    formatted = true;
+    await page.reload();
+    await page.getByRole('article', { name: 'Formatted page' }).getByRole('link', { name: 'Example Labs', exact: true }).waitFor();
+    assert.equal(writes, 0, 'display normalization never saves canonical content');
   } finally { await browser.close(); }
 });

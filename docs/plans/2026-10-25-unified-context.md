@@ -78,3 +78,16 @@ this change.
   - `hand-rolled recursive directory walkers found.` The reported function is
     `web/src/lib/document-store.mjs: historyFiles()`.
   Full run log: `/tmp/unified-context-root-tests.log`.
+- Final integration retained the newer ATS/API and saved-scan job-description
+  prefetch behavior. A combined Context/prefetch regression and the related
+  suites passed all 72 tests. The full web suite after integration passed 2,180
+  of 2,208 tests, with 28 skips and no failures. Production build and typecheck
+  passed. No paid model runs were made.
+- Final review covered fresh evidence, uncertainty boundaries, stale allowlists,
+  complete large-input transport and broken-library rejection. No actionable
+  findings remained after the fixes and targeted regression checks.
+- Final production-browser run passed all five scenarios, covering the unified
+  hierarchy, draft recovery/conflicts, purpose changes, mobile navigation,
+  invalid libraries and local link titles. Rich/source switching and edit/undo
+  preserve original source bytes without an automatic save. At 1280 px both
+  move buttons remain together and the page has no horizontal overflow.
