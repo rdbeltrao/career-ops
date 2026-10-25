@@ -20,12 +20,18 @@ import { getCareerOpsRoot } from './path-resolver.mjs';
 // Two roots, because this gate compares user-layer files against a user-layer
 // config and previously resolved neither from the user's data root.
 //
-// cv.md and article-digest.md are the Source-of-Truth Boundary's primary files.
-// As bare relative strings they resolved against process.cwd(), so from any
-// directory that is not the data root the gate read NO sources — and a fact
-// check with no sources does not fail open quietly, it fails LOUD and WRONG:
-// every quantified claim in the generated CV is reported as "absent from
-// sources", including claims copied verbatim out of the user's own cv.md.
+// modes/_context.md, cv.md and article-digest.md are the Source-of-Truth
+// Boundary's primary files: the context file is the record of what the
+// candidate has done and every fact and figure in it is evidence, cv.md is a
+// tailored rendering of it, and article-digest.md holds the proof points. As
+// bare relative strings the sources once resolved against process.cwd(), so
+// from any directory that is not the data root the gate read NO sources — and
+// a fact check with no sources does not fail open quietly, it fails LOUD and
+// WRONG: every quantified claim in the generated CV is reported as "absent
+// from sources", including claims copied verbatim out of the user's own cv.md.
+// A default source that does not exist reads as empty (readIfExists), so a
+// data root without a context file or a digest is checked against the files it
+// has.
 //
 // config/cv-facts.json is user-layer too (it holds the user's forbidden and
 // advisory phrases). Resolved from the CODE root it was simply absent for any
@@ -37,7 +43,7 @@ import { getCareerOpsRoot } from './path-resolver.mjs';
 // So one invocation both invented failures and silently skipped half its
 // checks. --source and --config still override; only the defaults move.
 const DATA_ROOT = getCareerOpsRoot();
-const DEFAULT_SOURCES = [join(DATA_ROOT, 'cv.md'), join(DATA_ROOT, 'article-digest.md')];
+const DEFAULT_SOURCES = [join(DATA_ROOT, 'modes', '_context.md'), join(DATA_ROOT, 'cv.md'), join(DATA_ROOT, 'article-digest.md')];
 const DEFAULT_CONFIG = join(DATA_ROOT, 'config', 'cv-facts.json');
 const TOOL_PROSE_WORDS = new Set([
   'a', 'an', 'and', 'at', 'built', 'by', 'containerized', 'deployment',
@@ -2274,7 +2280,7 @@ function usage() {
 Checks generated candidate-facing text for unsupported metrics and explicitly asserted
 non-metric facts (employers, titles, tools, delegated-work authorship, scope-verb
 inflation, and unsourced adoption claims) absent from source files.
-Default sources: cv.md and article-digest.md.
+Default sources: modes/_context.md, cv.md and article-digest.md.
 A cover letter also reads the answers supplied for that letter, which support
 only a number the letter states as a plan. The rendered letter is not a source.
 Default config:  config/cv-facts.json (optional)`;

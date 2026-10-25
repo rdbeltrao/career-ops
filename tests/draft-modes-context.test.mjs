@@ -43,7 +43,10 @@ test('_writing.md carries the interests rule with the staleness gate', () => {
   for (const token of ['modes/_context.md', 'config/profile.yml', 'interests', 'confirmed_on', 'render-context.mjs', '90 days']) {
     assert.ok(section.includes(token), `interests rule does not mention "${token}"`);
   }
-  assert.match(section, /never evidence|not evidence|targeting/i, 'the context file must be named as targeting, never evidence');
+  assert.match(section, /the source of truth about the candidate/, 'the context file must be named as the source of truth about the candidate');
+  assert.match(section, /preference, deal-breaker and match-signal sections are \*\*targeting only\*\*/, 'the preference sections must stay targeting only');
+  assert.match(section, /held for confirmation, approximate, conflicting or "not a claim"/, 'a figure the context flags must stay out of candidate-facing text');
+  assert.ok(!/never supplies a fact, a number or a claim/.test(section), 'the drafts may take facts from the context file now');
 });
 
 test('templates/outreach.md has the four message structures', () => {

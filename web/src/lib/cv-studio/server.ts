@@ -147,11 +147,11 @@ type VerifyCvFacts = {
   auditClaims: (text: string, sourceText: string) => Parameters<typeof unsupportedClaims>[1];
 };
 
-/** The claims in a rewrite that cv.md and article-digest.md do not support, and the metrics its own bullet does not carry. */
+/** The claims in a rewrite that modes/_context.md, cv.md and article-digest.md do not support, and the metrics its own bullet does not carry. */
 export async function unsupportedRewriteClaims(text: string, bulletText: string): Promise<string[]> {
   const root = careerOpsRoot();
   const { verifyFacts, auditClaims } = await coreModule<VerifyCvFacts>("verify-cv-facts");
-  const cv = verifyFacts(text, { sourcePaths: [path.join(root, "cv.md"), path.join(root, "article-digest.md")], configPath: path.join(root, "config", "cv-facts.json") });
+  const cv = verifyFacts(text, { sourcePaths: [path.join(root, "modes", "_context.md"), path.join(root, "cv.md"), path.join(root, "article-digest.md")], configPath: path.join(root, "config", "cv-facts.json") });
   return unsupportedClaims(cv, auditClaims(text, bulletText));
 }
 

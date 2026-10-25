@@ -318,7 +318,11 @@ export async function runLatexFactGate(content, { root = getCareerOpsRoot(), ext
   const extraPaths = extraSources.map(p => resolve(p));
   const missing = extraPaths.filter(p => !existsSync(p));
   if (missing.length) return { verdict: 'block', reason: `--source file not found: ${missing.join(', ')}` };
-  const sourcePaths = [cvPath, join(root, 'article-digest.md'), ...extraPaths];
+  // modes/_context.md is the source of truth about the candidate and cv.md a
+  // tailored rendering of it, so the context is evidence here too. A missing
+  // default source reads as empty inside verifyFacts; only an explicit
+  // --source has to exist.
+  const sourcePaths = [join(root, 'modes', '_context.md'), cvPath, join(root, 'article-digest.md'), ...extraPaths];
   try {
     const result = assertFacts(content, { sourcePaths, configPath: join(root, 'config', 'cv-facts.json'), label });
     return { verdict: result.verdict, result };

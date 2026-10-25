@@ -33,9 +33,9 @@
  *                               instead of an empty, all-reasoning answer.
  *
  * Context: cv.md, config/profile.yml, modes/_profile.md and, when present,
- * modes/_context.md (the fit profile — the context tier: qualitative facts are
- * evidence for the evaluation, numbers are targeting only, never a source for
- * candidate-facing text). The Jev
+ * modes/_context.md (the source of truth about the candidate: every fact and
+ * figure in it is evidence, cited as _context.md:; cv.md is a tailored
+ * rendering of it). The Jev
  * pre-screen (`node jev-score.mjs`) runs before each evaluation when that script
  * is installed and a key is available; otherwise the evaluation runs as before.
  */
@@ -555,12 +555,13 @@ export { callOpenRouter, rateLimitCounts, blacklistedModels };
 // Context loading
 // ---------------------------------------------------------------------------
 function loadContext() {
-  // modes/_context.md is the candidate's fit profile, the context tier of the
-  // Source-of-Truth Boundary (AGENTS.md): qualitative facts are evidence for
-  // the evaluation, numbers are targeting only, never a source for
-  // candidate-facing text. Its numbers are masked before the model sees them
-  // (lib/context-evidence.mjs). Optional: an install without it evaluates on
-  // cv.md and profile.yml exactly as before, with one line saying so.
+  // modes/_context.md is the source of truth about the candidate under the
+  // Source-of-Truth Boundary (AGENTS.md): every fact and figure in it is
+  // evidence, cited as _context.md:, and cv.md is a tailored rendering of it.
+  // readMaskedContext returns the file as written (masked: false) unless the
+  // user opts into masking with CAREER_OPS_MASK_CONTEXT=1 (lib/context-evidence.mjs).
+  // Optional: an install without it evaluates on cv.md and profile.yml exactly
+  // as before, with one line saying so.
   const context = readMaskedContext(DATA_ROOT)?.text ?? null;
   if (context === null) console.log('ℹ️  modes/_context.md not found — evaluating on cv.md and profile.yml only');
   return {
@@ -578,7 +579,7 @@ export function buildSystemPrompt(modeContent, ctx) {
   // prompt is byte-identical to the one built before the block existed, so
   // prompt caching and the recorded prompts of older runs are undisturbed.
   const contextBlock = ctx.context
-    ? ['---', 'CANDIDATE CONTEXT (context tier: qualitative facts are evidence for the evaluation, cite them as _context.md:; its numbers are masked as [n], so every figure you see came from cv.md or article-digest.md and a [n] is never written as a figure; never a source for the CV, a letter or a form answer):', ctx.context]
+    ? ['---', 'CANDIDATE CONTEXT (modes/_context.md — the source of truth about the candidate, read first: every fact and figure in it is evidence, cite it as _context.md:; cv.md is a tailored rendering of it):', ctx.context]
     : [];
   return [
     ctx.shared,

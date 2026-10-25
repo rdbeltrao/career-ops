@@ -58,11 +58,10 @@ export const PATHS = {
   //
   // gemini-eval.mjs:89 and ollama-eval.mjs:56 both already use DATA_ROOT here.
   profile:     join(DATA_ROOT, 'modes', '_profile.md'),
-  // modes/_context.md is the candidate's fit profile, the context tier of the
-  // Source-of-Truth Boundary (AGENTS.md): its qualitative facts are evidence
-  // for the evaluation, its numbers are targeting only, and it is never a
-  // source for candidate-facing text. Optional: without it the prompt is
-  // exactly as before.
+  // modes/_context.md is the source of truth about the candidate under the
+  // Source-of-Truth Boundary (AGENTS.md): every fact and figure in it is
+  // evidence, cited as _context.md:, and cv.md is a tailored rendering of it.
+  // Optional: without it the prompt is exactly as before.
   context:     join(DATA_ROOT, 'modes', '_context.md'),
   profileYml:  getProfilePath(),
   reports:     join(DATA_ROOT, 'reports'),
@@ -147,14 +146,14 @@ function loadContext() {
   const cvContent      = readFile(PATHS.cv, 'cv.md');
   const profileContent = readFile(PATHS.profile, '_profile.md');
   const profileYml     = readFile(PATHS.profileYml, 'profile.yml');
-  // Masked in lib/context-evidence.mjs: no figure that lives only in the
-  // context file can reach the report.
+  // Read as written (lib/context-evidence.mjs returns masked: false by
+  // default; CAREER_OPS_MASK_CONTEXT=1 opts into masking figures as [n]).
   const contextContent = readMaskedContext(DATA_ROOT)?.text ?? '';
   if (!contextContent) console.log('ℹ️  modes/_context.md not found — evaluating on cv.md and profile.yml only');
   const contextSection = contextContent
     ? `
 ═══════════════════════════════════════════════════════
-CANDIDATE CONTEXT (modes/_context.md — context tier: qualitative facts are evidence for the evaluation, cite them as _context.md:; its numbers are masked as [n], so every figure you see came from cv.md or article-digest.md and a [n] is never written as a figure; never a source for the CV, a letter or a form answer)
+CANDIDATE CONTEXT (modes/_context.md — the source of truth about the candidate, read first: every fact and figure in it is evidence, cite it as _context.md:; cv.md is a tailored rendering of it)
 ═══════════════════════════════════════════════════════
 ${contextContent}
 `
