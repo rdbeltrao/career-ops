@@ -143,7 +143,9 @@ function entryFor(search) {
 function blockLines(search, entryIndent, fieldIndent) {
   const e = entryFor(search);
   const pad = " ".repeat(fieldIndent);
-  return Object.entries(e).map(([k, v], i) => (i === 0 ? `${" ".repeat(entryIndent)}- ${k}: ${fmt(v)}` : `${pad}${k}: ${fmt(v)}`));
+  // The provider id is a plain word; written bare, the way hand-written entries have it.
+  const value = (k, v) => (k === "provider" ? v : fmt(v));
+  return Object.entries(e).map(([k, v], i) => (i === 0 ? `${" ".repeat(entryIndent)}- ${k}: ${value(k, v)}` : `${pad}${k}: ${value(k, v)}`));
 }
 
 function verified(source, lines, expected) {

@@ -111,6 +111,7 @@ test("addSearchText: appends after the last LinkedIn search, every other line un
   assert.deepEqual(names, ["Acme", "LinkedIn em-germany-7d", "LinkedIn head-of-eng-berlin-30d", "LinkedIn director-de-24h"]);
   assert.deepEqual(doc.tracked_companies[3], { name: "LinkedIn director-de-24h", provider: "linkedin-browser", search_url: DE_URL, max_pages: 2, max_apply_lookups: 10, enabled: true });
   assert.ok(text.indexOf("director-de-24h") < text.indexOf("# ── Job boards ──"), "inside tracked_companies, before the next section");
+  assert.match(text, /\n {4}provider: linkedin-browser\n {4}search_url:/, "provider written bare, like hand-written entries");
 });
 
 test("addSearchText: works when there is no LinkedIn search yet, and when there is no tracked_companies", () => {
