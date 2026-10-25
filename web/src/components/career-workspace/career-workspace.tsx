@@ -332,9 +332,7 @@ export function CareerWorkspace({ initialDocument = "context" }: { initialDocume
 
   return (
     <div className="mx-auto w-full max-w-[1680px] px-4 py-6 sm:px-6 xl:px-8">
-      <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
-        <div><p className="text-xs font-medium uppercase tracking-[0.16em] text-faint">{initialDocument === "cv" ? "Your CV draft" : "Your career context"}</p><p className="mt-1 text-sm text-muted">{initialDocument === "cv" ? "Résumé output built from your career context" : "Used for job matching and CV generation"}</p></div>
-      </div>
+      {initialDocument === "context" && <div className="mb-6"><p className="text-xs font-medium uppercase tracking-[0.16em] text-faint">Your career context</p><p className="mt-1 text-sm text-muted">Used for job matching and CV generation</p></div>}
 
       <button type="button" onClick={() => setMobilePages(true)} aria-expanded={mobilePages} aria-controls="workspace-pages-drawer" className={cn(button, "mb-4 xl:hidden")}><PanelLeft aria-hidden="true" className="size-4" />Show pages</button>
 
