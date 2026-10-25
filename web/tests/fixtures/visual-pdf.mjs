@@ -2,13 +2,16 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { chromium } from 'playwright-core';
+import { decoratedCvHtml } from './decorated-cv.mjs';
 
 const singlePage = process.env.PDF_PAGINATION_FIXTURE === '1';
+const decorated = process.env.PDF_DECORATED_FIXTURE === '1';
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'career-ops-visual-pdf-'));
 for (const directory of ['output', 'data', 'reports', 'modes']) fs.mkdirSync(path.join(root, directory));
 fs.writeFileSync(path.join(root, '.visual-pdf-fixture'), 'fictional-only\n');
 if (singlePage) fs.writeFileSync(path.join(root, '.pagination-pdf-fixture'), 'fictional-only\n');
-const html = `<!doctype html><html><head><meta charset="utf-8"><style>
+if (decorated) fs.writeFileSync(path.join(root, '.decorated-pdf-fixture'), 'fictional-only\n');
+const html = decorated ? decoratedCvHtml() : `<!doctype html><html><head><meta charset="utf-8"><style>
 @page {size:letter; margin:40pt} body{font:12pt Arial;color:#172434;background:#fff} h1{font-size:26pt;margin-bottom:8pt}
 .section{margin-top:24pt}.section-title{font-size:15pt;font-weight:bold;border-bottom:1px solid #aab9c8;padding-bottom:5pt;margin-bottom:12pt}
 .job-header{font-weight:bold} li{margin-top:14pt} p{margin-top:14pt} .next-page{break-before:${singlePage ? 'auto' : 'page'}}

@@ -105,8 +105,12 @@ export function VisualPdfEditor({ id }: { id: string }) {
       inlineStateRef.current = undefined; setPendingDraft(false);
       draftRef.current = selectionRef.current?.text ?? ""; setDraft(draftRef.current);
       setHistory({ canUndo: !!message.canUndo, canRedo: !!message.canRedo });
+      setError(null);
       setNotice("");
       persist();
+    } else if (message.type === "history-state") {
+      setHistory({ canUndo: !!message.canUndo, canRedo: !!message.canRedo });
+      setError(null);
     } else if (message.type === "save-request") saveAction.current();
     else if (message.type === "error") setError(message.message || "The PDF could not be edited.");
   }, [persist]);

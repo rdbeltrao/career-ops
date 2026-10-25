@@ -40,6 +40,14 @@ test('AI proposal cannot replace another paragraph or a changed version of the s
   assert.equal(proposalMatches(proposal,null),false);
 });
 
+test('history acknowledgements validate state without requiring a changed PDF', () => {
+  const source = {}, context = { source, origin: 'http://localhost:3000', session: 'history-session' };
+  const data = { channel: 'career-ops-pdf-editor', session: context.session, type: 'history-state', revision: 0, canUndo: false, canRedo: true };
+  const valid = patch => isEditorMessage({ source, origin: context.origin, data: { ...data, ...patch } }, context);
+  assert.equal(valid({}), true);
+  for (const patch of [{ revision: -1 }, { revision: 0.5 }, { revision: undefined }, { canUndo: 'yes' }, { canRedo: undefined }]) assert.equal(valid(patch), false);
+});
+
 test('inline drafts and section selections have bounded identities and content', () => {
   const source = {};
   const context = {source,origin:'http://localhost:3000',session:'s'};

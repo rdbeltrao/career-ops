@@ -37,6 +37,7 @@ export function isEditorMessage(event, expected) {
   if (d.type === 'section-selection') return typeof d.sectionId === 'string' && d.sectionId.length <= 200 &&
     typeof d.title === 'string' && d.title.length <= 200 && validPdfTargets(d.targets);
   if (d.type === 'exported') return d.bytes instanceof ArrayBuffer;
+  if (d.type === 'history-state') return Number.isSafeInteger(d.revision) && d.revision >= 0 && typeof d.canUndo === 'boolean' && typeof d.canRedo === 'boolean';
   if (d.type === 'error') return typeof d.message === 'string';
   return ['ready','loaded','changed','selected','previewed','save-request','section-selected','page-changed'].includes(d.type);
 }
