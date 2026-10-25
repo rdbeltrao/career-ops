@@ -131,8 +131,10 @@ export function commitParagraphText(engine, paragraph, runs, format = paragraph.
 export function removeParagraphWhitespace(engine, paragraph) {
   // Replacing the text must also remove original whitespace objects that editcore
   // did not claim; otherwise export retains them as phantom lines/blank runs.
+  // Use the same native history transaction as the replacement: removeObject()
+  // destroys handles immediately and would make their removal irreversible.
   for (const object of paragraph.whitespaceObjects ?? []) {
-    if (!engine.removeObject(object)) throw new Error('Could not replace the paragraph whitespace. Undo this edit and retry.');
+    if (!engine.historyRemoveObject(object)) throw new Error('Could not replace the paragraph whitespace. Undo this edit and retry.');
   }
   // The native splice plan covers only native paragraph objects, so it would
   // resurrect these spaces. Regenerate the page to use the complete object state.

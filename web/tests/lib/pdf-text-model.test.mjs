@@ -80,7 +80,7 @@ test('replacement cleans only validated whitespace after commit and invalidates 
   const calls = [];
   const engine = {
     commitParagraph: () => { calls.push('commit'); return true; },
-    removeObject: handle => { calls.push(handle); return true; },
+    historyRemoveObject: handle => { calls.push(handle); return true; },
     generateContent: () => { calls.push('generate'); return true; },
   };
   const original = { id: 1, whitespaceObjects: [22, 33] };
@@ -90,9 +90,9 @@ test('replacement cleans only validated whitespace after commit and invalidates 
   engine.commitParagraph = () => false;
   assert.equal(commitParagraphText(engine, original, []), false);
   assert.deepEqual(calls, []);
-  engine.removeObject = () => false;
+  engine.historyRemoveObject = () => false;
   assert.throws(() => removeParagraphWhitespace(engine, original), /Could not replace/);
-  engine.removeObject = () => true;
+  engine.historyRemoveObject = () => true;
   engine.generateContent = () => false;
   assert.throws(() => removeParagraphWhitespace(engine, original), /Could not save/);
 });
@@ -123,5 +123,56 @@ test('Chrome Helvetica Neue italic PDF keeps spaces after extraction, editing, e
     engine.open(await engine.saveSpliced());
     assert.equal(readParagraphs(engine).map(paragraphText).join(' '), secondEdit);
     assert.ok(engine.renderPage(1).data.some(channel => channel < 200));
+  } finally { engine.close(); }
+});
+
+test('native undo and redo restore text and omitted space objects after a paragraph replacement', async () => {
+  const engine = await PdfEngine.create();
+  const reopened = await PdfEngine.create();
+  try {
+    engine.open(new Uint8Array(fs.readFileSync(new URL('../fixtures/pdf-text-spacing.pdf', import.meta.url))));
+    const [original] = readParagraphs(engine);
+    const originalText = paragraphText(original);
+    const originalObjectCount = engine.objectCount();
+    const edited = originalText.replace('reliable', 'resilient');
+    assert.ok(engine.editStep('Edit fictional profile', () => commitParagraphText(engine, original, replacementRuns(original, edited))));
+    const editedObjectCount = engine.objectCount();
+    for (let cycle = 0; cycle < 2; cycle++) {
+      assert.ok(engine.historyUndo());
+      assert.equal(engine.objectCount(), originalObjectCount, 'undo must restore omitted space objects as well as text objects');
+      assert.equal(readParagraphs(engine).map(paragraphText).join(' '), originalText);
+      assert.deepEqual(engine.historyDepth(), { undo: 0, redo: 1 });
+      reopened.open(await engine.saveSpliced());
+      assert.equal(readParagraphs(reopened).map(paragraphText).join(' '), originalText);
+      assert.ok(engine.historyRedo());
+      assert.equal(engine.objectCount(), editedObjectCount);
+      assert.equal(readParagraphs(engine).map(paragraphText).join(' '), edited);
+      assert.deepEqual(engine.historyDepth(), { undo: 1, redo: 0 });
+      reopened.open(await engine.saveSpliced());
+      assert.equal(readParagraphs(reopened).map(paragraphText).join(' '), edited);
+    }
+  } finally { reopened.close(); engine.close(); }
+});
+
+test('full-PDF snapshot undo and redo restore exact whitespace and object counts', async () => {
+  const engine = await PdfEngine.create();
+  try {
+    engine.open(new Uint8Array(fs.readFileSync(new URL('../fixtures/pdf-text-spacing.pdf', import.meta.url))));
+    const [original] = readParagraphs(engine);
+    const originalText = paragraphText(original);
+    const originalObjectCount = engine.objectCount();
+    const before = await engine.saveSpliced();
+    const edited = originalText.replace('reliable', 'resilient');
+    assert.ok(engine.editStep('Edit fictional profile', () => commitParagraphText(engine, original, replacementRuns(original, edited))));
+    const editedObjectCount = engine.objectCount();
+    const after = await engine.saveSpliced();
+    for (let cycle = 0; cycle < 2; cycle++) {
+      engine.open(before);
+      assert.equal(engine.objectCount(), originalObjectCount);
+      assert.equal(readParagraphs(engine).map(paragraphText).join(' '), originalText);
+      engine.open(after);
+      assert.equal(engine.objectCount(), editedObjectCount);
+      assert.equal(readParagraphs(engine).map(paragraphText).join(' '), edited);
+    }
   } finally { engine.close(); }
 });
