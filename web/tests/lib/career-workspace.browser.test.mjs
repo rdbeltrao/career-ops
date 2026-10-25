@@ -9,7 +9,7 @@ const target = process.env.CAREER_WORKSPACE_TEST_URL;
 const fixtureMarker = 'Fictional career-workspace browser fixture.';
 const contextFixture = `# Career record\n\n${fixtureMarker}\n\n## Profile, Skills & Credentials\n\nBuilds reliable software with **TypeScript**.\n\n## Career History\n\nEmployer records.\n\n### Example Labs\n\nLed a team of 4 engineers.\n\n- Improved onboarding.\n- Kept source [record](https://example.com/evidence).\n\n### Example Studio\n\nNeeds confirmation: delivery metric.\n\n## Professional Examples\n\nExamples belong to their sources.\n`;
 
-test('legacy Context fallback edits canonical sections, guards drafts, and supports mobile', {
+test('legacy Context keeps documents separate from section jumps, guards drafts, and supports mobile', {
   skip: !target,
   timeout: 180_000,
 }, async () => {
@@ -53,10 +53,14 @@ test('legacy Context fallback edits canonical sections, guards drafts, and suppo
       return save?.disabled;
     });
   }
-  async function select(title, waitForPage = true) {
-    const nav = page.getByRole('navigation', { name: 'Workspace pages' });
+  async function select(title) {
+    const nav = page.getByRole('navigation', { name: 'Workspace documents' });
     await nav.getByRole('button', { name: title, exact: true }).first().click();
-    if (waitForPage) await page.waitForFunction((title) => document.querySelector('section[aria-label="Page editor"] h1')?.textContent === title, title);
+    await page.waitForFunction((title) => document.querySelector('section[aria-label="Document editor"] h1')?.textContent === title, title);
+  }
+  async function section(title) {
+    await page.getByRole('navigation', { name: 'Document sections' }).getByRole('button', { name: title, exact: true }).first().click();
+    await page.waitForFunction((title) => document.activeElement?.textContent === title, title);
   }
   async function shot(name) {
     if (!process.env.CAREER_WORKSPACE_ARTIFACT_DIR) return;
@@ -65,41 +69,41 @@ test('legacy Context fallback edits canonical sections, guards drafts, and suppo
   }
   try {
     await page.goto(`${origin}/context?document=context`);
-    await page.getByRole('navigation', { name: 'Workspace pages' }).waitFor();
+    const documentsNav = page.getByRole('navigation', { name: 'Workspace documents' });
+    await documentsNav.waitFor();
     await page.getByRole('button', { name: 'Save', exact: true }).waitFor();
     assert.equal(writes.length, 0, 'opening does not write');
     assert.equal(await page.getByRole('button', { name: /^(Source pages|App files)$/ }).count(), 0);
-    assert.equal(await page.getByRole('navigation', { name: 'Workspace pages' }).getByRole('button', { name: 'CV draft', exact: true }).count(), 0, 'CV is separate from fallback Context');
-    await select('Profile, Skills & Credentials');
+    assert.equal(await documentsNav.getByRole('button', { name: 'CV draft', exact: true }).count(), 0, 'CV is separate from fallback Context');
+    assert.equal(await documentsNav.getByRole('button', { name: 'Profile, Skills & Credentials', exact: true }).count(), 0, 'headings are never listed as documents');
+    assert.equal(await page.getByRole('navigation', { name: 'Workspace pages' }).count(), 0);
+    assert.equal(await page.getByRole('button', { name: /^(New page|New child page|Rename page|Move page up|Move page down)$/ }).count(), 0);
+    await section('Profile, Skills & Credentials');
     const editor = page.getByRole('textbox', { name: 'Page content', exact: true });
-    await editor.fill('Builds reliable software with TypeScript. Reviewed 7 projects.');
+    assert.match(await editor.innerText(), /Career History[\s\S]*Professional Examples/, 'section jumps keep the complete document open');
+    await page.getByRole('button', { name: 'Source', exact: true }).click();
+    const source = page.getByRole('textbox', { name: 'Markdown source', exact: true });
+    await source.fill(contextFixture.replace('Builds reliable software with **TypeScript**.', 'Builds reliable software with **TypeScript**. Reviewed 7 projects.'));
     await page.getByRole('button', { name: 'Save', exact: true }).click();
     await saved();
     const edited = await read();
     assert.match(edited.content, /Reviewed 7 projects/);
     assert.equal(edited.content.slice(edited.content.indexOf('## Career History')), initial.content.slice(initial.content.indexOf('## Career History')), 'unrelated sections unchanged');
     await page.reload();
-    await select('Profile, Skills & Credentials');
+    await section('Profile, Skills & Credentials');
     await editor.waitFor();
     assert.match(await editor.innerText(), /Reviewed 7 projects/);
     await shot('context-desktop');
 
-    await select('Career History');
-    await page.getByRole('button', { name: 'New child page', exact: true }).click();
-    await page.getByRole('textbox', { name: 'Page title', exact: true }).fill('Example Research');
-    await page.getByRole('button', { name: 'Create page', exact: true }).click();
-    await editor.waitFor();
-    await editor.fill('Source: https://example.com/research. Needs confirmation.');
+    await page.getByRole('button', { name: 'Source', exact: true }).click();
+    await source.fill(edited.content.replace('### Example Studio', '### Research record\n\nSource: https://example.com/research. Needs confirmation.\n\n### Example Studio'));
     await page.getByRole('button', { name: 'Save', exact: true }).click();
-    await saved();
-    await page.getByRole('button', { name: 'Rename page', exact: true }).click();
-    await page.getByRole('textbox', { name: 'Page title', exact: true }).fill('Research record');
-    await page.getByRole('button', { name: 'Rename', exact: true }).click();
-    await page.getByRole('button', { name: 'Move page up', exact: true }).click();
     await saved();
     const organized = await read();
     assert.ok(organized.content.indexOf('### Research record') < organized.content.indexOf('### Example Studio'));
     assert.match(organized.content, /Needs confirmation/);
+    await section('Research record');
+    assert.equal(await documentsNav.getByRole('button', { name: 'Research record', exact: true }).count(), 0);
 
     await editor.fill('Unsaved local draft.');
     const cvTitle = documents.find((d) => d.id === 'cv').title;
@@ -126,7 +130,6 @@ test('legacy Context fallback edits canonical sections, guards drafts, and suppo
     await page.getByRole('article', { name: 'Formatted page' }).waitFor();
     assert.equal(await page.getByRole('textbox', { name: 'Markdown source', exact: true }).count(), 0, 'complex pages open formatted');
     await page.getByRole('button', { name: 'Source', exact: true }).click();
-    const source = page.getByRole('textbox', { name: 'Markdown source', exact: true });
     await source.waitFor();
     const originalTable = await source.inputValue();
     assert.match(originalTable, /\| Claim \| Source \|/);
@@ -142,9 +145,9 @@ test('legacy Context fallback edits canonical sections, guards drafts, and suppo
     await page.locator('aside nav').getByRole('link', { name: 'Context', exact: true }).last().click();
     await page.waitForURL(`${origin}/context`);
     await select(documents.find((d) => d.id === 'context').title);
-    await select('Profile, Skills & Credentials');
+    await section('Profile, Skills & Credentials');
     await editor.fill('Recover this draft after browser navigation.');
-    await page.getByRole('status', { name: 'Page save status' }).filter({ hasText: 'Unsaved changes' }).waitFor();
+    await page.getByRole('status', { name: 'Document save status' }).filter({ hasText: 'Unsaved changes' }).waitFor();
     const writesBeforeHistory = writes.length;
     await page.goBack();
     await page.waitForURL(`${origin}/cv`);
@@ -171,16 +174,17 @@ test('legacy Context fallback edits canonical sections, guards drafts, and suppo
     await page.getByRole('button', { name: 'Discard changes', exact: true }).click();
     await saved();
     await page.setViewportSize({ width: 390, height: 844 });
-    await page.getByRole('button', { name: 'Show pages', exact: true }).click();
-    const search = page.getByRole('textbox', { name: 'Search pages', exact: true });
+    await page.getByRole('button', { name: 'Show documents', exact: true }).click();
+    const search = page.getByRole('textbox', { name: 'Search sections', exact: true });
     await search.fill('Example Labs');
-    await select('Example Labs');
-    await page.getByRole('button', { name: 'Hide pages', exact: true }).click();
+    await section('Example Labs');
+    assert.equal(await page.getByRole('dialog', { name: 'Workspace document navigation' }).isVisible(), false);
     await editor.waitFor();
     assert.match(await editor.innerText(), /4 engineers/);
     assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1), 'mobile fits viewport');
     await shot('context-mobile');
     assert.deepEqual(errors, []);
+    assert.ok(writes.every((write) => write.section === null), 'local saves always write complete documents');
   } finally {
     await browser.close();
   }

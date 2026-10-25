@@ -50,14 +50,23 @@ test('Context has one real page hierarchy with CV as a separate output', { skip:
     await page.screenshot({ path: path.join(process.env.CAREER_WORKSPACE_ARTIFACT_DIR, `${name}.png`), fullPage: true });
   }
   try {
+    await page.route(`**/api/workspace?document=${rootId}`, async (route) => {
+      const response = await route.fetch();
+      const document = await response.json();
+      await route.fulfill({ json: { ...document, content: document.content + '\n\n## Body-only section\n\nThis is content inside the root page.\n' } });
+    });
     await page.goto(`${origin}/context`);
     await page.getByRole('heading', { name: 'Example job applications', exact: true, level: 1 }).waitFor();
+    await page.getByRole('region', { name: 'Page editor' }).getByRole('heading', { name: 'Body-only section', exact: true }).waitFor();
     assert.equal(writes.length, 0);
     assert.equal(await page.getByRole('button', { name: /^(Source pages|App files)$/ }).count(), 0, 'Context has no competing views');
     assert.match(await page.locator('main').innerText(), /Used for job matching and CV generation/);
     assert.doesNotMatch(await page.locator('main').innerText(), /Local copy|Local edits stay here|matching uses Application profile/);
     assert.equal(await navigation().getByRole('button', { name: 'CV draft', exact: true }).count(), 0);
     assert.equal(await navigation().getByRole('button', { name: 'Career context', exact: true }).count(), 0, 'landing headings never become pages');
+    await navigation().getByRole('textbox', { name: 'Search pages' }).fill('Body-only section');
+    await navigation().getByText('No pages match your search.', { exact: true }).waitFor();
+    await navigation().getByRole('textbox', { name: 'Search pages' }).fill('');
     for (const staleDocument of ['context', 'profile', 'cv']) {
       await page.goto(`${origin}/context?document=${staleDocument}`);
       await page.getByRole('heading', { name: 'Example job applications', exact: true, level: 1 }).waitFor();
@@ -159,6 +168,7 @@ test('Context has one real page hierarchy with CV as a separate output', { skip:
     assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1));
     await shot('source-workspace-mobile');
     assert.deepEqual(errors, []);
+    assert.ok(writes.every((write) => write.section === null), 'page operations never target Markdown sections');
   } finally { await browser.close(); }
 });
 

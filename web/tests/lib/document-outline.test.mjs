@@ -40,11 +40,15 @@ test('pending heading edits recover as unsaved document edits', () => {
   const recovered = wholeDocumentDraft({ content, revision: 'same' }, { section: section.id, revision: 'same', content: 'Edited summary.', original: '', form: { kind: 'rename', title: 'Profile' } });
   assert.match(recovered.content, /## Profile\n\nEdited summary\./);
   assert.equal(recovered.form, null);
+  const rootDraft = wholeDocumentDraft({ content, revision: 'same' }, { section: null, revision: 'same', content, original: content, form: { kind: 'add', title: 'Languages' } });
+  assert.match(rootDraft.content, /## Languages\n/);
+  assert.equal(rootDraft.section, null);
+  assert.equal(rootDraft.form, null, 'old local page forms become document edits');
 });
 
 test('stale or missing section drafts cannot overwrite a newer full document', () => {
   const draft = { section: documentOutline(content)[0].id, revision: 'old', content: 'Draft.', original: '', form: null };
-  assert.throws(() => wholeDocumentDraft({ content, revision: 'new' }, draft), /older CV/);
+  assert.throws(() => wholeDocumentDraft({ content, revision: 'new' }, draft), /older document/);
   assert.throws(() => wholeDocumentDraft({ content, revision: 'old' }, { ...draft, section: 'missing' }), /no longer exists/);
   const fullDraft = { ...draft, section: null, content };
   assert.equal(wholeDocumentDraft({ content, revision: 'new' }, fullDraft), fullDraft);

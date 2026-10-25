@@ -19,14 +19,14 @@ export function documentOutline(content) {
   });
 }
 
-/** Preserve old section-only browser drafts when opening the CV as one document.
+/** Preserve old section-only browser drafts when opening a complete document.
  * @param {{content:string,revision:string}} document
  * @param {{section:string|null,revision:string,content:string,original:string,form:{kind:string,title:string}|null}} draft
  */
 export function wholeDocumentDraft(document, draft) {
-  if (!draft.section) return draft;
-  if (document.revision !== draft.revision) throw new Error('This section draft belongs to an older CV. Copy its recovered text before opening the saved document.');
-  let content = mutateDocument(document.content, { action: 'replace', section: draft.section, content: draft.content }).content;
+  if (!draft.section && !draft.form) return draft;
+  if (document.revision !== draft.revision) throw new Error('This section draft belongs to an older document. Copy its recovered text before opening the saved document.');
+  let content = draft.section ? mutateDocument(document.content, { action: 'replace', section: draft.section, content: draft.content }).content : draft.content;
   if (draft.form) content = mutateDocument(content, { action: draft.form.kind, section: draft.section, title: draft.form.title }).content;
   return { ...draft, section: null, content, original: document.content, form: null };
 }
