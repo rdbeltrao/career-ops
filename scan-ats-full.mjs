@@ -66,7 +66,7 @@ import icims from './providers/icims.mjs';
 import bamboohr from './providers/bamboohr.mjs';
 import paylocity, { boardUrl as paylocityBoardUrl } from './providers/paylocity.mjs';
 import { decodeEntities } from './providers/_html-entities.mjs';
-import { buildTitleFilter, buildTitleFilterOverrides, buildTitleFilterWithOverrides, buildLocationFilter, buildContentFilter, matchedTitleKeywords, loadSeenUrls, normalizeUrlForDedup, appendToPipeline, appendToScanHistory, findBlacklistEntry, loadBlacklist, parseSinceDays, PORTALS_PATH, PIPELINE_PATH, SCAN_HISTORY_PATH } from './scan.mjs';
+import { buildTitleFilter, buildTitleFilterOverrides, buildTitleFilterWithOverrides, buildLocationFilter, buildContentFilter, matchedTitleKeywords, loadSeenUrls, normalizeUrlForDedup, appendToPipeline, appendToScanHistory, findBlacklistEntry, loadBlacklist, parseSinceDays, createCompanyRoleGate, PORTALS_PATH, PIPELINE_PATH, SCAN_HISTORY_PATH } from './scan.mjs';
 import { localToday } from './lib/local-today.mjs';
 import { printScanSummaryHeader } from './lib/scan-summary-marker.mjs';
 import { SEED_SOURCES, toPortalEntry } from './seeds/vc-portfolios.mjs';
@@ -828,6 +828,12 @@ export function emitLiveOffer(job, source, { json } = {}) {
 }
 
 export function keepAndMaybeEmit(job, source, sink, blacklist, opts) {
+  // A role already in the tracker, the pipeline or the scan history under
+  // another URL (typically LinkedIn) is not a new offer (createCompanyRoleGate).
+  if (opts?.companyRoleGate && !opts.companyRoleGate.admit(job)) {
+    opts.companyRoleDuplicates = (opts.companyRoleDuplicates || 0) + 1;
+    return;
+  }
   const kept = { ...job, source, dateStatus: job.postedAt ? 'dated' : 'unknown' };
   sink.push(kept);
   const live = filterBlacklistedOffers([kept], blacklist, { includeBlacklisted: opts.includeBlacklisted });
@@ -1269,6 +1275,10 @@ async function main() {
   });
   const blacklist = loadBlacklist();
   opts.blacklist = blacklist;
+  // URL dedup misses a role the user already has under another URL; this gate
+  // applies scan.mjs's company+role check to every offer the sweep keeps.
+  opts.companyRoleGate = createCompanyRoleGate(config);
+  opts.companyRoleDuplicates = 0;
   // sinceMs and includeUndated let providers (currently only workday.mjs)
   // stop paginating a tenant early instead of always walking to max_pages:
   // sinceMs once postings are confidently past the --since window, and
@@ -1311,6 +1321,9 @@ async function main() {
   // pre-#3439 behavior.
   for (const o of newOffers) {
     seenUrls.add(dedupTokenFor(o, providerForSource(o.source)));
+    // Checkpointed offers passed the role gate before the interruption and are
+    // not in the pipeline yet; record them so a resumed run cannot re-add them.
+    opts.companyRoleGate.admit(o);
   }
   const completedSources = new Set(checkpoint?.completedSources || []);
   const cc = checkpoint?.counters || {};
@@ -1381,6 +1394,7 @@ async function main() {
           datasetStatus,
           postingsKept: partial.length,
           postingsDroppedNoDate: droppedNoDate,
+          postingsDroppedDuplicateRole: opts.companyRoleDuplicates,
           unreachableBoards: totalErrors + curErrors,
           domainFilterActive: Boolean(domainFilter),
           domainGatedBoards,
@@ -1871,6 +1885,7 @@ async function main() {
       datasetStatus,
       postingsKept: offers.length,
       postingsDroppedNoDate: droppedNoDate,
+      postingsDroppedDuplicateRole: opts.companyRoleDuplicates,
       postingsFilteredBlacklist: blacklistResult.filteredBlacklist,
       postingsAnnotatedBlacklisted: blacklistResult.annotatedBlacklisted,
       postingsDroppedContent: droppedContent,
