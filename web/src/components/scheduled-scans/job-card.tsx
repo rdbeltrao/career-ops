@@ -136,7 +136,7 @@ export function JobCard({
             )}
           >
             {isFull ? <Globe className="size-3" /> : <Zap className="size-3" />}
-            {isFull ? "Full ATS Sweep" : "Zero-Token Portals"}
+            {isFull ? "Full ATS Sweep" : job.engine === "linkedin" ? "LinkedIn Searches" : "Zero-Token Portals"}
           </span>
 
           <span
@@ -153,6 +153,17 @@ export function JobCard({
         </div>
 
         {/* Keywords clamped to max 2 lines */}
+        {job.engine === "linkedin" && (
+          <p className="text-[11px] text-muted">
+            {job.linkedin?.searches?.length
+              ? `Runs ${job.linkedin.searches.length} LinkedIn search${job.linkedin.searches.length === 1 ? "" : "es"}: ${job.linkedin.searches.join(", ")}`
+              : "Runs every LinkedIn search that is on"}
+            {" · "}
+            {job.linkedin?.useSearchWindow === false ? `posted within ${job.filters?.sinceDays ?? 7}d` : "each search's own window"}
+            {positiveList.length === 0 ? " · portals.yml filters" : ""}
+          </p>
+        )}
+
         {positiveList.length > 0 && (
           <div className="max-h-12 overflow-hidden flex flex-wrap items-center gap-1.5 text-[11px]">
             <span className="text-faint shrink-0">matched:</span>

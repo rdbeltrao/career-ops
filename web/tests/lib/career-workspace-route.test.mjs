@@ -1,0 +1,46 @@
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { test } from 'node:test';
+import '../helpers/web-ts-alias-loader.mjs';
+const { GET, POST } = await import('../../src/app/api/workspace/route.ts');
+
+test('workspace API reads the overridden data root and saves with revision/status semantics', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'career-workspace-route-'));
+  const beforeRoot = process.env.CAREER_OPS_ROOT;
+  const beforeCode = process.env.CAREER_OPS_CODE_ROOT;
+  process.env.CAREER_OPS_ROOT = root;
+  process.env.CAREER_OPS_CODE_ROOT = path.resolve(import.meta.dirname, '../../..');
+  t.after(() => {
+    if (beforeRoot === undefined) delete process.env.CAREER_OPS_ROOT; else process.env.CAREER_OPS_ROOT = beforeRoot;
+    if (beforeCode === undefined) delete process.env.CAREER_OPS_CODE_ROOT; else process.env.CAREER_OPS_CODE_ROOT = beforeCode;
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+  const req = (suffix = '') => new Request('http://localhost:3000/api/workspace' + suffix);
+  const post = (body) => POST(new Request('http://localhost:3000/api/workspace', { method: 'POST', body: JSON.stringify(body), headers: { 'Content-Type': 'application/json' } }));
+  let response = await GET(req());
+  assert.equal(response.status, 200);
+  assert.equal((await response.json()).documents.length, 6);
+  assert.deepEqual(fs.readdirSync(root), []);
+  response = await GET(req('?document=cv'));
+  const missing = await response.json();
+  assert.equal(missing.exists, false);
+  assert.equal(response.headers.get('Cache-Control'), 'no-store');
+  response = await post({ document: 'cv', revision: missing.revision, action: 'replace', content: '# Fictional Candidate\n\n## Summary\nA source-backed summary.\n' });
+  assert.equal(response.status, 200);
+  const saved = await response.json();
+  assert.equal(saved.exists, true);
+  assert.equal(saved.sections.length, 2);
+  assert.equal(fs.readFileSync(path.join(root, 'cv.md'), 'utf8'), saved.content);
+  response = await post({ document: 'cv', revision: missing.revision, action: 'replace', content: 'Old draft' });
+  assert.equal(response.status, 409);
+  assert.equal((await response.json()).code, 'stale');
+  assert.equal((await GET(req('?document=..%2F..%2Fprivate'))).status, 404);
+  assert.equal((await post(null)).status, 400);
+  assert.equal((await post({ document: 'cv', action: 'replace', content: 'No revision' })).status, 400);
+  assert.equal((await post({ document: 'cv', revision: saved.revision, action: 'replace', content: 'a'.repeat(200001) })).status, 413);
+  response = await POST(new Request('http://localhost:3000/api/workspace', { method: 'POST', body: '{broken' }));
+  assert.equal(response.status, 400);
+  assert.equal(fs.readFileSync(path.join(root, 'cv.md'), 'utf8'), saved.content);
+});

@@ -1,7 +1,10 @@
 // A stub generate-pdf.mjs in a temporary root stands in for the real renderer,
-// so each test picks whether the render succeeds. The engine scripts resolve
-// from the code checkout (CAREER_OPS_CODE_ROOT) and the CV files from the data
-// root (CAREER_OPS_ROOT); one temporary directory plays both here.
+// so each test picks whether the render succeeds.
+//
+// The render runs engine scripts from the code checkout, not the data root
+// (pdf-render.mjs resolves them through resolveCodeRoot), so the temporary root
+// is both: CAREER_OPS_ROOT for the CV files and CAREER_OPS_CODE_ROOT for the
+// stub scripts. With only the data root set, the real generate-pdf.mjs ran.
 
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -46,17 +49,15 @@ function setup(file, { fail }) {
     fixedText: "",
   });
   const load = { ok: true, reportNum: "007", company: "Acme", file, tree, doc, edits: emptyEdits("h1"), stale: false, hasBase: false };
-  const previous = { root: process.env.CAREER_OPS_ROOT, code: process.env.CAREER_OPS_CODE_ROOT };
+  const previous = { CAREER_OPS_ROOT: process.env.CAREER_OPS_ROOT, CAREER_OPS_CODE_ROOT: process.env.CAREER_OPS_CODE_ROOT };
   process.env.CAREER_OPS_ROOT = root;
   process.env.CAREER_OPS_CODE_ROOT = root;
   const out = (name) => path.join(root, "output", name);
-  const restore = (key, value) => {
-    if (value === undefined) delete process.env[key];
-    else process.env[key] = value;
-  };
   const cleanup = () => {
-    restore("CAREER_OPS_ROOT", previous.root);
-    restore("CAREER_OPS_CODE_ROOT", previous.code);
+    for (const [key, value] of Object.entries(previous)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
     fs.rmSync(root, { recursive: true, force: true });
   };
   return { load, out, cleanup };

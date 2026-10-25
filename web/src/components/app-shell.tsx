@@ -27,29 +27,31 @@ export function AppShell({ children, followupsEnabled }: { children: React.React
       <ExploreProvider>
       <MobileNav followupsEnabled={followupsEnabled} />
       <div className="flex min-h-screen">
-        <aside className="sticky top-0 hidden h-screen w-60 shrink-0 flex-col overflow-y-auto border-r border-border bg-surface/30 p-4 md:flex">
-          <Link href="/" className="mb-8 flex items-center gap-2.5 px-1">
+        <aside aria-label="App sidebar" className="sticky top-0 hidden h-screen w-60 shrink-0 flex-col overflow-y-auto border-r border-border bg-surface/30 p-4 md:flex">
+          <Link href="/" aria-label="career-ops home" className="mb-8 flex items-center gap-2.5 px-1">
             <CoMark size={32} />
             <span className={`${instrumentSerif.className} relative -top-px text-2xl font-normal tracking-tight text-landing`}>
               career-ops
             </span>
           </Link>
-          <nav className="flex flex-col gap-1">
+          <nav id="app-navigation" aria-label="App navigation" className="flex flex-col gap-1">
             {visibleNavItems(followupsEnabled).map(({ href, label, icon: Icon, chip }) => {
               const active = isActivePath(href, pathname);
               return (
                 <Link
                   key={href}
                   href={href}
+                  aria-label={label}
+                  aria-current={active ? "page" : undefined}
                   className={cn(
-                    "flex items-center gap-3 rounded-md px-3 py-2 text-sm transition-colors",
+                    "flex items-center gap-3 rounded-md px-3 py-2 text-sm transition-colors focus-visible:outline-2 focus-visible:outline-brand",
                     active
                       ? "bg-brand-soft text-brand-text"
                       : "text-muted hover:bg-surface-hover hover:text-foreground",
                   )}
                 >
-                  <Icon className="size-4" />
-                  {label}
+                  <Icon aria-hidden="true" className="size-4 shrink-0" />
+                  <span>{label}</span>
                   {chip && (
                     <span className="ml-auto rounded-full border border-brand/30 bg-brand-soft px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-brand-text">
                       {chip}
@@ -76,7 +78,7 @@ export function AppShell({ children, followupsEnabled }: { children: React.React
             </div>
           </div>
         </aside>
-        <main className="flex-1 overflow-x-hidden">{children}</main>
+        <main className="min-w-0 flex-1 overflow-x-hidden">{children}</main>
         <AssistantConsole />
         <BackToTop />
         <FirstScoreView />

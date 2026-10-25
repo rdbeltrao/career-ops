@@ -22,6 +22,7 @@ import { cleanMessages } from "@/lib/assistant-history.mjs";
 import { StatusConfirmationCard, type StatusConfirmationPart } from "@/components/assistant-status-confirmation";
 import { StatusWriteError, writeAssistantStatus } from "@/lib/assistant-status-write.mjs";
 import { postAssistantWrite } from "@/lib/assistant-file-write.mjs";
+import { documentAssistantContext, loadAssistantDocuments, restoreAssistantDocument, trashAssistantDocument, type AssistantDocumentSnapshot } from "@/lib/assistant-documents.mjs";
 import { cn } from "@/lib/cn";
 
 // ── message model: messages are PART arrays so a live worker card can render
@@ -128,6 +129,9 @@ function describePage(p: string): string {
     return `The user is viewing the EVALUATION REPORT for application #${m[1]}. If they say "this offer", "apply", "evaluate it", "draft a cover letter", they mean application #${m[1]} — read reports/${m[1]}-*.md or the matching data/applications.md row and act on THAT one.`;
   if (p === "/analytics") return "Analytics — pipeline Sankey, funnel, score distribution, top companies.";
   if (p === "/cv") return "CV editor (cv.md).";
+  if (p === "/documents") return "Documents — generated PDFs, classic and visual editors, and recoverable Trash. Use exact identities from DOCUMENT SNAPSHOT for document actions.";
+  if (/^\/documents\/[A-Za-z0-9_-]+\/edit$/.test(p)) return `Visual PDF editor at ${p}. The user can select existing PDF text and request an AI rewrite in the editor. Use DOCUMENT SNAPSHOT to identify this file.`;
+  if (/^\/pipeline\/\d+\/cv-(studio|visual)$/.test(p)) return `CV editor for the application in route ${p}. The classic editor changes the CV source; the visual editor changes the generated PDF.`;
   if (p === "/config") return "Config — CLI / engine setup.";
   if (p === "/apply") return "Apply — the form-proxy: the user is reviewing a job application re-rendered in plain language, pre-filled from their CV. You can write/revise answers via setApplyField.";
   if (p.startsWith("/jobs/")) return "Watching a running worker / evaluation in progress.";
@@ -226,6 +230,7 @@ export function AssistantConsole() {
   const handledRef = useRef<Set<string>>(new Set());
   const confirmRuns = useRef<Map<string, () => DoneInfo>>(new Map());
   const statusRuns = useRef(new Map<string, { run?: () => Promise<DoneInfo>; pending: boolean; settled: boolean }>());
+  const documentsRef = useRef<AssistantDocumentSnapshot>({ documents: [], trash: [], total: null, totalTrash: null });
 
   // panel size: restored on mount (client-only, so SSR markup never mismatches),
   // persisted on change
@@ -516,6 +521,27 @@ export function AssistantConsole() {
       startJob,
       inbox: pipelineRef.current.inbox,
       applications: pipelineRef.current.applications,
+      documents: documentsRef.current.documents,
+      documentTrash: documentsRef.current.trash,
+      trashDocument: async (document) => {
+        const result = await trashAssistantDocument(document);
+        if (!result.ok) return result.error;
+        documentsRef.current.documents = documentsRef.current.documents.filter((item) => item.id !== document.id);
+        documentsRef.current.trash = [result.document, ...documentsRef.current.trash.filter((item) => item.restoreToken !== result.document.restoreToken)].slice(0, 20);
+        window.dispatchEvent(new CustomEvent("co-documents-changed"));
+        router.refresh();
+        pipelineRef.current.refetch();
+        return null;
+      },
+      restoreDocument: async (document) => {
+        const result = await restoreAssistantDocument(document);
+        if (!result.ok) return result.error;
+        documentsRef.current.trash = documentsRef.current.trash.filter((item) => item.id !== document.id || item.restoreToken !== document.restoreToken);
+        window.dispatchEvent(new CustomEvent("co-documents-changed"));
+        router.refresh();
+        pipelineRef.current.refetch();
+        return null;
+      },
       jobForUrl: (url) => {
         const m = jobsRef.current.filter((j) => j.input === url).sort((a, b) => b.startedAt - a.startedAt);
         return m[0];
@@ -687,11 +713,14 @@ export function AssistantConsole() {
     const shimsDone = new Set<string>();
     try {
       await flushChat();
+      // Fetch identities/revisions before the reply can propose an action. Confirm cards
+      // capture this version, and the document API refuses a later stale deletion.
+      documentsRef.current = await loadAssistantDocuments();
       reachedAssistant = true;
       const res = await fetch("/api/assistant", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: text, cliId, history, pageContext: describePage(pathname) + pipelineContext() + applyContext() }),
+        body: JSON.stringify({ message: text, cliId, history, pageContext: describePage(pathname) + pipelineContext() + applyContext() + documentAssistantContext(documentsRef.current) }),
       });
       if (!res.ok || !res.body) {
         failed = true;

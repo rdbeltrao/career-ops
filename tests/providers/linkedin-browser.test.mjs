@@ -32,6 +32,7 @@ import provider, {
   profileDir,
   requireSearchUrl,
   resolveMaxPages,
+  resolveApplyLookups,
   saveSeen,
   seenStorePath,
   selectAll,
@@ -458,4 +459,40 @@ test('node linkedin-login.mjs --help prints usage and exits 0 without opening a 
   assert.match(bad.stderr, /unrecognized flag/);
   const src = readFileSync(script, 'utf-8');
   assert.ok(!/password|credential\s*=|\.fill\(|\.type\(/i.test(src.replace(/^\s*(\/\/|\*).*$/gm, '').replace(/`[\s\S]*?`/g, '')), 'the script never types or reads a credential');
+});
+
+test('buildJob keeps the LinkedIn link and id beside the employer apply URL the crawl read', () => {
+  const card = parseCards(fixture('list.html'))[1];
+  const detail = parseDetail(fixture('detail.html'), { now: NOW });
+  const apply = { applyUrl: 'https://jobs.ashbyhq.com/acme/1/application', applyKind: 'offsite' };
+  const job = buildJob(card, detail, { name: 'em-germany-24h' }, apply);
+  assert.equal(job.url, 'https://www.linkedin.com/jobs/view/4477001122/', 'the board link stays the posting URL');
+  assert.equal(job.externalId, '4477001122', 'the LinkedIn id stays');
+  assert.equal(job.applyUrl, 'https://jobs.ashbyhq.com/acme/1/application');
+  assert.equal(job.applyKind, 'offsite');
+  assert.equal(job.jd.apply_url, 'https://jobs.ashbyhq.com/acme/1/application');
+  assert.equal(job.jd.url, 'https://www.linkedin.com/jobs/view/4477001122/');
+
+  const easy = buildJob(card, detail, { name: 's' }, { applyUrl: '', applyKind: 'easy-apply' });
+  assert.equal(easy.applyKind, 'easy-apply');
+  assert.equal('applyUrl' in easy, false, 'no employer URL, no field');
+  assert.equal('apply_url' in easy.jd, false);
+
+  const plain = buildJob(card, detail, { name: 's' });
+  assert.equal('applyUrl' in plain || 'applyKind' in plain, false, 'a job read without the apply step is unchanged');
+});
+
+test('isLoginWall: the signed-out posting page (a sign-in modal, no redirect) is a wall', () => {
+  const guest = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'fixtures', 'linkedin-guest-live-modal.html'), 'utf8');
+  assert.equal(isLoginWall('https://www.linkedin.com/jobs/view/4480683016/', guest), true);
+  assert.equal(isLoginWall('https://www.linkedin.com/jobs/view/4480683016/', '<header id="global-nav"></header><div class="contextual-sign-in-modal"></div>'), false, 'the signed-in navigation always wins');
+});
+
+test('resolveApplyLookups: posting-page visits per search, capped by default and off when asked', () => {
+  assert.equal(resolveApplyLookups({}), 25);
+  assert.equal(resolveApplyLookups({ max_apply_lookups: 5 }), 5);
+  assert.equal(resolveApplyLookups({ max_apply_lookups: 0 }), 0);
+  assert.equal(resolveApplyLookups({ max_apply_lookups: -1 }), 25);
+  assert.equal(resolveApplyLookups({ max_apply_lookups: 'lots' }), 25);
+  assert.equal(resolveApplyLookups({ resolve_apply_url: false, max_apply_lookups: 9 }), 0);
 });

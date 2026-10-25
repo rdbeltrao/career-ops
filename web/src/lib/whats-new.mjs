@@ -32,16 +32,17 @@ export function resolveOfferLimit(raw) {
 }
 
 /**
- * A scan-history status that says the POSTING is gone, not merely that this row
- * is not a fresh match. Matches `skipped_expired` (what the scanner and
- * check-liveness write) and the legacy `added (expired)` suffix.
+ * A scan-history status that retires the POSTING, not merely this row. Matches
+ * `skipped_expired` (what the scanner and check-liveness write), the legacy
+ * `added (expired)` suffix, and `skipped_ignored` (what the Explore page's
+ * Ignore button writes when the user hides a posting).
  *
  * Deliberately narrower than the route's own row filter: `skipped_dup` and
  * `skipped_title` mean "this row is a duplicate / off-target", and retiring a
  * URL on those would hide live postings — the exact failure this feed exists to
  * avoid.
  */
-const EXPIRED_STATUS = /expired/i;
+const RETIRED_STATUS = /expired|^skipped_ignored$/i;
 
 /**
  * Collect fresh, unique offers while keeping the response payload bounded.
@@ -56,7 +57,7 @@ export function collectWhatsNew(rows, { cutoff, toOffer, offerLimit = DEFAULT_OF
   let anyDated = false;
 
   const add = (columns, limit) => {
-    // A confirmed-dead row RETIRES its URL for the rest of the walk (#3891).
+    // A confirmed-dead or ignored row RETIRES its URL for the rest of the walk (#3891).
     // scan-history is append-only, so proving a posting dead adds a row — it
     // cannot edit the `added` row that first surfaced it. Rejecting only the
     // dead row itself left that older `added` row free to resurface the
@@ -64,7 +65,7 @@ export function collectWhatsNew(rows, { cutoff, toOffer, offerLimit = DEFAULT_OF
     // is what made a re-checked, provably dead posting keep coming back.
     // Walking newest-first is what makes this safe: a posting re-listed at the
     // same URL is reached (and counted) before its older death certificate.
-    if (EXPIRED_STATUS.test(columns[5] || "")) {
+    if (RETIRED_STATUS.test(columns[5] || "")) {
       if (columns[0]) seen.add(columns[0]);
       return;
     }

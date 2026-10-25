@@ -162,6 +162,23 @@ const CALL_SITES = [
     probe: 'run',
   },
   {
+    // The LinkedIn page's "Sign in to LinkedIn" opens a visible browser window,
+    // so only the argv is probed (fork-local, like the script).
+    source: 'web/src/lib/linkedin-settings.ts',
+    script: 'linkedin-login.mjs',
+    args: [],
+    probe: 'flags-only',
+  },
+  {
+    // Apply's employer-form lookup for a LinkedIn posting; the real run opens
+    // the posting in the signed-in crawl profile, so only the argv is probed.
+    source: 'web/src/lib/core-cli.ts',
+    argvSource: 'web/src/lib/apply/linkedin-apply.ts',
+    script: 'linkedin-apply.mjs',
+    args: ['--resolve', 'https://www.linkedin.com/jobs/view/4480683016/', '--json'],
+    probe: 'flags-only',
+  },
+  {
     source: 'web/src/lib/core/pipeline.ts',
     script: null,
     args: [],

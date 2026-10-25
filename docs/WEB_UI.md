@@ -22,6 +22,37 @@ The server starts locally on `http://127.0.0.1:3000` by default and automaticall
 
 ---
 
+## CV and context workspace
+
+Open **Context** to organize career records, or **CV** to edit the base CV. Both
+use the same Lexical editor. The page sidebar groups career context, achievements,
+targeting notes, CVs, professional examples and writing rules. Document headings
+appear as nested pages; search filters their titles while retaining their parents.
+
+Select a page to edit its body. Use **New child page**, **Rename page**, and the
+page move controls to organize sections. The editor provides formatting, lists,
+links, callouts, undo/redo, a `/` command menu and block reordering. **Save** writes
+the change; opening or navigating a saved document does not rewrite it.
+
+Markdown remains the source of truth. Context edits go to `modes/_context.md`,
+the base CV to `cv.md`, and the other documents retain their existing user-layer
+files. Editing a section preserves the rest of its document. Each replacement
+uses the existing atomic-write and backup helper. If another tool changed the
+file after it was opened, saving reports a conflict and retains the local draft.
+Unsaved text and page titles can be recovered in the same browser tab after
+navigation or reload. Recovery requires an explicit restore and retains the
+original file revision, so it cannot overwrite a newer file silently.
+
+Some Markdown, including tables and raw HTML, cannot yet round-trip safely through
+the visual editor. Those pages open in **Source** mode with the original text
+intact. Supported sections of the same document can still use visual editing.
+Context remains the authority for career facts; targeting notes, derived stories
+and procedural guidance keep their existing roles. This workspace does not sync
+or import Notion automatically. **Documents** and **Pipeline** remain the homes
+for generated files and applications.
+
+---
+
 ## Command-Line Options
 
 You can pass command-line options directly to `npm run ui`:

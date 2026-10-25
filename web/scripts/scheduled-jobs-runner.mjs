@@ -109,6 +109,51 @@ function numericFilter(value, fallback, minimum, maximum = Number.POSITIVE_INFIN
   return Math.min(maximum, Math.max(minimum, Math.round(number)));
 }
 
+const LINKEDIN_PROVIDER = "linkedin-browser";
+
+/** The job's list when it has one, else the list portals.yml already holds. */
+function keepUnlessSet(jobList, baseList) {
+  const set = Array.isArray(jobList) ? jobList.filter((v) => typeof v === "string" && v.trim()) : [];
+  if (set.length) return set;
+  return Array.isArray(baseList) ? baseList : [];
+}
+
+/**
+ * A LinkedIn-only schedule's portals overlay. The user's portals.yml filters
+ * stay in force; a field the schedule sets replaces only that filter. Searches
+ * the schedule did not choose are switched off for the run (a search that is
+ * off in portals.yml stays off).
+ */
+function linkedinOverlay(base, job) {
+  const filters = job.filters || {};
+  const title = base.title_filter || {};
+  base.title_filter = { ...title, positive: keepUnlessSet(filters.positive, title.positive), negative: keepUnlessSet(filters.negative, title.negative) };
+  if (!base.title_filter.positive.length) throw new Error("Scheduled scans require title keywords in the job or portals.yml title_filter.positive.");
+  const loc = base.location_filter || {};
+  base.location_filter = {
+    ...loc,
+    allow: keepUnlessSet(filters.allow, loc.allow),
+    block: keepUnlessSet(filters.block, loc.block),
+    block_hard: keepUnlessSet(filters.blockHard, loc.block_hard),
+    always_allow: keepUnlessSet(filters.alwaysAllow, loc.always_allow),
+  };
+  const chosen = Array.isArray(job.linkedin?.searches) ? job.linkedin.searches.filter((n) => typeof n === "string" && n.trim()).map((n) => n.trim()) : [];
+  const entries = Array.isArray(base.tracked_companies) ? base.tracked_companies : [];
+  let running = 0;
+  for (const entry of entries) {
+    if (!entry || typeof entry !== "object" || entry.provider !== LINKEDIN_PROVIDER) continue;
+    const on = entry.enabled !== false && (chosen.length === 0 || chosen.includes(String(entry.name ?? "").trim()));
+    if (!on) entry.enabled = false;
+    else running += 1;
+  }
+  if (running === 0) {
+    throw new Error(chosen.length
+      ? "None of the LinkedIn searches this schedule runs is on in portals.yml (renamed, removed or switched off). Edit the schedule."
+      : "No LinkedIn search is on in portals.yml. Add or switch one on in the LinkedIn page.");
+  }
+  return base;
+}
+
 export function buildScanCommand(job) {
   const filters = job.filters || {};
   const sinceDays = numericFilter(filters.sinceDays, 7, 1);
@@ -116,6 +161,16 @@ export function buildScanCommand(job) {
     return {
       script: "scan.mjs",
       args: ["--since", String(sinceDays), "--quiet"],
+    };
+  }
+  // The LinkedIn searches alone (the linkedin-browser entries of portals.yml),
+  // read through the signed-in crawl profile. Each search carries its own
+  // LinkedIn date window (f_TPR), so by default no --since narrows it.
+  if (job.engine === "linkedin") {
+    const window = job.linkedin?.useSearchWindow === false ? ["--since", String(sinceDays)] : [];
+    return {
+      script: "scan.mjs",
+      args: [...window, "--quiet", "--provider", LINKEDIN_PROVIDER],
     };
   }
 
@@ -147,6 +202,15 @@ function writeJobPortals(root, job) {
   const portalsPath = path.join(root, "portals.yml");
   const base = yaml.load(fs.readFileSync(portalsPath, "utf8"));
   if (!base || typeof base !== "object") throw new Error("portals.yml must contain a mapping");
+
+  if (job.engine === "linkedin") {
+    const overlay = linkedinOverlay(base, job);
+    const tempDir = path.join(root, "data", "tmp");
+    fs.mkdirSync(tempDir, { recursive: true });
+    const tempPath = path.join(tempDir, `scheduled-${job.id}-${randomUUID()}.yml`);
+    fs.writeFileSync(tempPath, yaml.dump(overlay, { lineWidth: 120, noRefs: true }), "utf8");
+    return tempPath;
+  }
 
   const filters = job.filters || {};
   const positive = Array.isArray(filters.positive)

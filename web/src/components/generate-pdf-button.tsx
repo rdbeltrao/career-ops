@@ -2,7 +2,7 @@
 
 import { useMemo } from "react";
 import Link from "next/link";
-import { FileDown, Loader2, FileText, RotateCcw, SlidersHorizontal, TriangleAlert } from "lucide-react";
+import { FileDown, Loader2, FileText, FilePenLine, RotateCcw, SlidersHorizontal, TriangleAlert } from "lucide-react";
 import { useJobs } from "@/components/jobs/job-store";
 import { CostBadge } from "@/components/cost/cost-badge";
 import { pdfButtonState, type PdfFailure } from "@/lib/pdf-button-state.mjs";
@@ -44,7 +44,13 @@ export function GeneratePdfButton({ n, company, pdfReady }: { n: string; company
           href={`/pipeline/${encodeURIComponent(n)}/cv-studio`}
           className="inline-flex items-center justify-center gap-1.5 rounded-full border border-brand/40 bg-brand-soft px-3 py-1 text-xs font-medium text-brand transition-colors hover:bg-brand-soft/70 max-sm:min-h-[44px]"
         >
-          <SlidersHorizontal className="size-3.5" /> Review and customize
+          <SlidersHorizontal className="size-3.5" /> Classic editor
+        </Link>
+        <Link
+          href={`/pipeline/${encodeURIComponent(n)}/cv-visual`}
+          className="inline-flex items-center justify-center gap-1.5 rounded-full border border-brand/40 bg-brand-soft px-3 py-1 text-xs font-medium text-brand transition-colors hover:bg-brand-soft/70 max-sm:min-h-[44px]"
+        >
+          <FilePenLine className="size-3.5" /> Visual PDF editor
         </Link>
         <button
           onClick={generate}
