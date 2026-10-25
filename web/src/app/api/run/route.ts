@@ -17,6 +17,7 @@ import { createCvEnvelopeFilter, type CvEnvelope } from "@/lib/cv-envelope.mjs";
 import { createReportEnvelopeFilter } from "@/lib/report-envelope.mjs";
 import { persistEvaluation, evaluateRunOutcome } from "@/lib/report-persist.mjs";
 import { buildPrompt, isShellSafeCompanyName } from "@/lib/run-prompts.mjs";
+import { prefetchJd } from "@/lib/jd-prefetch.mjs";
 import { parseCoverRequest } from "@/lib/cover-brief.mjs";
 import { capabilitiesFor } from "@/lib/worker-capabilities.mjs";
 import { fencingReport, isCliAllowedForCapabilities } from "@/lib/cli-fencing.mjs";
@@ -157,6 +158,24 @@ export async function POST(req: Request) {
   // The root is passed, not re-derived: a relative CAREER_OPS_PROFILE resolves
   // against it, and `process.cwd()` here is `<core>/web` (see cv-template.mjs).
   const cvTemplate = kind === "pdf" ? await resolveCvTemplate(careerOpsCodeRoot()) : undefined;
+  // Read the posting from its ATS's public API HERE, before the worker starts.
+  // The worker holds no Bash (#3629), so it cannot run fetch-jd.mjs itself, and
+  // WebFetch on a JavaScript-rendered board (Ashby, Workday, LinkedIn) returns an
+  // empty shell that the mode's "posting appears closed" rule then stops on: no
+  // report, for a posting that is live. A plain Node child, no agent involved. A
+  // miss leaves jdFile undefined and the prompt keeps its WebFetch path.
+  const jdPrefetch = kind === "evaluate"
+    ? await prefetchJd({
+      spawnFn: spawn,
+      execPath: process.execPath,
+      codeRoot,
+      dataRoot,
+      url: input,
+      outDir: path.join(/* turbopackIgnore: true */ dataRoot, ".career-ops-web", "jd-prefetch"),
+    })
+    : null;
+  const jdFile = jdPrefetch?.ok ? jdPrefetch.file : undefined;
+  const jdSource = jdPrefetch?.ok ? jdPrefetch.source : undefined;
   const prompt = buildPrompt({
     kind,
     input,
@@ -170,6 +189,8 @@ export async function POST(req: Request) {
     profile: profileRef(careerOpsRoot()),
     dataRoot: splitLayout ? dataRoot : undefined,
     contextLibrary,
+    jdFile,
+    jdSource,
   });
 
   const isClaude = cliId === "claude";
@@ -330,6 +351,14 @@ export async function POST(req: Request) {
       const fencing = fencingReport({ cliId, cliName: spec.name, capabilities: capabilitiesFor(kind) });
       if (fencing.notice) send({ type: "status", label: fencing.notice });
       if (substitution) send({ type: "status", label: substitution });
+      if (jdFile) {
+        send({
+          type: "status",
+          label: jdSource === "scan-store"
+            ? "Using the job description the scanner saved"
+            : "Read the posting from the ATS's public API",
+        });
+      }
       // Time-based keepalive. The stream is silent whenever the agent is thinking
       // or inside a long tool call, and in pdf mode it is silent for the whole
       // 15-25 KB <<cv-html>> envelope (cvFilter swallows every byte). Measured
