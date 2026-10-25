@@ -1567,12 +1567,13 @@ process_offer() {
   # The resolved prompt is gitignored runtime state, so user profile data stays
   # out of the system layer while batch scoring matches interactive scoring.
   # modes/_context.md rides between the profile and the house rules, the order
-  # the router loads them in: it is the candidate's fit profile, the context
-  # tier of the Source-of-Truth Boundary (qualitative facts are evidence for
-  # the evaluation, numbers are targeting only, never a source for the CV).
-  # The context file is pasted number-masked (node context-evidence.mjs), so a
-  # figure that lives only there never reaches the worker; when the masking
-  # script is missing from this checkout the raw file is used and a line says so.
+  # the router loads them in: it is the source of truth about the candidate
+  # under the Source-of-Truth Boundary (every fact and figure in it is
+  # evidence, cited as _context.md:; cv.md is a tailored rendering of it).
+  # The context file is pasted through node context-evidence.mjs, which prints
+  # it as written under a one-line notice so every path gets the same view
+  # (masking as [n] is opt-in via CAREER_OPS_MASK_CONTEXT=1); when the script
+  # is missing from this checkout the file is pasted directly and a line says so.
   for context_file in "$DATA_ROOT/modes/_profile.md" "$PROFILE_FILE" "$DATA_ROOT/modes/_context.md" "$DATA_ROOT/modes/_custom.md"; do
     if [[ -f "$context_file" ]]; then
       {
@@ -1581,7 +1582,7 @@ process_offer() {
         if [[ "$context_file" == "$DATA_ROOT/modes/_context.md" && -f "$PROJECT_DIR/context-evidence.mjs" ]]; then
           node "$PROJECT_DIR/context-evidence.mjs" --file "$context_file" | sed 's/^/    /'
         else
-          [[ "$context_file" == "$DATA_ROOT/modes/_context.md" ]] && echo "context: context-evidence.mjs not found — pasting modes/_context.md unmasked" >&2
+          [[ "$context_file" == "$DATA_ROOT/modes/_context.md" ]] && echo "context: context-evidence.mjs not found — pasting modes/_context.md directly, without its notice" >&2
           sed 's/^/    /' "$context_file"
         fi
         printf '\n'

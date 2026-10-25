@@ -211,19 +211,19 @@ After determining the mode, load the necessary files before executing:
 
 If `modes/_custom.md` exists, read it after `modes/_profile.md` and before the selected mode file. It contains user house rules and procedural preferences. It may override workflow/style defaults, but it never adds factual claims about the candidate.
 
-If `modes/_context.md` exists, read it after `modes/_profile.md` and before `modes/_custom.md`, for the shared-context modes and the standalone modes alike, and read it through `node context-evidence.mjs` (run from `PROJECT_ROOT`), never the raw file: the command prints the file with every quantity masked as `[n]`, so a figure that lives only there cannot reach a report, and any figure you still see came from `cv.md` or `article-digest.md`. It is the candidate's fit profile (target role, location and language, preferences, deal-breakers, experience, technical tiers, match signals): the context tier of the Source-of-Truth Boundary in `AGENTS.md` — its qualitative facts are evidence for the evaluation (Block B rows, archetype and level calls, interview framing, gap mitigation, cited as `_context.md:`), its numbers are targeting only, and nothing in it is a fact for a CV, a letter or a form answer. When it is absent, say so in one line and continue on `cv.md` and `config/profile.yml`.
+If `modes/_context.md` exists, read it after `modes/_profile.md` and before `modes/_custom.md`, for the shared-context modes and the standalone modes alike, and read it through `node context-evidence.mjs` (run from `PROJECT_ROOT`), never the raw file: the command prints the file as written under a one-line notice, so every path gets the same view (masking every quantity as `[n]` is an opt-in, `--mask` or `CAREER_OPS_MASK_CONTEXT=1`, for a user whose context still holds unresolved figures). It is the source of truth about the candidate — the record of what they have done (target role, location and language, preferences, deal-breakers, experience, technical tiers, match signals) — and it is read FIRST among the candidate files: every fact and figure in it is evidence for the evaluation (Block B rows, archetype and level calls, interview framing, gap mitigation, cited as `_context.md:`), `cv.md` is a tailored rendering of it, and when the two disagree the context wins and `cv.md` is the file to fix. Candidate-facing text (CV, letter, form answer, outreach) may take facts from it; a figure the file itself marks as held for confirmation, approximate or "not a claim" stays out of candidate-facing text (`AGENTS.md` → Source-of-Truth Boundary → Context file). When it is absent, say so in one line and continue on `cv.md` and `config/profile.yml`.
 
 Resolve `language.modes_dir` before applying the path shorthand below. With no setting, use `modes`. With a scalar directory, preserve the existing behavior: use that directory's `_shared.md` and localized mode file when it provides one. With a list, load every declared directory's `_shared.md` exactly once (including the baseline `modes/_shared.md` when `modes` appears), but use only the FIRST entry's evaluation-mode file for Blocks A-F; later entries contribute context, never a competing evaluation file. User-layer `_profile.md` and `_custom.md` remain under `modes/` in `DATA_ROOT`.
 
 ### Modes that require `_shared.md` + their mode file
 
-Read the resolved shared context (default `modes/_shared.md`) + `modes/_profile.md` (if exists) + `modes/_context.md` (if exists; context tier: qualitative facts are evidence for the evaluation, numbers and candidate-facing text are not) + `modes/_custom.md` (if exists) + the resolved selected mode file (default `modes/{mode}.md`). For an A-F evaluation, that selected file is the primary directory's evaluation mode; do not also load an evaluation file from a secondary directory.
+Read the resolved shared context (default `modes/_shared.md`) + `modes/_profile.md` (if exists) + `modes/_context.md` (if exists; the source of truth about the candidate: every fact and figure in it is evidence, cited as `_context.md:`) + `modes/_custom.md` (if exists) + the resolved selected mode file (default `modes/{mode}.md`). For an A-F evaluation, that selected file is the primary directory's evaluation mode; do not also load an evaluation file from a secondary directory.
 
 Applies to: `auto-pipeline`, `oferta`, `ofertas`, `pdf`, `text`, `contacto`, `apply`, `pipeline`, `scan`, `batch`
 
 ### Standalone modes with profile and custom context
 
-Read `modes/_profile.md` (if exists) + `modes/_context.md` (if exists; context tier, see above) + `modes/_custom.md` (if exists) + `modes/{mode}.md`
+Read `modes/_profile.md` (if exists) + `modes/_context.md` (if exists; the source of truth about the candidate, see above) + `modes/_custom.md` (if exists) + `modes/{mode}.md`
 
 Applies to: `tracker`, `agent-inbox`, `deep`, `interview-prep`, `interview`, `master-profile`, `regional/eu-swe`, `interview/plan`, `interview/practice`, `interview/debrief`, `latex`, `latex-tex`, `training`, `project`, `patterns`, `titles`, `upskill`, `followup`, `reply-watch`, `outcome`, `cover`, `email`, `add`, `offer-prep`, `discover`, `intake`, `ats`, `calibrate`, `retro`, `expand`, `interview-redflag`, `update`, `notion-sync`, `network`, `engage`
 
@@ -236,12 +236,12 @@ Applies to: `triage`
 
 ### Modes delegated to subagent
 
-For `scan`, `apply` (with Playwright), and `pipeline` (3+ URLs): launch as a worker/subagent with the resolved shared context + `_profile.md` (if exists) + `_context.md` (if exists; context tier) + `_custom.md` (if exists) + the resolved selected mode file injected into the worker prompt. If your CLI exposes an `Agent(...)` primitive, the call looks like this:
+For `scan`, `apply` (with Playwright), and `pipeline` (3+ URLs): launch as a worker/subagent with the resolved shared context + `_profile.md` (if exists) + `_context.md` (if exists; the source of truth about the candidate) + `_custom.md` (if exists) + the resolved selected mode file injected into the worker prompt. If your CLI exposes an `Agent(...)` primitive, the call looks like this:
 
 ```python
 Agent(
   subagent_type="general-purpose",
-  prompt="[output language directive]\n\n[content of modes/_shared.md, or resolved shared context: every declared _shared.md once]\n\n[content of modes/_profile.md if exists]\n\n[output of `node context-evidence.mjs` if modes/_context.md exists — context tier, numbers masked as [n]: qualitative facts are evidence for the evaluation, never a source for candidate-facing text]\n\n[content of modes/_custom.md if exists]\n\n[content of modes/{mode}.md, or resolved selected mode file; primary evaluation file for Blocks A-F]\n\n[invocation-specific data]",
+  prompt="[output language directive]\n\n[content of modes/_shared.md, or resolved shared context: every declared _shared.md once]\n\n[content of modes/_profile.md if exists]\n\n[output of `node context-evidence.mjs` if modes/_context.md exists — the source of truth about the candidate, read first: every fact and figure in it is evidence, cited as _context.md:; cv.md is a tailored rendering of it]\n\n[content of modes/_custom.md if exists]\n\n[content of modes/{mode}.md, or resolved selected mode file; primary evaluation file for Blocks A-F]\n\n[invocation-specific data]",
   description="career-ops {mode}"
 )
 ```
