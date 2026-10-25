@@ -58,6 +58,7 @@ export function ReportView({
   backHref = "/pipeline",
   applyHref,
   reportNum = null,
+  linkedinApply = null,
 }: {
   id: string;
   app: Application | null;
@@ -74,6 +75,8 @@ export function ReportView({
   backHref?: string;
   applyHref?: string;
   reportNum?: number | null;
+  /** The posting's entry in data/linkedin-apply.json, when the report URL is a LinkedIn posting. */
+  linkedinApply?: { applyUrl: string; kind: string } | null;
 }) {
   const meta = report ? parseReport(report) : null;
   const field = (label: string) => meta?.fields.find((f) => f.label === label)?.value;
@@ -90,8 +93,9 @@ export function ReportView({
   const recommended = line === "Recommended";
   const quietApply = applyCtaQuiet({ score, legitimacy: meta?.legitimacy });
   const applyUrl = httpUrl(url);
-  // A login-gated board (LinkedIn, Indeed, ...) opens in the user's own browser.
-  const target = applyTarget(applyUrl);
+  // A LinkedIn posting with a known employer form opens that form in the proxy;
+  // Easy Apply and other login-gated boards open in the user's own browser.
+  const target = applyTarget(applyUrl, linkedinApply);
   const pdfReady = (app?.pdf ?? "").includes("✅") || pdfReadyFromIndex;
   const company = app ? companyPresentation(app) : null;
   const companyName = company?.label ?? app?.company ?? meta?.title ?? id;
@@ -210,8 +214,7 @@ export function ReportView({
                     url={applyUrl}
                     company={companyName}
                     quiet={quietApply}
-                    direct={target.kind === "direct"}
-                    host={target.kind === "none" ? undefined : target.host}
+                    target={target}
                   />
                 </div>
               </div>
