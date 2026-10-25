@@ -15,7 +15,17 @@
  *       provider: linkedin-browser
  *       search_url: "https://www.linkedin.com/jobs/search/?f_TPR=r604800&geoId=101282230&keywords=Engineering%20Manager&sortBy=DD"
  *       max_pages: 3        # optional, 25 cards per page, default 3
+ *       resolve_apply_url: true  # optional, default true (see below)
  *       enabled: true
+ *
+ * Apply links: the pane says whether a posting is Easy Apply or applied "on
+ * company website", but carries no URL for the latter. For an offsite posting
+ * the walk opens /jobs/view/{id}/ in a second tab, paced like a card, and reads
+ * the employer URL from its apply link (lib/linkedin-apply.mjs). The job keeps
+ * its LinkedIn `url` and `externalId` and gains `applyUrl` / `applyKind`; the
+ * JD capture gains `apply_url`; {DATA_ROOT}/data/linkedin-apply.json keeps
+ * id, board link and employer URL together for the web Apply button.
+ * `resolve_apply_url: false` skips the extra page.
  *
  * The browser is a persistent Chromium profile at LINKEDIN_PROFILE_DIR or
  * ~/.job-hunt/browser-profile (sign in once with `node linkedin-login.mjs`),
@@ -40,6 +50,7 @@ import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { decodeEntities } from '../providers/_html-entities.mjs';
 import { getCareerOpsRoot } from '../path-resolver.mjs';
+import { applyKindFromHtml, offsiteApplyUrlFromHtml, recordApply } from '../lib/linkedin-apply.mjs';
 
 export const SOURCE = 'linkedin-browser';
 export const PAGE_SIZE = 25;
@@ -748,12 +759,19 @@ export function guessWorkplace(...texts) {
  * detail wins for every field it carries; the card fills the rest. `jd` is
  * the C6 job object scan.mjs stores for jev-rank.mjs, present only when a
  * description was read.
+ *
+ * `apply` is what the apply step found (lib/linkedin-apply.mjs): `applyKind`
+ * ("offsite" or "easy-apply") and, for an offsite posting, `applyUrl`, the
+ * employer's own application page. The LinkedIn link stays the job's `url` and
+ * the LinkedIn id its `externalId`; the employer URL rides beside them, and is
+ * left out entirely when there is none.
  * @param {Card} card
  * @param {Detail|null} detail
  * @param {{ name?: string }} entry
+ * @param {{ applyUrl?: string|null, applyKind?: string }} [apply]
  * @returns {Job & Record<string, unknown>}
  */
-export function buildJob(card, detail, entry) {
+export function buildJob(card, detail, entry, apply = {}) {
   const d = detail ?? null;
   const title = d?.title || card.title;
   const company = d?.company || card.company;
@@ -782,6 +800,8 @@ export function buildJob(card, detail, entry) {
   };
   const postedAt = isoDateToEpochMs(postedDate);
   if (postedAt !== undefined) job.postedAt = postedAt;
+  if (apply?.applyKind) job.applyKind = apply.applyKind;
+  if (apply?.applyUrl) job.applyUrl = apply.applyUrl;
   if (description) {
     job.jd = {
       url,
@@ -797,6 +817,7 @@ export function buildJob(card, detail, entry) {
       source_id: card.id,
       search_name: searchName,
     };
+    if (job.applyUrl) job.jd.apply_url = job.applyUrl;
   }
   return job;
 }
@@ -1017,6 +1038,43 @@ async function openDetail(page, jobId) {
   return firstInnerHtml(page, DETAIL_PANE_SELECTORS);
 }
 
+// The apply link of a signed-in posting page (lib/linkedin-apply.mjs has the
+// markup), or the control that says the posting is Easy Apply.
+const POSTING_APPLY_SELECTOR = [
+  'a[aria-label*="company website" i]',
+  'a[href*="/safety/go/"]',
+  'a[href*="/jobs/view/externalApply/"]',
+  'button.jobs-apply-button',
+  '[aria-label*="Easy Apply" i]',
+].join(', ');
+
+/**
+ * Read one posting's apply method from its own page, opened in a second tab of
+ * the signed-in context so the search page underneath keeps its place. The
+ * search pane shows an offsite button with no URL; the posting page links the
+ * employer's application through LinkedIn's safety/go redirect.
+ *
+ * A login, checkpoint or authwall redirect halts the run like every other page.
+ * @param {import('playwright').BrowserContext} context
+ * @param {string} jobId
+ * @returns {Promise<{ applyUrl: string|null, applyKind: 'offsite'|'easy-apply'|'' }>}
+ */
+export async function readPostingApply(context, jobId) {
+  const page = await context.newPage();
+  try {
+    await page.goto(canonicalJobUrl(jobId), { waitUntil: 'domcontentloaded' });
+    if (isLoginWall(page.url())) throw halt(page.url());
+    await page.waitForSelector(POSTING_APPLY_SELECTOR, { timeout: 8000 }).catch(() => {});
+    await page.waitForTimeout(Math.round(randomBetween(400, 900)));
+    if (isLoginWall(page.url())) throw halt(page.url());
+    const html = await page.content();
+    dump(`posting-${jobId}.html`, html);
+    return { applyUrl: offsiteApplyUrlFromHtml(html), applyKind: applyKindFromHtml(html) };
+  } finally {
+    await page.close().catch(() => {});
+  }
+}
+
 function dump(name, html) {
   const dir = process.env.LINKEDIN_DUMP_DIR?.trim();
   if (!dir) return;
@@ -1030,8 +1088,11 @@ function dump(name, html) {
  * joins the store once its pane gave a description (not under dryRun, which
  * must not consume postings the pipeline never received).
  */
-async function walkSearch(page, { entry, searchUrl, maxPages, seenPath, dryRun }) {
+async function walkSearch(page, { entry, searchUrl, maxPages, seenPath, dryRun, applyRoot = getCareerOpsRoot() }) {
   const name = String(entry.name ?? '');
+  // `resolve_apply_url: false` on the portals.yml entry skips the posting-page
+  // visit that reads an offsite employer URL.
+  const resolveApplyUrl = entry.resolve_apply_url !== false;
   const seen = loadSeen(seenPath);
   const seenThisRun = new Set();
   /** @type {Job[]} */
@@ -1063,15 +1124,37 @@ async function walkSearch(page, { entry, searchUrl, maxPages, seenPath, dryRun }
     for (const card of fresh) {
       await sleepRandom(CARD_WAIT_MS);
       let detail = null;
+      let apply = { applyUrl: null, applyKind: '' };
       try {
         const detailHtml = await openDetail(page, card.id);
         dump(`${name}-${card.id}-detail.html`, detailHtml);
         detail = parseDetail(detailHtml);
+        apply.applyKind = applyKindFromHtml(detailHtml);
       } catch (err) {
         if (err instanceof LoginRequiredError) throw err;
         log(`detail for ${card.id} failed: ${err.message}`);
       }
-      jobs.push(buildJob(card, detail, entry));
+      // The pane says "on company website" but carries no URL; the posting page
+      // does. One more page, paced like the cards, only for offsite postings.
+      if (apply.applyKind === 'offsite' && resolveApplyUrl) {
+        await sleepRandom(CARD_WAIT_MS);
+        try {
+          const read = await readPostingApply(page.context(), card.id);
+          apply = { applyUrl: read.applyUrl, applyKind: read.applyKind || apply.applyKind };
+          if (!read.applyUrl) log(`no employer apply link found for ${card.id}`);
+        } catch (err) {
+          if (err instanceof LoginRequiredError) throw err;
+          log(`apply link for ${card.id} failed: ${err.message}`);
+        }
+      }
+      if (apply.applyKind && !dryRun) {
+        try {
+          recordApply(applyRoot, { id: card.id, applyUrl: apply.applyUrl, kind: apply.applyKind });
+        } catch (err) {
+          log(`could not record the apply link for ${card.id}: ${err.message}`);
+        }
+      }
+      jobs.push(buildJob(card, detail, entry, apply));
       if (detail?.description && !dryRun) {
         seen.add(card.id);
         saveSeen(seen, seenPath);

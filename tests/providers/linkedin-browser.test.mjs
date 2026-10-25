@@ -459,3 +459,24 @@ test('node linkedin-login.mjs --help prints usage and exits 0 without opening a 
   const src = readFileSync(script, 'utf-8');
   assert.ok(!/password|credential\s*=|\.fill\(|\.type\(/i.test(src.replace(/^\s*(\/\/|\*).*$/gm, '').replace(/`[\s\S]*?`/g, '')), 'the script never types or reads a credential');
 });
+
+test('buildJob keeps the LinkedIn link and id beside the employer apply URL the crawl read', () => {
+  const card = parseCards(fixture('list.html'))[1];
+  const detail = parseDetail(fixture('detail.html'), { now: NOW });
+  const apply = { applyUrl: 'https://jobs.ashbyhq.com/acme/1/application', applyKind: 'offsite' };
+  const job = buildJob(card, detail, { name: 'em-germany-24h' }, apply);
+  assert.equal(job.url, 'https://www.linkedin.com/jobs/view/4477001122/', 'the board link stays the posting URL');
+  assert.equal(job.externalId, '4477001122', 'the LinkedIn id stays');
+  assert.equal(job.applyUrl, 'https://jobs.ashbyhq.com/acme/1/application');
+  assert.equal(job.applyKind, 'offsite');
+  assert.equal(job.jd.apply_url, 'https://jobs.ashbyhq.com/acme/1/application');
+  assert.equal(job.jd.url, 'https://www.linkedin.com/jobs/view/4477001122/');
+
+  const easy = buildJob(card, detail, { name: 's' }, { applyUrl: '', applyKind: 'easy-apply' });
+  assert.equal(easy.applyKind, 'easy-apply');
+  assert.equal('applyUrl' in easy, false, 'no employer URL, no field');
+  assert.equal('apply_url' in easy.jd, false);
+
+  const plain = buildJob(card, detail, { name: 's' });
+  assert.equal('applyUrl' in plain || 'applyKind' in plain, false, 'a job read without the apply step is unchanged');
+});
