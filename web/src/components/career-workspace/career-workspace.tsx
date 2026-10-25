@@ -3,12 +3,14 @@
 import dynamic from "next/dynamic";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ArrowDown, ArrowUp, BookOpen, Check, ChevronRight, Files, ListChecks, Loader2, PanelLeft, Pencil, Plus, X } from "lucide-react";
 import { SkillGaps } from "@/components/skill-gaps";
 import { cn } from "@/lib/cn";
 import { collapsedPageKeys, collapsedSourcePageIds, initialWorkspaceDocument, navigationSections, pageBreadcrumbs, selectedPageContent, siblingAvailability, sourcePageBreadcrumbs, sourcePageMovement, workspaceNavigationDocuments } from "@/lib/workspace-view.mjs";
 import { workspaceDrafts } from "@/lib/workspace-drafts.mjs";
+import { documentOutline, wholeDocumentDraft } from "@/lib/document-outline.mjs";
+import { DocumentOutline, type OutlineSection } from "./document-outline";
 import { PageTree } from "./page-tree";
 import { SourcePageTree } from "./source-page-tree";
 import { UnsavedDialog } from "./unsaved-dialog";
@@ -57,6 +59,7 @@ export function CareerWorkspace({ initialDocument = "context" }: { initialDocume
   const [documents, setDocuments] = useState<WorkspaceDocumentSummary[]>([]);
   const [current, setCurrent] = useState<WorkspaceDocument | null>(null);
   const [sectionId, setSectionId] = useState<string | null>(null);
+  const [sectionTarget, setSectionTarget] = useState<(OutlineSection & { request: number }) | null>(null);
   const [draft, setDraft] = useState("");
   const [original, setOriginal] = useState("");
   const [editorVersion, setEditorVersion] = useState(0);
@@ -90,6 +93,8 @@ export function CareerWorkspace({ initialDocument = "context" }: { initialDocume
   const busy = loading || saving;
   const selected = current?.sections.find((section) => section.id === sectionId) ?? null;
   const isSource = current?.kind === "source";
+  const isCv = initialDocument === "cv";
+  const outline = useMemo(() => isCv ? documentOutline(draft) : [], [isCv, draft]);
   const formDirty = Boolean(form && (form.kind === "add" ? form.title.trim() : form.title !== (isSource ? current?.title : selected?.title)));
   const hasEdits = dirty || formDirty;
   dirtyRef.current = hasEdits;
@@ -100,13 +105,14 @@ export function CareerWorkspace({ initialDocument = "context" }: { initialDocume
   const trust = current ? TRUST[current.id] : undefined;
 
   const acceptDocument = useCallback((document: WorkspaceDocument, nextSection: string | null) => {
-    const validSection = document.sections.some((section) => section.id === nextSection) ? nextSection : null;
+    const validSection = document.id !== "cv" && document.sections.some((section) => section.id === nextSection) ? nextSection : null;
     const content = selectedPageContent(document, validSection);
     currentRef.current = document;
     sectionRef.current = validSection;
     dirtyRef.current = false;
     setCurrent(document);
     setSectionId(validSection);
+    setSectionTarget(null);
     setDraft(content);
     setOriginal(content);
     setEditorVersion((version) => version + 1);
@@ -293,17 +299,20 @@ export function CareerWorkspace({ initialDocument = "context" }: { initialDocume
 
   function restoreDraft() {
     if (!current || !recovered || (recovered.section && !current.sections.some((page) => page.id === recovered.section))) return;
+    let restoredDraft = recovered;
+    try { if (isCv) restoredDraft = wholeDocumentDraft(current, recovered) as RecoveredDraft; }
+    catch (problem) { setError(problem instanceof Error ? problem.message : "The recovered section could not be restored. Copy its text before continuing."); return; }
     const revisionChanged = current.revision !== recovered.revision;
     const restored = { ...current, revision: recovered.revision };
     currentRef.current = restored;
-    sectionRef.current = recovered.section;
+    sectionRef.current = restoredDraft.section;
     setCurrent(restored);
-    setSectionId(recovered.section);
-    setCollapsed(collapsedPageKeys(documentsRef.current, { document: current.id, section: recovered.section }));
+    setSectionId(restoredDraft.section);
+    setCollapsed(collapsedPageKeys(documentsRef.current, { document: current.id, section: restoredDraft.section }));
     setCollapsedSources(collapsedSourcePageIds(documentsRef.current, current.kind === "source" ? current.id : null));
-    setDraft(recovered.content);
-    setOriginal(recovered.original);
-    setForm(recovered.form);
+    setDraft(restoredDraft.content);
+    setOriginal(restoredDraft.original);
+    setForm(restoredDraft.form);
     setEditorVersion((version) => version + 1);
     setRecovered(null);
     setConflict(revisionChanged);
@@ -324,7 +333,7 @@ export function CareerWorkspace({ initialDocument = "context" }: { initialDocume
   const selection = { document: current?.id || initialDocument, section: sectionId };
   const button = "inline-flex min-h-9 items-center justify-center gap-1.5 rounded-lg border border-border bg-surface px-3 py-1.5 text-sm text-muted transition-colors hover:bg-surface-hover focus-visible:outline-2 focus-visible:outline-brand disabled:opacity-40";
   const toggleCollapsed = (setter: typeof setCollapsed, key: string) => setter((previous) => { const next = new Set(previous); if (next.has(key)) next.delete(key); else next.add(key); return next; });
-  const pageTree = <>
+  const pageTree = isCv ? <DocumentOutline sections={outline} selected={sectionTarget?.id || null} query={query} busy={busy || Boolean(recovered)} onQuery={setQuery} onSelect={(section) => { setMobilePages(false); setSectionTarget((previous) => ({ ...section, request: (previous?.request || 0) + 1 })); }} /> : <>
     {indexError ? <div role="alert" className="p-2 text-sm text-muted"><p>{indexError}</p><button type="button" onClick={() => void loadIndex(!current)} className={cn(button, "mt-3")}>Retry page list</button></div> : !documents.length && loading ? <p role="status" className="p-2 text-sm text-muted">Loading pages…</p> : <>
       {initialDocument === "context" && sourceError && <div role="alert" className="mb-4 p-2 text-sm text-muted"><p>{sourceError}</p><button type="button" onClick={() => void loadIndex(!current)} className={cn(button, "mt-3")}>Retry pages</button></div>}
       {hasContextPages ? <SourcePageTree documents={navigationDocuments} selectedDocument={isSource ? current?.id || null : null} collapsed={collapsedSources} query={query} busy={busy} onQuery={setQuery} onToggle={(id) => toggleCollapsed(setCollapsedSources, id)} onSelect={(document) => selectPage({ document, section: null })} /> : !(initialDocument === "context" && sourceError) && <PageTree documents={navigationDocuments} selected={selection} collapsed={collapsed} query={query} busy={busy} onQuery={setQuery} onToggle={(key) => toggleCollapsed(setCollapsed, key)} onSelect={selectPage} />}
@@ -341,21 +350,23 @@ export function CareerWorkspace({ initialDocument = "context" }: { initialDocume
         </div>
       </div>
 
-      <button type="button" onClick={() => setMobilePages(true)} aria-expanded={mobilePages} aria-controls="workspace-pages-drawer" className={cn(button, "mb-4 xl:hidden")}><PanelLeft aria-hidden="true" className="size-4" />Show pages</button>
+      {isCv && indexError && <div role="alert" className="mb-4 text-sm text-muted"><p>{indexError}</p><button type="button" onClick={() => void loadIndex(!current)} className={cn(button, "mt-3")}>Retry opening document</button></div>}
 
-      <dialog ref={pagesDialog} id="workspace-pages-drawer" aria-label="Workspace page navigation" onClose={() => setMobilePages(false)} onCancel={() => setMobilePages(false)} onClick={(event) => { if (event.target === event.currentTarget) setMobilePages(false); }} className="fixed inset-y-0 left-0 right-auto m-0 h-dvh max-h-none w-[min(360px,calc(100vw-2rem))] max-w-none border-r border-border bg-background p-0 text-foreground shadow-xl backdrop:bg-black/40 open:flex open:flex-col">
-        <div className="flex shrink-0 items-center justify-between border-b border-border px-4 py-3"><h2 className="text-sm font-medium">Pages</h2><button type="button" aria-label="Hide pages" onClick={() => setMobilePages(false)} className={button}><X aria-hidden="true" className="size-4" /></button></div>
+      <button type="button" onClick={() => setMobilePages(true)} aria-expanded={mobilePages} aria-controls="workspace-pages-drawer" className={cn(button, "mb-4 xl:hidden")}><PanelLeft aria-hidden="true" className="size-4" />{isCv ? "Show sections" : "Show pages"}</button>
+
+      <dialog ref={pagesDialog} id="workspace-pages-drawer" aria-label={isCv ? "Document section navigation" : "Workspace page navigation"} onClose={() => setMobilePages(false)} onCancel={() => setMobilePages(false)} onClick={(event) => { if (event.target === event.currentTarget) setMobilePages(false); }} className="fixed inset-y-0 left-0 right-auto m-0 h-dvh max-h-none w-[min(360px,calc(100vw-2rem))] max-w-none border-r border-border bg-background p-0 text-foreground shadow-xl backdrop:bg-black/40 open:flex open:flex-col">
+        <div className="flex shrink-0 items-center justify-between border-b border-border px-4 py-3"><h2 className="text-sm font-medium">{isCv ? "Sections" : "Pages"}</h2><button type="button" aria-label={isCv ? "Hide sections" : "Hide pages"} onClick={() => setMobilePages(false)} className={button}><X aria-hidden="true" className="size-4" /></button></div>
         <div className="overflow-y-auto p-4">{pageTree}</div>
       </dialog>
 
       <div className="grid min-w-0 gap-8 xl:grid-cols-[304px_minmax(0,1fr)] 2xl:grid-cols-[320px_minmax(0,1fr)]">
         <aside id="workspace-sidebar" aria-label="Workspace sidebar" className="sticky top-6 hidden max-h-[calc(100dvh-3rem)] min-w-0 self-start overflow-y-auto rounded-2xl border border-border bg-surface/50 p-4 xl:block">
-          <h2 className="mb-4 px-2 text-sm font-medium">Pages</h2>
+          <h2 className="mb-4 px-2 text-sm font-medium">{isCv ? "In this document" : "Pages"}</h2>
           {pageTree}
         </aside>
 
-        <section aria-label="Page editor" aria-busy={busy} className="min-w-0">
-          <nav aria-label="Page breadcrumbs" className="mb-4 flex flex-wrap items-center gap-1 text-xs text-muted">
+        <section aria-label={isCv ? "Document editor" : "Page editor"} aria-busy={busy} className="min-w-0">
+          <nav aria-label={isCv ? "Document breadcrumbs" : "Page breadcrumbs"} className="mb-4 flex flex-wrap items-center gap-1 text-xs text-muted">
             <BookOpen aria-hidden="true" className="mr-1 size-3.5" />
             {initialDocument === "context" && <span>Context</span>}
             {isSource ? sourceTrail.map((page) => <span key={page.id} className="inline-flex min-w-0 items-center gap-1"><ChevronRight aria-hidden="true" className="size-3 shrink-0" /><button type="button" title={page.title} aria-current={page.id === current?.id ? "page" : undefined} disabled={busy} onClick={() => selectPage({ document: page.id, section: null })} className="rounded px-1 py-1 text-left break-words hover:text-foreground focus-visible:outline-2 focus-visible:outline-brand">{page.title}</button></span>) : current && <><ChevronRight aria-hidden="true" className="size-3 shrink-0" /><button type="button" disabled={busy} onClick={() => selectPage({ document: current.id, section: null })} className="rounded px-1 py-1 hover:text-foreground focus-visible:outline-2 focus-visible:outline-brand">{current.title}</button>{trail.map((page) => <span key={page.id} className="inline-flex min-w-0 items-center gap-1"><ChevronRight aria-hidden="true" className="size-3 shrink-0" /><button type="button" title={page.title} aria-current={page.id === sectionId ? "page" : undefined} disabled={busy} onClick={() => selectPage({ document: current.id, section: page.id })} className="rounded px-1 py-1 text-left break-words hover:text-foreground focus-visible:outline-2 focus-visible:outline-brand">{page.title}</button></span>)}</>}
@@ -382,7 +393,7 @@ export function CareerWorkspace({ initialDocument = "context" }: { initialDocume
               </select>
             </div>}
             {current && current.id !== "cv" && <button type="button" disabled={busy || Boolean(recovered) || Boolean(current.outlineWarning) || Boolean(selected && selected.level >= 6)} onClick={() => startForm("add")} className={button}><Plus aria-hidden="true" className="size-3.5" />{selected || isSource ? "New child page" : "New page"}</button>}
-            {(selected || isSource) && <>
+            {!isCv && (selected || isSource) && <>
               <button type="button" disabled={busy || Boolean(recovered) || Boolean(current?.outlineWarning)} onClick={() => startForm("rename")} className={button}><Pencil aria-hidden="true" className="size-3.5" />Rename page</button>
               <span className="inline-flex shrink-0 gap-2">
                 <button type="button" aria-label="Move page up" disabled={busy || Boolean(recovered) || !movement.up || Boolean(current?.outlineWarning)} onClick={() => beforeAction(() => void mutate({ action: "move", direction: "up" }))} className={button}><ArrowUp aria-hidden="true" className="size-3.5" /></button>
@@ -406,13 +417,13 @@ export function CareerWorkspace({ initialDocument = "context" }: { initialDocume
             <details className="mt-3"><summary className="cursor-pointer text-sm text-muted">Preview recovered draft</summary><textarea aria-label="Recovered draft text" readOnly value={recovered.content} className="mt-2 min-h-40 w-full rounded-lg border border-border bg-surface p-3 font-mono text-xs text-foreground" />{recovered.form && <p className="mt-2 text-sm text-muted">Pending page title: {recovered.form.title}</p>}</details>
             <div className="mt-3 flex flex-wrap gap-2"><button type="button" disabled={busy || Boolean(recovered.section && !current?.sections.some((page) => page.id === recovered.section))} onClick={restoreDraft} className={button}>Restore draft</button><button type="button" disabled={busy} onClick={discardRecoveredDraft} className={button}>Discard recovered draft</button></div>
           </section>}
-          {current?.outlineWarning && <p role="note" className="mb-4 rounded-xl border border-border bg-surface-hover px-4 py-3 text-sm text-muted">{current.outlineWarning} Page organization is paused; edit the complete document to preserve its structure.</p>}
+          {current?.outlineWarning && <p role="note" className="mb-4 rounded-xl border border-border bg-surface-hover px-4 py-3 text-sm text-muted">{current.outlineWarning} {isCv ? "Section navigation is unavailable; edit the complete document." : "Page organization is paused; edit the complete document to preserve its structure."}</p>}
           {recoveryWarning && hasEdits && <p role="note" className="mb-4 text-xs text-muted">Browser storage is unavailable. Your draft can recover during app navigation, but save before closing or reloading this tab.</p>}
-          <p role="status" aria-live="polite" aria-atomic="true" aria-label="Page save status" className="mb-3 min-h-5 text-xs text-muted">{saving ? "Saving your page…" : loading ? "Opening page…" : hasEdits ? "Unsaved changes" : notice || (current ? "All changes saved" : "No page open")}</p>
+          <p role="status" aria-live="polite" aria-atomic="true" aria-label={isCv ? "Document save status" : "Page save status"} className="mb-3 min-h-5 text-xs text-muted">{saving ? isCv ? "Saving your document…" : "Saving your page…" : loading ? isCv ? "Opening document…" : "Opening page…" : hasEdits ? "Unsaved changes" : notice || (current ? "All changes saved" : isCv ? "No document open" : "No page open")}</p>
 
           {current && <div className={cn("min-w-0 rounded-2xl border border-border bg-surface", loading && "opacity-60")}>
-            {!current.exists && <p className="border-b border-border px-5 py-3 text-sm text-muted">This document is empty. Start writing or add your first page.</p>}
-            <MarkdownEditor value={draft} linkPages={documents} onChange={(value) => { if (!busy && !form && !recovered) { setDraft(value); setNotice(""); } }} documentKey={`${current.id}:${sectionId || "root"}:${editorVersion}`} disabled={busy || Boolean(form) || Boolean(recovered)} />
+            {!current.exists && <p className="border-b border-border px-5 py-3 text-sm text-muted">{isCv ? "This document is empty. Start writing and use headings to organize its sections." : "This document is empty. Start writing or add your first page."}</p>}
+            <MarkdownEditor value={draft} linkPages={documents} sectionTarget={isCv ? sectionTarget : null} onChange={(value) => { if (!busy && !form && !recovered) { setDraft(value); setNotice(""); } }} documentKey={`${current.id}:${sectionId || "root"}:${editorVersion}`} disabled={busy || Boolean(form) || Boolean(recovered)} />
           </div>}
 
           {current?.id === "cv" && <SkillGaps />}

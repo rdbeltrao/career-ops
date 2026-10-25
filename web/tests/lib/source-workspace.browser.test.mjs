@@ -128,11 +128,13 @@ test('Context has one real page hierarchy with CV as a separate output', { skip:
     await page.getByRole('navigation', { name: 'App navigation' }).getByRole('link', { name: 'CV draft', exact: true }).click();
     await page.waitForURL(`${origin}/cv`);
     await page.getByRole('heading', { name: 'CV draft', exact: true, level: 1 }).waitFor();
-    await page.getByRole('status', { name: 'Page save status' }).filter({ hasText: 'All changes saved' }).waitFor();
-    assert.equal(await navigation().getByRole('button', { name: 'Example job applications', exact: true }).count(), 0, 'CV has only its own outline');
-    assert.equal(await navigation().getByRole('button', { name: 'Application profile', exact: true }).count(), 0);
+    await page.getByRole('status', { name: 'Document save status' }).filter({ hasText: 'All changes saved' }).waitFor();
+    const cvOutline = page.getByRole('navigation', { name: 'Document sections' });
+    await cvOutline.waitFor();
+    assert.equal(await cvOutline.getByRole('button', { name: 'Example job applications', exact: true }).count(), 0, 'CV has only its own outline');
+    assert.equal(await cvOutline.getByRole('button', { name: 'Application profile', exact: true }).count(), 0);
     assert.equal(await page.getByRole('button', { name: /^(Source pages|App files|New page|New child page)$/ }).count(), 0);
-    assert.match(await page.getByRole('region', { name: 'Page editor' }).innerText(), /output|working r[eé]sum[eé]/i);
+    assert.match(await page.getByRole('region', { name: 'Document editor' }).innerText(), /output|working r[eé]sum[eé]/i);
 
     await page.goto(`${origin}/context`);
     await page.setViewportSize({ width: 1024, height: 900 });
