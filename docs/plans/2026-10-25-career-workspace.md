@@ -55,8 +55,9 @@ silently imported, and source notes are not promoted into approved facts.
    discarded. Opening a document does not write or mark it changed.
 4. Section edits preserve every unrelated byte. Stale revisions, invalid files,
    unsafe paths and oversized writes fail without replacing user content.
-5. Unsaved drafts survive failed saves; navigation requires resolving pending
-   edits. Save state/errors are announced accessibly. Mobile navigation works.
+5. Unsaved drafts survive failed saves; in-app links prompt before leaving.
+   Browser history and reload preserve a per-tab draft for explicit recovery with
+   its original revision. Save state/errors are announced accessibly. Mobile works.
 6. Existing CV save consumers and skill-gap refresh continue to work.
 7. Focused tests, browser scenarios against disposable data, web typecheck/build,
    web tests and the full root suite are run. Failures are reported accurately.
@@ -86,3 +87,57 @@ when they own the same files; ownership never overlaps.
 The autonomous-implementation skill's named superpowers helper skills are not
 installed. Their design/plan/execute/review sequence is followed using the
 available tools and bounded subagents. Implementation tests use fictional data.
+
+All twelve tasks are implemented. The spec review added conservative outline
+handling, explicit discard handling, and per-tab draft recovery scoped to an
+opaque workspace identity. The subsequent code review found and verified fixes
+for link controls accepting changes during a pending save and for HTML
+processing instructions, declarations and CDATA being mistaken for pages. Fast
+slash-command input exposed a stale menu range; a live-selection range fix also
+passed independent checks for fragmented text, surrounding prose and URLs.
+
+Validation recorded on 2026-10-25:
+
+- Backend: 25 tests pass, including byte-preserving mutations, missing and invalid
+  files, root isolation, symlinks, stale revisions, backups and HTML boundaries.
+- Full web suite: `2029` tests, `2011` passed, `0` failed, `18` skipped. Browser
+  tests are opt-in and run separately against a disposable local data root.
+- Workspace browser scenario passes on desktop and mobile: section save/reload,
+  child creation/rename/reorder, unsaved navigation, stale-save protection,
+  unsupported table preservation, shared CV route, history/reload recovery and
+  retained revision conflicts. No browser errors.
+- Editor verification: `11/11` passes, including both production-browser cases
+  for formatting, links, rapid keyboard/mouse slash selection, block reordering,
+  pasted unsafe links, and a delayed save. No skipped editor checks in this run.
+- Typecheck and production build pass. Production dependency audit:
+  `found 0 vulnerabilities`. Spec review and subsequent code review are complete.
+- Full root suite: `17596 passed, 9 failed, 13 warnings` across 878 discovered
+  suites. Existing failures are listed below; this is not a passing root-suite
+  result. Failing owners/tests are unchanged from the pre-feature baseline.
+
+Root-suite failures (verbatim labels, with local personal paths omitted):
+
+1. `SYSTEM_PATHS coverage gap — a new file is unregistered and update-system will not ship it:`
+   — existing `verify-block-b-context.mjs` is missing from the update manifest.
+2. `Absolute path: fork/scripts/daily.sh:8`.
+3. `Absolute path: fork/scripts/daily.sh:9`.
+4. `Absolute path: fork/scripts/daily.sh:10`.
+5. `tests/direct-eval-jd-archive.test.mjs — node:test suite failed (exit 1)`.
+   The existing paid-model guard rejects the mocked model name.
+6. `doctor: any other launch failure was misdiagnosed:` followed by
+   `✗ Playwright chromium is installed but failed to launch: Target page, context or browser has been closed`.
+   The existing classifier fails to strip ANSI prefixes in the fake-browser log.
+7. `CLI: every source is labelled mtime`. The fixture omits the context file while
+   requiring every source to have an mtime basis.
+8. `tests/split-root.test.mjs — node:test suite failed (exit 1)`. Same mocked-model
+   restriction as item 5. An isolated mock-only rerun allowing fixture models
+   passes all 11 archive/split-root assertions.
+9. `the test run changed the real data root`: the guard observed log/report changes
+   during concurrent activity. The guard identifies changes, not their writer;
+   all workspace browser writes target an explicitly marked fictional fixture.
+
+The first web-suite run encountered four stale tests already fixed in upstream
+commit `abab4feb`; isolated reruns and the final full web suite pass. The first
+development browser run encountered a hydration error and refresh loop with two
+Next development servers sharing generated files. Production-build browser
+verification avoids that test-environment conflict.
