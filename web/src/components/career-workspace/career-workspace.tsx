@@ -7,11 +7,12 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ArrowDown, ArrowUp, BookOpen, Check, ChevronRight, Files, ListChecks, Loader2, PanelLeft, Pencil, Plus, X } from "lucide-react";
 import { SkillGaps } from "@/components/skill-gaps";
 import { cn } from "@/lib/cn";
-import { collapsedSourcePageIds, initialWorkspaceDocument, sourcePageBreadcrumbs, sourcePageMovement, workspaceNavigationDocuments } from "@/lib/workspace-view.mjs";
+import { collapsedSourcePageIds, inheritingSourcePageCount, initialWorkspaceDocument, sourcePageBreadcrumbs, sourcePageMovement, sourcePurposeOrigin, workspaceNavigationDocuments } from "@/lib/workspace-view.mjs";
 import { workspaceDrafts } from "@/lib/workspace-drafts.mjs";
 import { documentOutline, wholeDocumentDraft } from "@/lib/document-outline.mjs";
 import { DocumentOutline, type OutlineSection } from "./document-outline";
 import { DocumentList } from "./document-list";
+import { PageActionsMenu, PagePurpose, type PageAction } from "./page-menus";
 import { SourcePageTree } from "./source-page-tree";
 import { UnsavedDialog } from "./unsaved-dialog";
 import type { PageSelection, PageUsage, WorkspaceDocument, WorkspaceDocumentSummary } from "./types";
@@ -32,12 +33,6 @@ const TRUST: Record<string, { label: string; text: string }> = {
   guide: { label: "Writing and workflow rules", text: "Instructions for how your search runs. These rules do not establish career facts." },
 };
 
-const PAGE_PURPOSE: Record<PageUsage, { label: string; description: string }> = {
-  facts: { label: "Career facts", description: "Use this page as evidence of your experience." },
-  preferences: { label: "Job preferences", description: "Guide job matching with your preferences, not claims about past work." },
-  reference: { label: "Reference material", description: "Keep this page as background material, not career evidence." },
-  unconfirmed: { label: "Unconfirmed notes", description: "Keep these notes out of factual claims until you confirm them." },
-};
 
 type Mutation = { action: "replace" | "add" | "rename" | "move" | "usage"; content?: string; title?: string; direction?: "up" | "down"; usage?: PageUsage };
 type ActionForm = { kind: "add" | "rename"; title: string } | null;
@@ -98,6 +93,14 @@ export function CareerWorkspace({ initialDocument = "context" }: { initialDocume
   dirtyRef.current = hasEdits;
   const sourceTrail = current ? sourcePageBreadcrumbs(documents, current.id) : [];
   const movement = current && isSource ? sourcePageMovement(documents, current.id) : { up: false, down: false };
+  const purposeOrigin = isSource && current ? sourcePurposeOrigin(documents, current.id).from : null;
+  const inheritingCount = isSource && current ? inheritingSourcePageCount(documents, current.id) : 0;
+  const pageActions: PageAction[] = isSource && current ? [
+    { label: "New child page", icon: <Plus aria-hidden="true" className="size-4" />, onSelect: () => startForm("add") },
+    { label: "Rename page", icon: <Pencil aria-hidden="true" className="size-4" />, onSelect: () => startForm("rename") },
+    { label: "Move page up", icon: <ArrowUp aria-hidden="true" className="size-4" />, disabled: !movement.up, onSelect: () => beforeAction(() => void mutate({ action: "move", direction: "up" })) },
+    { label: "Move page down", icon: <ArrowDown aria-hidden="true" className="size-4" />, disabled: !movement.down, onSelect: () => beforeAction(() => void mutate({ action: "move", direction: "down" })) },
+  ] : [];
   const trust = current ? TRUST[current.id] : undefined;
 
   const acceptDocument = useCallback((document: WorkspaceDocument) => {
@@ -372,30 +375,18 @@ export function CareerWorkspace({ initialDocument = "context" }: { initialDocume
               {!isSource && (trust?.text || current?.description) && <p className="mt-3 max-w-2xl text-sm leading-relaxed text-muted">{trust?.text || current?.description}</p>}
               {isSource && Boolean(current?.importNotes?.length) && <details className="mt-3 max-w-2xl text-sm text-muted"><summary className="w-fit cursor-pointer rounded focus-visible:outline-2 focus-visible:outline-brand">Formatting notes</summary><ul className="mt-2 list-disc space-y-1 pl-5 text-xs leading-relaxed">{current!.importNotes!.map((note, index) => <li key={index}>{note}</li>)}</ul></details>}
             </div>
+            <div className="flex items-center gap-2">
+            {pageActions.length > 0 && <PageActionsMenu actions={pageActions} disabled={busy || Boolean(recovered) || Boolean(current?.outlineWarning)} className={button} />}
             <button type="button" onClick={() => void mutate({ action: "replace", content: draft })} disabled={busy || !dirty || !current} className={cn("inline-flex min-h-10 items-center justify-center gap-2 rounded-full px-5 py-2 text-sm font-medium transition-colors focus-visible:outline-2 focus-visible:outline-brand disabled:opacity-50", dirty ? "bg-brand text-brand-foreground hover:bg-brand-200" : "border border-border bg-surface text-muted")}>
               {saving ? <Loader2 aria-hidden="true" className="size-4 animate-spin" /> : !dirty && notice === "Saved." ? <Check aria-hidden="true" className="size-4" /> : null}{saving ? "Saving…" : "Save"}
             </button>
+            </div>
           </div>
 
-          <div className="my-5 flex flex-wrap items-center gap-2">
-            {trust && <span className="mr-1 rounded-full bg-surface-hover px-2.5 py-1 text-xs text-muted">{trust.label}</span>}
-            {isSource && <div className="mr-2 flex flex-wrap items-center gap-2">
-              <label className="text-xs text-muted" htmlFor="page-purpose">Use this page as</label>
-              <select id="page-purpose" aria-describedby={current?.usage ? "page-purpose-description" : undefined} value={current?.usage || ""} disabled={busy || Boolean(recovered)} onChange={(event) => { const usage = event.target.value as PageUsage; if (usage !== current?.usage) beforeAction(() => void mutate({ action: "usage", usage })); }} className="min-h-9 rounded-lg border border-border bg-surface px-2 text-sm text-foreground focus-visible:outline-2 focus-visible:outline-brand disabled:opacity-40">
-                {!current?.usage && <option value="" disabled>Choose a purpose</option>}
-                {Object.entries(PAGE_PURPOSE).map(([value, purpose]) => <option key={value} value={value}>{purpose.label}</option>)}
-              </select>
-            </div>}
-            {current && isSource && <button type="button" disabled={busy || Boolean(recovered)} onClick={() => startForm("add")} className={button}><Plus aria-hidden="true" className="size-3.5" />New child page</button>}
-            {isSource && <>
-              <button type="button" disabled={busy || Boolean(recovered) || Boolean(current?.outlineWarning)} onClick={() => startForm("rename")} className={button}><Pencil aria-hidden="true" className="size-3.5" />Rename page</button>
-              <span className="inline-flex shrink-0 gap-2">
-                <button type="button" aria-label="Move page up" disabled={busy || Boolean(recovered) || !movement.up || Boolean(current?.outlineWarning)} onClick={() => beforeAction(() => void mutate({ action: "move", direction: "up" }))} className={button}><ArrowUp aria-hidden="true" className="size-3.5" /></button>
-                <button type="button" aria-label="Move page down" disabled={busy || Boolean(recovered) || !movement.down || Boolean(current?.outlineWarning)} onClick={() => beforeAction(() => void mutate({ action: "move", direction: "down" }))} className={button}><ArrowDown aria-hidden="true" className="size-3.5" /></button>
-              </span>
-            </>}
+          <div className="mt-4">
+            {isSource && current?.usage ? <PagePurpose usage={current.usage} inheritedFrom={purposeOrigin?.title ?? null} inheritingCount={inheritingCount} disabled={busy || Boolean(recovered)} onChange={(usage) => beforeAction(() => void mutate({ action: "usage", usage }))} />
+              : trust && <p className="mb-5"><span className="rounded-full bg-surface-hover px-2.5 py-1 text-xs text-muted">{trust.label}</span></p>}
           </div>
-          {isSource && current?.usage && <p id="page-purpose-description" className="-mt-3 mb-5 text-xs text-muted">{PAGE_PURPOSE[current.usage].description}</p>}
 
           {form && <form onSubmit={(event) => { event.preventDefault(); if (form.title.trim()) void mutate({ action: form.kind, title: form.title.trim() }); }} className="mb-5 rounded-xl border border-border bg-surface p-4">
             <label className="block text-sm font-medium text-foreground">Page title<input autoFocus value={form.title} onChange={(event) => setForm({ ...form, title: event.target.value })} maxLength={200} required disabled={busy} className="mt-2 min-h-10 w-full rounded-lg border border-border bg-background px-3 text-sm text-foreground outline-none focus:border-brand" /></label>
