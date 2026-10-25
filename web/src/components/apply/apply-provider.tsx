@@ -5,9 +5,13 @@ import type { ApplyField } from "@/lib/apply/extract";
 import type { ApplyIssue, DriveStep } from "@/lib/apply/issue";
 import { resolveLateSession } from "@/lib/apply/exit.mjs";
 import { readFillResult, screenForFill } from "@/lib/apply/fill-stream.mjs";
+import { historyNotice } from "@/lib/apply/history-notice.mjs";
 
 export type FillStep = { fieldId: string; label: string; ok: boolean; thumb?: string };
-type Meta = { needsConfirmation?: boolean };
+// `suggestion` is a saved answer to a knockout or sensitive question from an
+// earlier application. It is never the value: the user takes it with a click,
+// which is the confirmation, so the fill cannot send it unseen.
+type Meta = { needsConfirmation?: boolean; suggestion?: string; suggestionFrom?: string };
 type Status = "idle" | "opening" | "driving" | "prefilling" | "ready" | "filling" | "done" | "error";
 
 type ApplyCtx = {
@@ -33,6 +37,9 @@ type ApplyCtx = {
   setAnswer: (idOrLabel: string, value: string) => void;
   fill: () => Promise<void>;
   agentFill: () => Promise<void>;
+  /** Save the reviewed answers into the report and the answer bank. Never throws;
+   *  false when nothing was saved. */
+  saveAnswers: (state: "filled" | "submitted") => Promise<boolean>;
   reset: () => void;
 };
 
@@ -84,6 +91,10 @@ export function ApplyProvider({ children }: { children: React.ReactNode }) {
   fieldsRef.current = fields;
   const answersRef = useRef<Record<string, string>>({});
   answersRef.current = answers;
+  const urlRef = useRef("");
+  urlRef.current = url;
+  const titleRef = useRef("");
+  titleRef.current = title;
   // Bumped every time a session is abandoned or replaced. Leaving the page is
   // reachable while a request or stream is still in flight, and none of them can
   // be recalled, so each one carries the generation it started in and drops its
@@ -230,12 +241,12 @@ export function ApplyProvider({ children }: { children: React.ReactNode }) {
     setStatus("prefilling");
     setError("");
     setPrefillLog([]);
-    const applyAnswers = (raw: Record<string, { value?: string; needs_confirmation?: boolean }>) => {
+    const applyAnswers = (raw: Record<string, { value?: string; needs_confirmation?: boolean; suggestion?: string; suggestion_from?: string }>) => {
       const a: Record<string, string> = {};
       const m: Record<string, Meta> = {};
       for (const [id, v] of Object.entries(raw)) {
         a[id] = v?.value ?? "";
-        m[id] = { needsConfirmation: !!v?.needs_confirmation };
+        m[id] = { needsConfirmation: !!v?.needs_confirmation, suggestion: v?.suggestion || undefined, suggestionFrom: v?.suggestion_from || undefined };
       }
       setAnswers(a);
       setMeta(m);
@@ -265,7 +276,7 @@ export function ApplyProvider({ children }: { children: React.ReactNode }) {
           const line = buf.slice(0, nl).trim();
           buf = buf.slice(nl + 1);
           if (!line) continue;
-          let ev: { t?: string; m?: string; el?: number; raw?: string; answers?: Record<string, { value?: string; needs_confirmation?: boolean }>; count?: number; truncated?: boolean };
+          let ev: { t?: string; m?: string; el?: number; raw?: string; answers?: Record<string, { value?: string; needs_confirmation?: boolean; suggestion?: string; suggestion_from?: string }>; count?: number; truncated?: boolean; company?: string; matched?: number; applications?: { date: string; state: string; role: string; report: string | null }[] };
           try {
             ev = JSON.parse(line);
           } catch {
@@ -273,6 +284,10 @@ export function ApplyProvider({ children }: { children: React.ReactNode }) {
           }
           if (ev.t === "log") {
             setPrefillLog((p) => [...p, `+${((ev.el ?? 0) / 1000).toFixed(1)}s  ${ev.m}`]);
+          } else if (ev.t === "history" && ev.applications?.length) {
+            // The repeat-application check (modes/apply.md #1920), from the answer bank.
+            const message = historyNotice({ company: ev.company ?? "", applications: ev.applications, matched: ev.matched ?? 0 });
+            setIssues((prev) => [...prev.filter((i) => i.code !== "repeat-application"), { level: "info", code: "repeat-application", message }]);
           } else if (ev.t === "done") {
             got = true;
             applyAnswers(ev.answers ?? {});
@@ -313,6 +328,49 @@ export function ApplyProvider({ children }: { children: React.ReactNode }) {
     if (f) setAnswers((prev) => ({ ...prev, [f.id]: value }));
   }, []);
 
+  // Persist what the user reviewed, at the moments it becomes real: filled into
+  // the employer's form, or marked submitted. A failed save is surfaced, never
+  // silent, and never blocks the fill or the status update it rides along with.
+  const saveAnswers = useCallback(async (state: "filled" | "submitted") => {
+    const gen = generation.current;
+    const note = (issue: ApplyIssue) => {
+      if (generation.current !== gen) return;
+      setIssues((prev) => [...prev.filter((i) => i.code !== "answers-saved" && i.code !== "answers-not-saved"), issue]);
+    };
+    try {
+      const r = await fetch("/api/apply/answers", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          state,
+          sessionId: sessionId.current ?? "",
+          application: nRef.current,
+          company: companyRef.current,
+          title: titleRef.current,
+          url: /^https?:\/\//i.test(urlRef.current) ? urlRef.current : "",
+          fields: fieldsRef.current.map((f) => ({ id: f.id, type: f.type, label: f.label, password: f.password })),
+          answers: answersRef.current,
+        }),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok || d.error) {
+        note({ level: "warn", code: "answers-not-saved", message: `Your answers weren't saved: ${d.error || `HTTP ${r.status}`}. The form itself is unaffected.` });
+        return false;
+      }
+      if (d.reportSkipped === "unreadable") {
+        note({ level: "warn", code: "answers-saved", message: "Answers saved to your answer bank. This report's Application Answers section could not be read, so it was left as it is — fix it by hand to keep the report current." });
+      } else if (d.saved) {
+        note({ level: "info", code: "answers-saved", message: d.report ? "Answers saved to this report and your answer bank — the next application starts from them." : "Answers saved to your answer bank — the next application starts from them." });
+      }
+      return !!d.saved;
+    } catch (e) {
+      note({ level: "warn", code: "answers-not-saved", message: `Your answers weren't saved: ${e instanceof Error ? e.message : "network error"}. The form itself is unaffected.` });
+      return false;
+    }
+  }, []);
+  const saveAnswersRef = useRef(saveAnswers);
+  saveAnswersRef.current = saveAnswers;
+
   const fill = useCallback(async () => {
     if (!sessionId.current) return;
     const gen = generation.current;
@@ -339,6 +397,8 @@ export function ApplyProvider({ children }: { children: React.ReactNode }) {
       }
       if (d.navigated) setError("Heads up: the form's page changed during fill — review it carefully before submitting (career-ops never submits for you).");
       setStatus("done");
+      await saveAnswersRef.current("filled");
+      if (generation.current !== gen) return; // left while saving
       // ESCALATION ("si no va, full agente"): if deterministic fill clearly
       // didn't land (most fields failed / mismatched), let the agent fill it.
       const okCount = (d.steps ?? []).filter((s: FillStep) => s.ok).length;
@@ -377,6 +437,7 @@ export function ApplyProvider({ children }: { children: React.ReactNode }) {
       const outcome = screenForFill(result);
       if (outcome.status === "done") {
         setIssues((prev) => [...prev, { level: "info", code: "ai-filled", message: outcome.issue }]);
+        void saveAnswersRef.current("filled");
       } else {
         setError(outcome.error);
       }
@@ -418,8 +479,8 @@ export function ApplyProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const value = useMemo(
-    () => ({ status, url, title, company, n, from, fields, answers, meta, steps, shots, prefillLog, issues, driveSteps, error, open, prefill, setAnswer, fill, agentFill, reset }),
-    [status, url, title, company, n, from, fields, answers, meta, steps, shots, prefillLog, issues, driveSteps, error, open, prefill, setAnswer, fill, agentFill, reset],
+    () => ({ status, url, title, company, n, from, fields, answers, meta, steps, shots, prefillLog, issues, driveSteps, error, open, prefill, setAnswer, fill, agentFill, saveAnswers, reset }),
+    [status, url, title, company, n, from, fields, answers, meta, steps, shots, prefillLog, issues, driveSteps, error, open, prefill, setAnswer, fill, agentFill, saveAnswers, reset],
   );
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }

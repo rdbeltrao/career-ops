@@ -24,6 +24,7 @@ import { PrepPack } from "@/components/prep-pack";
 import { GeneratePdfButton } from "@/components/generate-pdf-button";
 import { CoverDraftButton } from "@/components/cover-draft-button";
 import { ApplyButton } from "@/components/apply-button";
+import { applyTarget } from "@/lib/apply/apply-target.mjs";
 import { MarkPdfReadyButton } from "@/components/mark-pdf-ready-button";
 import { DeleteFromTracker } from "@/components/delete-from-tracker";
 import { ReportMarkdown } from "@/components/report-markdown";
@@ -89,6 +90,8 @@ export function ReportView({
   const recommended = line === "Recommended";
   const quietApply = applyCtaQuiet({ score, legitimacy: meta?.legitimacy });
   const applyUrl = httpUrl(url);
+  // A login-gated board (LinkedIn, Indeed, ...) opens in the user's own browser.
+  const target = applyTarget(applyUrl);
   const pdfReady = (app?.pdf ?? "").includes("✅") || pdfReadyFromIndex;
   const company = app ? companyPresentation(app) : null;
   const companyName = company?.label ?? app?.company ?? meta?.title ?? id;
@@ -207,6 +210,8 @@ export function ReportView({
                     url={applyUrl}
                     company={companyName}
                     quiet={quietApply}
+                    direct={target.kind === "direct"}
+                    host={target.kind === "none" ? undefined : target.host}
                   />
                 </div>
               </div>

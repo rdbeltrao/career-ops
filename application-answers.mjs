@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 
 import { readFileSync, writeFileSync } from 'fs';
-import { resolve } from 'path';
+import { basename, dirname, resolve } from 'path';
+import { appendBankRecord, bankRecordFromSnapshot, reportMeta } from './answer-bank.mjs';
 import { isMainModule } from './lib/is-main-module.mjs';
 import { localToday } from './lib/local-today.mjs';
 
@@ -507,6 +508,7 @@ function parseArgs(argv) {
     else if (arg === '--read') args.read = true;
     else if (arg === '--read-draft') args.readDraft = true;
     else if (arg === '--strict') args.strict = true;
+    else if (arg === '--no-bank') args.noBank = true;
     else if (arg.startsWith('--')) {
       const value = argv[i + 1];
       if (!value || value.startsWith('--')) {
@@ -521,11 +523,13 @@ function parseArgs(argv) {
 
 function usage() {
   return [
-    'Usage: node application-answers.mjs --report <report.md> --input <answers.json> [--state filled|submitted] [--date YYYY-MM-DD]',
+    'Usage: node application-answers.mjs --report <report.md> --input <answers.json> [--state filled|submitted] [--date YYYY-MM-DD] [--no-bank]',
     '       node application-answers.mjs --report <report.md> --read [--strict]',
     '       node application-answers.mjs --report <report.md> --read-draft',
     '',
     'The input JSON may contain: freeText, selections, fieldValues, files, date, state.',
+    'Writing also appends the answers to data/application-answers.jsonl beside the report\'s reports/ directory',
+    '(answer-bank.mjs), so later prefills and repeat-application checks can read them. --no-bank skips that.',
     '--read prints the parsed ## Application Answers snapshot as JSON (null when the section is absent).',
     '--strict makes --read refuse a partially unreadable section, naming every line it could not parse,',
     'instead of skipping it. Recovery callers (modes/apply.md) want the refusal; the default stays total.',
@@ -614,7 +618,20 @@ async function main() {
   writeFileSync(reportPath, updated, 'utf-8');
 
   const normalized = normalizeApplicationAnswersSnapshot(snapshot);
-  console.log(JSON.stringify({ report: reportPath, date: normalized.date, state: normalized.state }, null, 2));
+  // The bank lives in the data root that owns this report: the parent of its
+  // reports/ directory. Taken from the report's own path rather than from the
+  // environment, so a report written outside a data root (a test fixture, a
+  // copy on the desktop) never appends to the user's real bank.
+  let banked = false;
+  if (!args.noBank && basename(dirname(reportPath)) === 'reports') {
+    const meta = reportMeta(updated);
+    const report = /^(\d+)-/.exec(basename(reportPath))?.[1] ?? null;
+    banked = appendBankRecord(
+      dirname(dirname(reportPath)),
+      bankRecordFromSnapshot(normalized, { ...meta, report, date: normalized.date, state: normalized.state }),
+    );
+  }
+  console.log(JSON.stringify({ report: reportPath, date: normalized.date, state: normalized.state, banked }, null, 2));
 }
 
 if (isMainModule(import.meta.url)) {

@@ -1,7 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import { cliSubstitutionNotice, cliUnavailableError, resolveCliOrFallback } from "@/lib/clis";
-import { careerOpsRoot, readMemory } from "@/lib/career-ops";
+import { careerOpsRoot, findApplication, findReportFile, readMemory } from "@/lib/career-ops";
+import { resolveCompany } from "@/lib/apply/answers-save.mjs";
 import { profileRef } from "@/lib/core/profile-path.mjs";
 import { getSession } from "@/lib/apply/session";
 import { resolveSessionCv } from "@/lib/apply/cv";
@@ -10,6 +11,7 @@ import { buildAnswerPrompt } from "@/lib/apply/answer-prompt.mjs";
 import { runPlanner } from "@/lib/apply/planner";
 import { extractJsonObject } from "@/lib/extract-json-object.mjs";
 import { readJsonObject } from "@/lib/json-body";
+import { loadAnswerBank, type AnswerBankModule, type PriorAnswer } from "@/lib/apply/answer-bank";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -96,7 +98,35 @@ export async function POST(req: Request) {
       // stapled to them cannot describe different documents.
       const cvPath = await resolveSessionCv({ company, application, title: s.title });
       const cvSource = cvPath ? applyCvSource(careerOpsRoot(), cvPath) : null;
-      const prompt = buildAnswerPrompt({ title: s.title, fields: s.fields, memory: mem, cvSource, profile: profileRef(careerOpsRoot()) });
+      // Answers the user reviewed and sent on earlier applications (answer-bank.mjs,
+      // data/application-answers.jsonl), matched to this form's questions. The
+      // same file gives the repeat-application check: earlier applications to
+      // this company are streamed to the page so the user sees what was sent.
+      // A missing or unreadable bank is logged and the prefill carries on.
+      let bank: AnswerBankModule | null = null;
+      let priorsById: Record<string, PriorAnswer> = {};
+      try {
+        bank = await loadAnswerBank();
+        const { records, skipped } = bank.readBank(careerOpsRoot());
+        // The tracker row's company, not the page's display label, and none for
+        // an unknown employer ("?"): see resolveCompany.
+        const app = application ? findApplication(application) : null;
+        const who = resolveCompany({ trackerCompany: app ? app.company : undefined, clientCompany: company });
+        priorsById = bank.matchPriorAnswers(records, s.fields, { company: who });
+        const matched = Object.keys(priorsById).length;
+        // This application's own earlier fill saves are not an earlier application.
+        const reportFile = application ? findReportFile(application) : null;
+        const ownReport = reportFile ? (/^(\d+)-/.exec(path.basename(reportFile))?.[1] ?? "") : "";
+        const history = who ? bank.companyHistory(records, who, { exclude: { report: ownReport, url: s.url } }) : [];
+        if (history.length) {
+          emit({ t: "history", company: who, matched, applications: history.map(({ date, state, role, report }) => ({ date, state, role, report })) });
+        }
+        log(`Answer bank: ${records.length} saved application records · ${matched} of ${s.fields.length} fields have an earlier answer${history.length ? ` · ${history.length} earlier application(s) to ${who}` : ""}${skipped ? ` · ${skipped} unreadable line(s) skipped` : ""}`);
+      } catch (e) {
+        log(`Answer bank unavailable (${e instanceof Error ? e.message : "unknown error"}) — drafting without earlier answers`);
+      }
+      const priorAnswers = Object.entries(priorsById).map(([fieldId, p]) => ({ fieldId, ...p }));
+      const prompt = buildAnswerPrompt({ title: s.title, fields: s.fields, memory: mem, cvSource, profile: profileRef(careerOpsRoot()), priorAnswers });
 
       log(`Form: "${s.title}" · ${s.fields.length} fields · prompt ${prompt.length} chars · memory ${mem.length} chars`);
       log(`CV source: ${cvSource ?? "none found — answers will come from cv.md"}`);
@@ -134,7 +164,11 @@ export async function POST(req: Request) {
       }
       const count = Object.keys(obj).length;
       log(`Parsed ${count} answers${truncated ? " (RECOVERED from truncated output — some fields may be missing)" : ""}`);
-      emit({ t: "done", answers: obj, truncated, count });
+      // Enforce the field classes whatever the planner did: knockout and
+      // sensitive answers always need the user's confirmation, a demographic is
+      // never invented, and a consent box is never ticked for them.
+      const answers = bank ? bank.guardAnswers(s.fields, obj as Record<string, { value?: string; needs_confirmation?: boolean }>, priorsById) : obj;
+      emit({ t: "done", answers, truncated, count });
       controller.close();
     },
   });

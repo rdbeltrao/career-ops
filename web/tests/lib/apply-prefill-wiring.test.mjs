@@ -106,3 +106,35 @@ function objectArg(text, opener, what) {
   assert.ok(close > open, `could not find the end of ${what}`);
   return text.slice(open + opener.length, close);
 }
+
+// ── Answer bank wiring (saved answers feed the next prefill) ─────────────────
+
+test("the prefill route reads the answer bank, matches it to this form and passes it to the prompt", () => {
+  assert.match(route, /loadAnswerBank\(\)/);
+  assert.match(route, /matchPriorAnswers\(/);
+  assert.match(promptArgs(), /priorAnswers/);
+});
+
+test("the planner's answers pass through guardAnswers before they reach the page", () => {
+  assert.match(route, /guardAnswers\(/);
+  const done = route.indexOf('t: "done"');
+  const guard = route.indexOf("guardAnswers(");
+  assert.ok(guard > 0 && guard < done, "guardAnswers must run before the done event is emitted");
+});
+
+test("earlier applications to the same company are streamed and shown on the page", () => {
+  assert.match(route, /companyHistory\(/);
+  assert.match(route, /t: "history"/);
+  assert.match(provider, /ev\.t === "history"/);
+  assert.match(provider, /repeat-application/);
+});
+
+test("a saved knockout answer reaches the page as a suggestion, never as the value the fill sends", () => {
+  // fill() posts `answers`; only `value` may populate it. A suggestion lives in
+  // meta and becomes an answer only through the user's click.
+  assert.match(provider, /a\[id\] = v\?\.value \?\? "";/);
+  assert.match(provider, /suggestion: v\?\.suggestion/);
+  assert.doesNotMatch(provider, /a\[id\] = [^;\n]*suggestion/);
+  const view = readFileSync(join(root, "src/components/apply-view.tsx"), "utf8");
+  assert.match(view, /onClick=\{\(\) => onChange\(suggestion\)\}/);
+});
