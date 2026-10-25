@@ -4,7 +4,6 @@ import { resolveTailoredCover } from "@/lib/apply/cover";
 import { ReportView } from "@/components/report-view";
 import { pipelineQuery } from "@/lib/pipeline-navigation.mjs";
 import { reportNumberFor } from "@/lib/apply-checklist.mjs";
-import { loadIsJobBoard } from "@/lib/apply/board-check";
 
 export const dynamic = "force-dynamic";
 
@@ -35,7 +34,6 @@ export default async function ReportPage({ params, searchParams }: {
       backHref={`/pipeline${query ? `?${query}` : ""}`}
       applyHref={`/pipeline/${encodeURIComponent(id)}/apply${query ? `?${query}` : ""}`}
       reportNum={reportNumberFor(id, app, report?.file ?? null)}
-      isJobBoard={await loadIsJobBoard()}
     />
   );
 }

@@ -194,7 +194,15 @@ export async function loginWallOnPage(page: Page, fields: ApplyField[] = []): Pr
   let hasPassword = false;
   for (const fr of page.frames()) {
     try {
-      if (await fr.evaluate(() => !!document.querySelector('input[type="password"]'))) {
+      // Visible ones only: careers sites keep a hidden "candidate login" modal in
+      // the DOM next to a real application form, and that is not a wall.
+      const visible = await fr.evaluate(() =>
+        Array.from(document.querySelectorAll('input[type="password"]')).some((el) => {
+          const r = (el as HTMLElement).getBoundingClientRect();
+          return (el as HTMLElement).offsetParent !== null && r.width > 0 && r.height > 0;
+        }),
+      );
+      if (visible) {
         hasPassword = true;
         break;
       }

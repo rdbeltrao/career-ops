@@ -44,8 +44,9 @@ import { DEFAULT_PROFILE_REF } from "../core/profile-path.mjs";
  * matched to this form's fields by answer-bank.mjs (matchPriorAnswers). They are
  * the user's own statements to employers, so they may supply phrasing and keep
  * a repeat application consistent, but they are derived sources: a number in one
- * counts only when the CV carries it, and a knockout or sensitive answer is only
- * a suggestion the user confirms (the route's guardAnswers enforces it too).
+ * counts only when the CV carries it, and a knockout or sensitive answer is never
+ * drafted from it: the route's guardAnswers turns it into a suggestion the user
+ * confirms with a click.
  *
  * @typedef {Object} PriorAnswer
  * @property {string} fieldId
@@ -78,7 +79,7 @@ ${priorAnswers.map((p) => `${p.fieldId}\t${p.class}\t${oneLine(p.answer)}\t${p.c
 - same company: keep the answer consistent with what was sent before, unless the CV or ${profile} now says otherwise.
 - free text from another company: adapt it to this company and role; never paste it unchanged.
 - identity: ${profile} wins over an earlier answer.
-- knockout or sensitive: use the earlier answer as the value and set needs_confirmation:true; the user confirms it every time.
+- knockout or sensitive: do not use the earlier answer as the value; set needs_confirmation:true. The page offers it to the user, who confirms it for this employer.
 - a number in an earlier answer counts only if the CV carries it; otherwise leave it out.`
     : "";
 
@@ -96,7 +97,7 @@ For each field give the best answer:
 - experience (employer, job title, dates, location, role description) → from the source that owns it above, verbatim in substance.
 - free-text (Why us?, cover-letter, "most impactful thing you've built", etc.) → a concise, honest, concrete answer in the candidate's own voice (no buzzwords, active voice, real metrics only). Keep each under ~120 words.
 - select/radio → choose the best-matching option using the EXACT option text from the list.
-- NEVER fill legal / visa / work-authorization / salary / demographic / sensitive fields → set needs_confirmation:true and value:"" (unless an earlier answer for that field is listed above: then use it, still needs_confirmation:true).
+- NEVER fill legal / visa / work-authorization / salary / demographic / sensitive fields → set needs_confirmation:true and value:"".
 
 Output ONLY a compact JSON object mapping each field id → {"value": "...", "needs_confirmation": boolean}. No prose, no markdown, no code fence.`;
 }

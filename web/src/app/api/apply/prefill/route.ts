@@ -1,7 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import { cliSubstitutionNotice, cliUnavailableError, resolveCliOrFallback } from "@/lib/clis";
-import { careerOpsRoot, readMemory } from "@/lib/career-ops";
+import { careerOpsRoot, findApplication, findReportFile, readMemory } from "@/lib/career-ops";
+import { resolveCompany } from "@/lib/apply/answers-save.mjs";
 import { profileRef } from "@/lib/core/profile-path.mjs";
 import { getSession } from "@/lib/apply/session";
 import { resolveSessionCv } from "@/lib/apply/cv";
@@ -107,12 +108,20 @@ export async function POST(req: Request) {
       try {
         bank = await loadAnswerBank();
         const { records, skipped } = bank.readBank(careerOpsRoot());
-        priorsById = bank.matchPriorAnswers(records, s.fields, { company: company ?? "" });
-        const history = company ? bank.companyHistory(records, company) : [];
+        // The tracker row's company, not the page's display label, and none for
+        // an unknown employer ("?"): see resolveCompany.
+        const app = application ? findApplication(application) : null;
+        const who = resolveCompany({ trackerCompany: app ? app.company : undefined, clientCompany: company });
+        priorsById = bank.matchPriorAnswers(records, s.fields, { company: who });
+        const matched = Object.keys(priorsById).length;
+        // This application's own earlier fill saves are not an earlier application.
+        const reportFile = application ? findReportFile(application) : null;
+        const ownReport = reportFile ? (/^(\d+)-/.exec(path.basename(reportFile))?.[1] ?? "") : "";
+        const history = who ? bank.companyHistory(records, who, { exclude: { report: ownReport, url: s.url } }) : [];
         if (history.length) {
-          emit({ t: "history", company, applications: history.map(({ date, state, role, report }) => ({ date, state, role, report })) });
+          emit({ t: "history", company: who, matched, applications: history.map(({ date, state, role, report }) => ({ date, state, role, report })) });
         }
-        log(`Answer bank: ${records.length} saved application records · ${Object.keys(priorsById).length} of ${s.fields.length} fields have an earlier answer${history.length ? ` · ${history.length} earlier application(s) to ${company}` : ""}${skipped ? ` · ${skipped} unreadable line(s) skipped` : ""}`);
+        log(`Answer bank: ${records.length} saved application records · ${matched} of ${s.fields.length} fields have an earlier answer${history.length ? ` · ${history.length} earlier application(s) to ${who}` : ""}${skipped ? ` · ${skipped} unreadable line(s) skipped` : ""}`);
       } catch (e) {
         log(`Answer bank unavailable (${e instanceof Error ? e.message : "unknown error"}) — drafting without earlier answers`);
       }

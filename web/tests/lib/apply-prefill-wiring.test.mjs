@@ -128,3 +128,13 @@ test("earlier applications to the same company are streamed and shown on the pag
   assert.match(provider, /ev\.t === "history"/);
   assert.match(provider, /repeat-application/);
 });
+
+test("a saved knockout answer reaches the page as a suggestion, never as the value the fill sends", () => {
+  // fill() posts `answers`; only `value` may populate it. A suggestion lives in
+  // meta and becomes an answer only through the user's click.
+  assert.match(provider, /a\[id\] = v\?\.value \?\? "";/);
+  assert.match(provider, /suggestion: v\?\.suggestion/);
+  assert.doesNotMatch(provider, /a\[id\] = [^;\n]*suggestion/);
+  const view = readFileSync(join(root, "src/components/apply-view.tsx"), "utf8");
+  assert.match(view, /onClick=\{\(\) => onChange\(suggestion\)\}/);
+});

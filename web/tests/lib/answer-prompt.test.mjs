@@ -113,7 +113,7 @@ test("a long saved answer is cut so one essay cannot crowd out the form", () => 
 
 test("the rules for saved answers keep knockout confirmation and the CV as the source of numbers", () => {
   const prompt = buildAnswerPrompt({ title: "Acme", fields: FIELDS, priorAnswers: PRIORS });
-  assert.match(prompt, /knockout or sensitive[^\n]*needs_confirmation:true/i);
+  assert.match(prompt, /knockout or sensitive: do not use the earlier answer as the value; set needs_confirmation:true/i);
   assert.match(prompt, /number[^\n]*only if the CV/i);
   assert.match(prompt, /same company[^\n]*consistent/i);
   assert.match(prompt, /profile[^\n]*wins/i);

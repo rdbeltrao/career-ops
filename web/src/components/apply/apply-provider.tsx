@@ -5,9 +5,13 @@ import type { ApplyField } from "@/lib/apply/extract";
 import type { ApplyIssue, DriveStep } from "@/lib/apply/issue";
 import { resolveLateSession } from "@/lib/apply/exit.mjs";
 import { readFillResult, screenForFill } from "@/lib/apply/fill-stream.mjs";
+import { historyNotice } from "@/lib/apply/history-notice.mjs";
 
 export type FillStep = { fieldId: string; label: string; ok: boolean; thumb?: string };
-type Meta = { needsConfirmation?: boolean };
+// `suggestion` is a saved answer to a knockout or sensitive question from an
+// earlier application. It is never the value: the user takes it with a click,
+// which is the confirmation, so the fill cannot send it unseen.
+type Meta = { needsConfirmation?: boolean; suggestion?: string; suggestionFrom?: string };
 type Status = "idle" | "opening" | "driving" | "prefilling" | "ready" | "filling" | "done" | "error";
 
 type ApplyCtx = {
@@ -237,12 +241,12 @@ export function ApplyProvider({ children }: { children: React.ReactNode }) {
     setStatus("prefilling");
     setError("");
     setPrefillLog([]);
-    const applyAnswers = (raw: Record<string, { value?: string; needs_confirmation?: boolean }>) => {
+    const applyAnswers = (raw: Record<string, { value?: string; needs_confirmation?: boolean; suggestion?: string; suggestion_from?: string }>) => {
       const a: Record<string, string> = {};
       const m: Record<string, Meta> = {};
       for (const [id, v] of Object.entries(raw)) {
         a[id] = v?.value ?? "";
-        m[id] = { needsConfirmation: !!v?.needs_confirmation };
+        m[id] = { needsConfirmation: !!v?.needs_confirmation, suggestion: v?.suggestion || undefined, suggestionFrom: v?.suggestion_from || undefined };
       }
       setAnswers(a);
       setMeta(m);
@@ -272,7 +276,7 @@ export function ApplyProvider({ children }: { children: React.ReactNode }) {
           const line = buf.slice(0, nl).trim();
           buf = buf.slice(nl + 1);
           if (!line) continue;
-          let ev: { t?: string; m?: string; el?: number; raw?: string; answers?: Record<string, { value?: string; needs_confirmation?: boolean }>; count?: number; truncated?: boolean; company?: string; applications?: { date: string; state: string; role: string; report: string | null }[] };
+          let ev: { t?: string; m?: string; el?: number; raw?: string; answers?: Record<string, { value?: string; needs_confirmation?: boolean; suggestion?: string; suggestion_from?: string }>; count?: number; truncated?: boolean; company?: string; matched?: number; applications?: { date: string; state: string; role: string; report: string | null }[] };
           try {
             ev = JSON.parse(line);
           } catch {
@@ -282,11 +286,7 @@ export function ApplyProvider({ children }: { children: React.ReactNode }) {
             setPrefillLog((p) => [...p, `+${((ev.el ?? 0) / 1000).toFixed(1)}s  ${ev.m}`]);
           } else if (ev.t === "history" && ev.applications?.length) {
             // The repeat-application check (modes/apply.md #1920), from the answer bank.
-            const list = ev.applications
-              .slice(0, 3)
-              .map((x) => `${x.date} (${[x.role, x.state, x.report ? `report ${x.report}` : ""].filter(Boolean).join(", ")})`)
-              .join("; ");
-            const message = `You applied to ${ev.company} before: ${list}. Earlier answers are pre-filled where the questions match, so this application stays consistent. Some ATS keep your whole history, so check your candidate profile there too.`;
+            const message = historyNotice({ company: ev.company ?? "", applications: ev.applications, matched: ev.matched ?? 0 });
             setIssues((prev) => [...prev.filter((i) => i.code !== "repeat-application"), { level: "info", code: "repeat-application", message }]);
           } else if (ev.t === "done") {
             got = true;
@@ -348,7 +348,7 @@ export function ApplyProvider({ children }: { children: React.ReactNode }) {
           company: companyRef.current,
           title: titleRef.current,
           url: /^https?:\/\//i.test(urlRef.current) ? urlRef.current : "",
-          fields: fieldsRef.current.map((f) => ({ id: f.id, type: f.type, label: f.label })),
+          fields: fieldsRef.current.map((f) => ({ id: f.id, type: f.type, label: f.label, password: f.password })),
           answers: answersRef.current,
         }),
       });
@@ -357,7 +357,9 @@ export function ApplyProvider({ children }: { children: React.ReactNode }) {
         note({ level: "warn", code: "answers-not-saved", message: `Your answers weren't saved: ${d.error || `HTTP ${r.status}`}. The form itself is unaffected.` });
         return false;
       }
-      if (d.saved) {
+      if (d.reportSkipped === "unreadable") {
+        note({ level: "warn", code: "answers-saved", message: "Answers saved to your answer bank. This report's Application Answers section could not be read, so it was left as it is — fix it by hand to keep the report current." });
+      } else if (d.saved) {
         note({ level: "info", code: "answers-saved", message: d.report ? "Answers saved to this report and your answer bank — the next application starts from them." : "Answers saved to your answer bank — the next application starts from them." });
       }
       return !!d.saved;

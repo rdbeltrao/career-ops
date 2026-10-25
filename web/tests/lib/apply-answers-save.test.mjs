@@ -10,7 +10,8 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { parseSaveBody, MAX_FIELDS } from "../../src/lib/apply/answers-save.mjs";
+import { parseSaveBody, resolveCompany, MAX_FIELDS } from "../../src/lib/apply/answers-save.mjs";
+import { historyNotice } from "../../src/lib/apply/history-notice.mjs";
 
 const fields = [{ id: "co0", type: "text", label: "First name", required: true }];
 
@@ -47,4 +48,30 @@ test("parseSaveBody: refuses what a writer should never see", () => {
     assert.equal(r.ok, false, JSON.stringify(body)?.slice(0, 80));
     assert.match(r.error, msg);
   }
+});
+
+test("resolveCompany: the tracker's company beats the display label, and '?' is no company", () => {
+  // the client sends companyPresentation().label: "Confidential · via Hays" for a '?' row
+  assert.equal(resolveCompany({ trackerCompany: "Acme GmbH", clientCompany: "Acme" }), "Acme GmbH");
+  assert.equal(resolveCompany({ trackerCompany: "?", clientCompany: "Confidential · via Hays" }), "");
+  assert.equal(resolveCompany({ trackerCompany: " ? ", clientCompany: "Confidential employer" }), "");
+  assert.equal(resolveCompany({ trackerCompany: undefined, clientCompany: " Beta " }), "Beta");
+  assert.equal(resolveCompany({ trackerCompany: undefined, clientCompany: "?" }), "");
+});
+
+test("historyNotice: says submitted or only filled, and claims pre-filled answers only when some matched", () => {
+  const apps = [
+    { date: "2026-09-01", state: "submitted", role: "EM", report: "067" },
+    { date: "2026-10-01", state: "filled", role: "Director", report: null },
+  ];
+  const withMatches = historyNotice({ company: "Acme", applications: apps, matched: 3 });
+  assert.match(withMatches, /^You have applied to Acme before: /);
+  assert.match(withMatches, /2026-09-01 \(EM, submitted, report 067\)/);
+  assert.match(withMatches, /2026-10-01 \(Director, filled but not submitted\)/);
+  assert.match(withMatches, /Earlier answers are pre-filled where the questions match/);
+
+  const none = historyNotice({ company: "Acme", applications: apps.slice(1), matched: 0 });
+  assert.match(none, /^You started an application to Acme before/);
+  assert.doesNotMatch(none, /pre-filled/);
+  assert.equal(historyNotice({ company: "Acme", applications: [], matched: 2 }), "");
 });

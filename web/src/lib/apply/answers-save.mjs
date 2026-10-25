@@ -49,3 +49,19 @@ export function parseSaveBody(body) {
   }
   return { ok: true, value: { ...out, fields, answers } };
 }
+
+/**
+ * The company a save or a prefill is about. The tracker row's own company wins
+ * over what the client sent, because the page sends the display label
+ * (companyPresentation): every row with an unknown employer would otherwise be
+ * banked as "Confidential employer" and look like one company. An unknown
+ * employer ("?") is no company at all: no history, no same-company match.
+ *
+ * @param {{ trackerCompany?: string, clientCompany?: string }} input
+ * @returns {string}
+ */
+export function resolveCompany({ trackerCompany, clientCompany } = {}) {
+  const raw = trackerCompany !== undefined && trackerCompany !== null ? trackerCompany : clientCompany;
+  const name = String(raw ?? "").trim();
+  return name === "?" ? "" : name;
+}

@@ -8,9 +8,9 @@ import { useApply } from "@/components/apply/apply-provider";
 // and legitimacy is not caution (#4206). Disabled only when the report has no
 // application URL: a tailored CV is never a prerequisite, the user decides
 // when to apply. On click it opens the apply form-proxy for the offer (where
-// the user reviews and submits it themselves — never auto-submit). A job-board
-// URL (`direct`) opens in the user's own browser instead: boards show their
-// Apply flow only to a signed-in member, and the proxy's browser is signed out.
+// the user reviews and submits it themselves — never auto-submit). A login-gated
+// board URL (`direct`: LinkedIn, Indeed, ...) opens in the user's own browser
+// instead, because the proxy's browser is signed out.
 export function ApplyButton({
   n,
   url,
