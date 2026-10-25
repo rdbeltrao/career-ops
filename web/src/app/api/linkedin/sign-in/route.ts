@@ -8,5 +8,5 @@ export const dynamic = "force-dynamic";
 export async function POST() {
   const r = await startSignIn();
   if (!r.ok) return Response.json({ error: r.error }, { status: r.status });
-  return Response.json({ started: true });
+  return Response.json({ started: true, done: !!r.done });
 }

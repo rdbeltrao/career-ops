@@ -12,5 +12,11 @@ export async function POST(req: Request) {
   if (!body) return Response.json({ error: "bad json" }, { status: 400 });
   const r = saveSearchOp(body);
   if (!r.ok) return Response.json({ error: r.error }, { status: r.status });
-  return Response.json(await loadLinkedInState());
+  // The write already happened: a failure to re-read must not be reported as
+  // "not changed" (a retried add would then fail as a duplicate).
+  try {
+    return Response.json({ saved: true, state: await loadLinkedInState() });
+  } catch {
+    return Response.json({ saved: true, state: null });
+  }
 }

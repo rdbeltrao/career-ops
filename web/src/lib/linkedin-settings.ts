@@ -1,5 +1,6 @@
 import fs from "node:fs";
-import { spawn } from "node:child_process";
+import path from "node:path";
+import { spawn, type ChildProcess } from "node:child_process";
 import { pathToFileURL } from "node:url";
 import * as yaml from "js-yaml";
 import { careerOpsRoot, portalsConfigPath, rootScript } from "@/lib/career-ops";
@@ -30,6 +31,7 @@ export type LinkedInState = {
 
 type SessionModule = {
   sessionStatus(opts: { crawl?: CrawlStatus | null }): Session;
+  profileBusy(dir?: string): boolean;
   readCrawlStatus(root: string): CrawlStatus | null;
   profileDir(): string;
 };
@@ -87,16 +89,63 @@ export function saveSearchOp(body: unknown): { ok: true } | { ok: false; status:
  * no credential passes through career-ops. Refused while a scan or an earlier
  * sign-in window holds the profile.
  */
-export async function startSignIn(): Promise<{ ok: true } | { ok: false; status: number; error: string }> {
+// The sign-in window this server opened, while it is still open: a second click
+// gets a clear refusal instead of a second browser on the same profile.
+let signInChild: ChildProcess | null = null;
+
+// How long a just-started sign-in may take to fail before it counts as open.
+const SIGN_IN_SETTLE_MS = 3000;
+
+export async function startSignIn(): Promise<{ ok: true; done?: boolean } | { ok: false; status: number; error: string }> {
   const mod = await sessionModule();
   if (!mod) return { ok: false, status: 501, error: "This career-ops checkout has no LinkedIn session support." };
-  if (mod.sessionStatus({}).busy) {
+  if (signInChild && signInChild.exitCode === null && signInChild.signalCode === null) {
+    return { ok: false, status: 409, error: "A LinkedIn sign-in window is already open on this computer." };
+  }
+  if (mod.profileBusy()) {
     return { ok: false, status: 409, error: "The crawl browser profile is in use (a scan, or a sign-in window that is already open). Try again when it finishes." };
   }
   const script = rootScript("linkedin-login");
   if (!fs.existsSync(/* turbopackIgnore: true */ script)) return { ok: false, status: 501, error: "This career-ops checkout has no linkedin-login.mjs." };
-  const child = spawn(process.execPath, [script], { cwd: careerOpsRoot(), detached: true, stdio: "ignore", env: process.env });
+
+  // The window's output goes to a log in the data root, so a failure has a reason.
+  const root = careerOpsRoot();
+  const logFile = path.join(root, "output", "logs", "linkedin-login.log");
+  fs.mkdirSync(path.dirname(logFile), { recursive: true });
+  const fd = fs.openSync(logFile, "a");
+  const start = fs.fstatSync(fd).size;
+  // NODE_OPTIONS from the dev server (an --inspect port, for one) would break the child.
+  const env = { ...process.env };
+  delete env.NODE_OPTIONS;
+  let child: ChildProcess;
+  try {
+    child = spawn(process.execPath, [script], { cwd: root, detached: true, stdio: ["ignore", fd, fd], env });
+  } finally {
+    fs.closeSync(fd);
+  }
   child.on("error", () => {});
-  child.unref();
-  return { ok: true };
+  const exited = await new Promise<number | null>((resolve) => {
+    const timer = setTimeout(() => resolve(null), SIGN_IN_SETTLE_MS);
+    child.once("exit", (code) => {
+      clearTimeout(timer);
+      resolve(code ?? 1);
+    });
+    child.once("error", () => {
+      clearTimeout(timer);
+      resolve(1);
+    });
+  });
+  if (exited === null) {
+    child.unref();
+    signInChild = child;
+    return { ok: true };
+  }
+  if (exited === 0) return { ok: true, done: true }; // the profile was already signed in
+  let reason = "";
+  try {
+    reason = fs.readFileSync(logFile, "utf8").slice(start).trim().split("\n").filter(Boolean).at(-1) ?? "";
+  } catch {
+    /* no reason available */
+  }
+  return { ok: false, status: 500, error: `The sign-in window closed straight away${reason ? `: ${reason.slice(0, 300)}` : "."}` };
 }

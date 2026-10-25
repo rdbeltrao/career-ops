@@ -34,6 +34,7 @@ export function LinkedInView({ initial }: { initial: LinkedInState }) {
   const [formError, setFormError] = useState("");
   const [rowError, setRowError] = useState("");
   const [signIn, setSignIn] = useState<{ waiting: boolean; error: string }>({ waiting: false, error: "" });
+  const [pending, setPending] = useState<Set<string>>(new Set()); // searches with a toggle in flight
   const poll = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const refresh = useCallback(async () => {
@@ -67,11 +68,17 @@ export function LinkedInView({ initial }: { initial: LinkedInState }) {
   }, [signIn.waiting, state.session]);
 
   async function startSignIn() {
+    if (signIn.waiting) return; // one window at a time; the server refuses a second too
     setSignIn({ waiting: false, error: "" });
     try {
       const r = await fetch("/api/linkedin/sign-in", { method: "POST" });
       const d = await r.json().catch(() => ({}));
       if (!r.ok) return setSignIn({ waiting: false, error: d.error || "The sign-in window could not be opened." });
+      if (d.done) {
+        setSignIn({ waiting: false, error: "" });
+        await refresh();
+        return;
+      }
       setSignIn({ waiting: true, error: "" });
     } catch {
       setSignIn({ waiting: false, error: "The sign-in window could not be opened." });
@@ -79,17 +86,34 @@ export function LinkedInView({ initial }: { initial: LinkedInState }) {
   }
 
   async function send(body: unknown): Promise<string | null> {
-    const r = await fetch("/api/linkedin/searches", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    let r: Response;
+    try {
+      r = await fetch("/api/linkedin/searches", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    } catch {
+      await refresh(); // the request may or may not have landed; show what is on disk
+      return "The change could not be confirmed. The list below shows portals.yml as it is now.";
+    }
     const d = await r.json().catch(() => ({}));
     if (!r.ok) return d.error || "portals.yml was not changed.";
-    setState(d);
+    if (d.state) setState(d.state);
+    else await refresh();
     return null;
   }
 
   async function toggle(s: SearchView) {
+    if (pending.has(s.name)) return;
     setRowError("");
-    const err = await send({ op: "toggle", name: s.name, enabled: !s.enabled });
-    if (err) setRowError(err);
+    setPending((p) => new Set(p).add(s.name));
+    try {
+      const err = await send({ op: "toggle", name: s.name, enabled: !s.enabled });
+      if (err) setRowError(err);
+    } finally {
+      setPending((p) => {
+        const next = new Set(p);
+        next.delete(s.name);
+        return next;
+      });
+    }
   }
 
   function openEditor(s?: SearchView) {
@@ -99,14 +123,18 @@ export function LinkedInView({ initial }: { initial: LinkedInState }) {
   }
 
   async function save() {
+    if (saving) return;
     setSaving(true);
     setFormError("");
-    const search = { name: draft.name, searchUrl: draft.searchUrl, maxPages: draft.maxPages, maxApplyLookups: draft.maxApplyLookups, enabled: true };
-    const body = editing ? { op: "update", name: editing, search: { ...search, enabled: state.searches.find((s) => s.name === editing)?.enabled ?? true } } : { op: "add", search };
-    const err = await send(body);
-    setSaving(false);
-    if (err) setFormError(err);
-    else setEditing(null);
+    try {
+      const search = { name: draft.name, searchUrl: draft.searchUrl, maxPages: draft.maxPages, maxApplyLookups: draft.maxApplyLookups, enabled: true };
+      const body = editing ? { op: "update", name: editing, search: { ...search, enabled: state.searches.find((s) => s.name === editing)?.enabled ?? true } } : { op: "add", search };
+      const err = await send(body);
+      if (err) setFormError(err);
+      else setEditing(null);
+    } finally {
+      setSaving(false);
+    }
   }
 
   const session = state.session;
@@ -249,7 +277,8 @@ export function LinkedInView({ initial }: { initial: LinkedInState }) {
                   type="button"
                   role="switch"
                   aria-checked={s.enabled}
-                  aria-label={`${s.enabled ? "Turn off" : "Turn on"} ${s.name}`}
+                  aria-label={s.name}
+                  aria-busy={pending.has(s.name)}
                   onClick={() => toggle(s)}
                   className={cn("relative h-5 w-9 shrink-0 rounded-full transition-colors", s.enabled ? "bg-brand" : "bg-border")}
                 >
@@ -263,7 +292,7 @@ export function LinkedInView({ initial }: { initial: LinkedInState }) {
                       : "unreadable URL"}
                     {" · "}
                     {s.maxPages ?? 3} page{(s.maxPages ?? 3) === 1 ? "" : "s"}
-                    {s.maxApplyLookups === 0 ? " · no employer links" : s.maxApplyLookups ? ` · ${s.maxApplyLookups} employer links` : ""}
+                    {s.resolveApplyUrl === false || s.maxApplyLookups === 0 ? " · no employer links" : s.maxApplyLookups ? ` · ${s.maxApplyLookups} employer links` : ""}
                   </p>
                 </div>
                 <a href={s.searchUrl} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-xs text-muted hover:text-brand" aria-label={`Open ${s.name} on LinkedIn`}>
