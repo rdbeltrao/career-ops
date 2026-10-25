@@ -1,19 +1,19 @@
-import fs from 'node:fs';
-import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { inspectOutline, mutateDocument, WorkspaceError } from './career-workspace.mjs';
+import { MAX_DOCUMENT_BYTES, readWorkspaceFile, validateWorkspaceContent, workspaceFilePath, workspaceIdForRoot } from './workspace-files.mjs';
+import { listSourceDocuments, readSourceDocument, saveSourceDocument } from './source-workspace-store.mjs';
 
-export const MAX_DOCUMENT_BYTES = 200_000;
+export { MAX_DOCUMENT_BYTES };
 
 // EVIDENCE: AGENTS.md's source-of-truth tiers distinguish facts, targeting and
 // derived stories. These labels preserve that boundary without reading new stores.
 export const WORKSPACE_DOCUMENTS = Object.freeze([
-  { id: 'context', title: 'Career context', group: 'Context', file: 'modes/_context.md', description: 'Career facts and experience. Context remains the source of truth.' },
-  { id: 'achievements', title: 'Approved achievements', group: 'Context', file: 'article-digest.md', description: 'Recorded proof points and their sources. Preserve confirmation labels.' },
-  { id: 'profile', title: 'Preferences & positioning', group: 'Context', file: 'modes/_profile.md', description: 'Targets, preferences and framing; not evidence of accomplishments.' },
-  { id: 'cv', title: 'Base CV', group: 'CVs', file: 'cv.md', description: 'Your reusable CV. Tailored versions stay with their applications.' },
-  { id: 'stories', title: 'Professional examples', group: 'Reference', file: 'interview-prep/story-bank.md', description: 'Accumulated stories. Unverified figures remain unverified.' },
-  { id: 'guide', title: 'Writing & workflow guide', group: 'Reference', file: 'modes/_custom.md', description: 'Your procedural and writing rules; never candidate facts.' },
+  { id: 'context', title: 'Application profile', group: 'App summaries', file: 'modes/_context.md', description: 'Career facts and preferences compiled for job matching. This is a local summary, not a copy of the source page hierarchy.' },
+  { id: 'achievements', title: 'Professional examples & proof points', group: 'App summaries', file: 'article-digest.md', description: 'A local digest of reusable examples and source references, not the complete approved-achievements source page.' },
+  { id: 'profile', title: 'Role preferences & positioning', group: 'App settings', file: 'modes/_profile.md', description: 'Targets, preferences and framing; not evidence of accomplishments.' },
+  { id: 'cv', title: 'CV draft', group: 'Documents', file: 'cv.md', description: 'The app’s working résumé, built from career context. This is an output document, not a source page from Notion.' },
+  { id: 'stories', title: 'Interview story bank', group: 'Interview preparation', file: 'interview-prep/story-bank.md', description: 'Working interview narratives. Figures and scope still need support from career records.' },
+  { id: 'guide', title: 'Writing & workflow rules', group: 'App settings', file: 'modes/_custom.md', description: 'Instructions for how the app writes and runs the job search; not the source workspace’s generation guide.' },
 ]);
 
 /** @param {unknown} id */
@@ -21,45 +21,6 @@ function documentInfo(id) {
   const info = WORKSPACE_DOCUMENTS.find((d) => d.id === id);
   if (!info) throw new WorkspaceError('Unknown workspace document.', 'unknown_document', 404);
   return info;
-}
-
-/** @param {string} root */
-function canonicalRoot(root) {
-  let base;
-  try { base = fs.realpathSync(root); }
-  catch (e) { throw new WorkspaceError('The career data directory is unavailable.', 'data_root_unavailable', 500); }
-  if (!fs.statSync(base).isDirectory()) throw new WorkspaceError('The career data root is not a directory.', 'data_root_unavailable', 500);
-  return base;
-}
-
-/** @param {string} root */
-function workspaceIdForRoot(root) {
-  // JUDGMENT: browser draft recovery must not cross data roots when a local
-  // server port is reused. Hash the real root without exposing its filesystem path.
-  return createHash('sha256').update('career-workspace-root\0').update(canonicalRoot(root)).digest('hex');
-}
-
-/**
- * Reject links at every component under the configured root, including missing
- * final files behind an existing linked directory. Root itself may be reached
- * through an OS alias such as macOS /tmp; it is canonicalized once first.
- * @param {string} root @param {string} relative
- */
-function documentPath(root, relative) {
-  const base = canonicalRoot(root);
-  let current = base;
-  const parts = relative.split('/');
-  for (let i = 0; i < parts.length; i++) {
-    current = path.join(current, parts[i]);
-    let stat;
-    try { stat = fs.lstatSync(current); }
-    catch (e) { if (e?.code === 'ENOENT') continue; throw e; }
-    if (stat.isSymbolicLink()) throw new WorkspaceError('Workspace documents cannot use symlink files or directories.', 'unsafe_path', 409);
-    if (i === parts.length - 1 ? !stat.isFile() : !stat.isDirectory()) {
-      throw new WorkspaceError('The workspace document must be a regular file inside ordinary directories.', 'invalid_file', 409);
-    }
-  }
-  return current;
 }
 
 /** @param {string} content @param {boolean} exists */
@@ -71,41 +32,32 @@ function revisionOf(content, exists) {
 function snapshot(info, content, exists, workspaceId) {
   const { file: _file, ...metadata } = info;
   const { sections, warning } = inspectOutline(content);
-  return { ...metadata, workspaceId, exists, content, revision: revisionOf(content, exists), sections, ...(warning ? { outlineWarning: warning } : {}) };
+  return { ...metadata, kind: 'local', parentDocumentId: null, sourceUrl: null, workspaceId, exists, content, revision: revisionOf(content, exists), sections, ...(warning ? { outlineWarning: warning } : {}) };
 }
 
 /** @param {string} root @param {unknown} id */
 export function readWorkspaceDocument(root, id) {
-  const info = documentInfo(id);
   const workspaceId = workspaceIdForRoot(root);
-  const file = documentPath(root, info.file);
-  let bytes;
-  try {
-    const stat = fs.statSync(file);
-    if (stat.size > MAX_DOCUMENT_BYTES) throw new WorkspaceError('Document is too large (over 200KB).', 'too_large', 413);
-    bytes = fs.readFileSync(file);
-  } catch (e) {
-    if (e?.code === 'ENOENT') return snapshot(info, '', false, workspaceId);
-    throw e;
-  }
-  if (bytes.byteLength > MAX_DOCUMENT_BYTES) throw new WorkspaceError('Document is too large (over 200KB).', 'too_large', 413);
-  const content = bytes.toString('utf8');
-  if (!Buffer.from(content, 'utf8').equals(bytes)) throw new WorkspaceError('Document is not valid UTF-8; it was left untouched.', 'invalid_encoding', 409);
-  return snapshot(info, content, true, workspaceId);
+  if (typeof id === 'string' && id.startsWith('source-')) return readSourceDocument(root, id, workspaceId);
+  const info = documentInfo(id);
+  const { content, exists } = readWorkspaceFile(root, info.file);
+  return snapshot(info, content, exists, workspaceId);
 }
 
 /** @param {string} root */
 export function listWorkspaceDocuments(root) {
   const workspaceId = workspaceIdForRoot(root);
-  return { workspaceId, documents: WORKSPACE_DOCUMENTS.map((info) => {
+  const sources = listSourceDocuments(root, workspaceId);
+  const localDocuments = WORKSPACE_DOCUMENTS.map((info) => {
     const { file: _file, ...metadata } = info;
     try {
       const { content: _content, revision: _revision, ...summary } = readWorkspaceDocument(root, info.id);
       return summary;
     } catch (e) {
-      return { ...metadata, workspaceId, exists: true, sections: [], error: e instanceof WorkspaceError ? e.message : 'This document could not be read.', code: e instanceof WorkspaceError ? e.code : 'read_failed' };
+      return { ...metadata, kind: 'local', parentDocumentId: null, sourceUrl: null, workspaceId, exists: true, sections: [], error: e instanceof WorkspaceError ? e.message : 'This document could not be read.', code: e instanceof WorkspaceError ? e.code : 'read_failed' };
     }
-  }) };
+  });
+  return { ...sources, workspaceId, documents: [...sources.documents, ...localDocuments] };
 }
 
 /** @typedef {import('./career-workspace.mjs').WorkspaceMutation & {document:string,revision:string}} SaveRequest */
@@ -118,15 +70,15 @@ export function listWorkspaceDocuments(root) {
 export function saveWorkspaceDocument({ root, request, write }) {
   if (!request || typeof request !== 'object' || Array.isArray(request)) throw new WorkspaceError('Invalid document request.', 'invalid_request');
   if (typeof request.revision !== 'string' || !/^[a-f0-9]{64}$/.test(request.revision)) throw new WorkspaceError('A document revision is required before saving.', 'invalid_revision');
+  if (typeof request.document === 'string' && request.document.startsWith('source-')) return saveSourceDocument({ root, request, write, workspaceId: workspaceIdForRoot(root) });
   const info = documentInfo(request.document);
   if (typeof request.content === 'string' && Buffer.byteLength(request.content, 'utf8') > MAX_DOCUMENT_BYTES) throw new WorkspaceError('Document is too large (over 200KB).', 'too_large', 413);
   const before = readWorkspaceDocument(root, info.id);
   if (request.revision !== before.revision) throw new WorkspaceError('This document changed elsewhere. Reload before saving; your draft has not been written.', 'stale', 409);
   const mutation = mutateDocument(before.content, request);
-  if (Buffer.byteLength(mutation.content, 'utf8') > MAX_DOCUMENT_BYTES) throw new WorkspaceError('Document is too large (over 200KB).', 'too_large', 413);
-  if (Buffer.from(mutation.content, 'utf8').toString('utf8') !== mutation.content) throw new WorkspaceError('Document contains an invalid Unicode character; it was left untouched.', 'invalid_encoding', 400);
+  validateWorkspaceContent(mutation.content);
   if (mutation.content !== before.content || !before.exists) {
-    const file = documentPath(root, info.file);
+    const file = workspaceFilePath(root, info.file);
     write(file, mutation.content);
   }
   return { ...snapshot(info, mutation.content, true, before.workspaceId), selectedSection: mutation.selectedSection };
