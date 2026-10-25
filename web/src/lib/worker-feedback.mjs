@@ -5,14 +5,27 @@ export function workerIdentity(job) {
   return [job.title, job.subtitle].filter(Boolean).join(" · ");
 }
 
-/** @param {string} status */
-export function workerState(status) {
+/**
+ * A run that stopped at a confirmation gate (report-persist.mjs →
+ * evaluateRunOutcome) ends as an error whose last status asks the user a
+ * question. It did nothing wrong; it is waiting on them.
+ * @param {{status: string, steps?: {label?: string}[]}} job
+ */
+export function needsAnswer(job) {
+  if (job?.status !== "error") return false;
+  const last = job.steps?.[job.steps.length - 1]?.label;
+  return typeof last === "string" && last.startsWith("Needs your answer");
+}
+
+/** @param {string} status @param {boolean} [waiting] from needsAnswer() */
+export function workerState(status, waiting = false) {
+  if (status === "error" && waiting) return "Needs answer";
   return status === "done" ? "Completed" : status === "error" ? "Failed" : "Running";
 }
 
 /** Stable during timer/tool updates; includes the visible task identity. @param {Worker} job */
 export function workerDetailsLabel(job) {
-  return `Open worker: ${workerIdentity(job)} — ${workerState(job.status)}`;
+  return `Open worker: ${workerIdentity(job)} — ${workerState(job.status, needsAnswer(job))}`;
 }
 
 /** @param {Worker[]} jobs @param {number} total */

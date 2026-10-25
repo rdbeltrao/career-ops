@@ -7,7 +7,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import { mkdtempSync, readFileSync, rmSync, existsSync, mkdirSync, writeFileSync, unlinkSync } from "node:fs";
-import { basename, join } from "node:path";
+import path, { basename, join } from "node:path";
 import { tmpdir } from "node:os";
 import {
   evaluateRunOutcome,
@@ -118,6 +118,37 @@ test("evaluateRunOutcome: missing envelope fails closed", () => {
   });
   assert.equal(outcome.ok, false);
   assert.match(outcome.message, /no <<report-md>> envelope/);
+});
+
+test("evaluateRunOutcome: a run stopped at a confirmation gate asks instead of reporting a failure", () => {
+  const agentText = [
+    "Question for Renato: Which agency did this posting come through?",
+    "",
+    "needs_confirmation: agency https://jobs.ashbyhq.com/pragmatike/023fa634 - rerun with the same posting and the agency it came through",
+  ].join("\n");
+  const outcome = evaluateRunOutcome({
+    envelope: { ok: false, error: "The agent emitted no <<report-md>> envelope, so there is no report to save." },
+    noOutputMessage: null,
+    sawError: false,
+    cleanExit: true,
+    agentText,
+  });
+  assert.equal(outcome.ok, false);
+  assert.equal(outcome.needsConfirmation, "agency");
+  assert.equal(outcome.message, "Needs your answer (agency): rerun with the same posting and the agency it came through. Nothing was saved.");
+});
+
+test("evaluateRunOutcome: a confirmation line does not hide a crashed run", () => {
+  const outcome = evaluateRunOutcome({
+    envelope: undefined,
+    noOutputMessage: null,
+    sawError: true,
+    cleanExit: false,
+    agentText: "needs_confirmation: agency https://x - rerun with the agency",
+  });
+  assert.equal(outcome.ok, false);
+  assert.equal(outcome.needsConfirmation, undefined);
+  assert.match(outcome.message, /didn't produce a report/);
 });
 
 test("evaluateRunOutcome: clean envelope is ok", () => {
@@ -468,4 +499,37 @@ test("persistEvaluation: refuses a non-ISO today rather than joining it into a p
   });
   assert.equal(result.ok, false);
   assert.match(result.error, /Invalid evaluation date/);
+});
+
+test("persistEvaluation: split layout runs the checkout's scripts against the data root", async () => {
+  // The web passes the data root as `root`. When it lives outside the checkout
+  // (CAREER_OPS_ROOT / .career-ops-data), resolving the scripts there failed with
+  // "Cannot find module '<data root>/reserve-report-num.mjs'" and every
+  // finished evaluation was thrown away at the save step.
+  const root = mkdtempSync(join(tmpdir(), "co-evalpersist-data-"));
+  const codeRoot = mkdtempSync(join(tmpdir(), "co-evalpersist-code-"));
+  const { spawnFn, calls } = makeRouterSpawn({
+    "reserve-report-num.mjs": (args) => args.includes("--release")
+      ? { exitCode: 0 }
+      : { exitCode: 0, stdout: "036\n" },
+    "persist-evaluation-report.mjs": writerSpec(),
+    "merge-tracker.mjs": { exitCode: 0 },
+  });
+  try {
+    const result = await persistEvaluation({
+      spawnFn, execPath: "node", root, codeRoot, markdown: REPORT,
+      url: "https://acme.com/jobs/8", today: "2026-08-04",
+    });
+    assert.equal(result.ok, true);
+    assert.equal(calls.length, 4);
+    for (const call of calls) {
+      assert.equal(path.dirname(call.args[0]), codeRoot, `${call.args[0]} must come from the checkout`);
+      assert.equal(call.opts.cwd, root);
+      assert.equal(call.opts.env.CAREER_OPS_ROOT, root);
+    }
+    assert.equal(readFileSync(join(root, "reports", "036-acme-ai-2026-08-04.md"), "utf8"), REPORT);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+    rmSync(codeRoot, { recursive: true, force: true });
+  }
 });

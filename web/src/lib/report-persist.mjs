@@ -27,8 +27,21 @@ const TITLE_RE = /^#\s+Evaluation:\s+(.+?)\s+(?:—|--|–|-)\s+(.+)$/m;
  * @param {{envelope: object|undefined, noOutputMessage: string|null, sawError: boolean, cleanExit: boolean}} signals
  * @returns {{ok: true} | {ok: false, message: string}}
  */
-export function evaluateRunOutcome({ envelope, noOutputMessage, sawError, cleanExit }) {
+export function evaluateRunOutcome({ envelope, noOutputMessage, sawError, cleanExit, agentText = "" }) {
   if (noOutputMessage) return { ok: false, message: noOutputMessage };
+  // An unattended evaluation that stops at a gate (agency, dealbreaker,
+  // blacklist, closed posting, missing JD, Jev skip) ends with one
+  // `needs_confirmation: {reason} {target} - {what to do}` line (modes/oferta.md).
+  // That is a question for the user, not a broken run, so say so. Only for a
+  // clean run: a crash that happened to print the line is still a failure.
+  const gate = cleanExit && !sawError && envelope?.ok !== true ? confirmationGate(agentText) : null;
+  if (gate) {
+    return {
+      ok: false,
+      needsConfirmation: gate.reason,
+      message: `Needs your answer (${gate.reason}): ${gate.ask}. Nothing was saved.`,
+    };
+  }
   if (envelope?.ok !== true || !cleanExit || sawError) {
     const why = envelope && envelope.ok === false ? ` (${envelope.error})` : "";
     return {
@@ -37,6 +50,15 @@ export function evaluateRunOutcome({ envelope, noOutputMessage, sawError, cleanE
     };
   }
   return { ok: true };
+}
+
+const CONFIRMATION_LINE = /^needs_confirmation:\s+([a-z_]+)\b.*?\s-\s+(.+?)\s*$/gm;
+
+/** The last `needs_confirmation:` line of an agent's text, or null. */
+export function confirmationGate(text) {
+  let last = null;
+  for (const m of String(text ?? "").matchAll(CONFIRMATION_LINE)) last = m;
+  return last ? { reason: last[1], ask: last[2].replace(/[.\s]+$/, "") } : null;
 }
 
 /**
@@ -162,9 +184,16 @@ export function trackerTsvLine({ num, today, company, role, score, reportFile, n
   return `${labels.join("\t")}\n${fields.join("\t")}\n`;
 }
 
-function spawnScript({ spawnFn, execPath, root, script, args = [], input = null }) {
+// Scripts live in the checkout (codeRoot); they run against the data root,
+// which persist-evaluation-report.mjs reads from its cwd and the others from
+// CAREER_OPS_ROOT. The two differ whenever the data root is outside the
+// checkout, so neither may stand in for the other.
+function spawnScript({ spawnFn, execPath, root, codeRoot = root, script, args = [], input = null }) {
   return new Promise((resolve) => {
-    const child = spawnFn(execPath, [path.join(root, script), ...args], { cwd: root });
+    const child = spawnFn(execPath, [path.join(codeRoot, script), ...args], {
+      cwd: root,
+      env: { ...process.env, CAREER_OPS_ROOT: root },
+    });
     let stdout = "";
     let stderr = "";
     child.stdout?.on("data", (d) => { stdout += d.toString(); });
@@ -183,10 +212,12 @@ function spawnScript({ spawnFn, execPath, root, script, args = [], input = null 
  * the sentinel. Never throws: the caller routes `{ok:false}` through the same
  * honesty gate as every other evaluate failure.
  *
- * @param {{spawnFn: Function, execPath: string, root: string, markdown: string, url: string, today: string, postedAt?: string}} args
+ * @param {{spawnFn: Function, execPath: string, root: string, codeRoot?: string, markdown: string, url: string, today: string, postedAt?: string}} args
+ *   `root` is the data root; `codeRoot` is the checkout holding the scripts
+ *   (defaults to `root` for a single-directory install).
  * @returns {Promise<{ok: true, num: string, reportFile: string, warnings: string[]} | {ok: false, error: string}>}
  */
-export async function persistEvaluation({ spawnFn, execPath, root, markdown, url, today, postedAt }) {
+export async function persistEvaluation({ spawnFn, execPath, root, codeRoot = root, markdown, url, today, postedAt }) {
   if (!ISO_DATE_RE.test(String(today ?? ""))) {
     return { ok: false, error: `Invalid evaluation date "${today}" — expected YYYY-MM-DD.` };
   }
@@ -194,7 +225,7 @@ export async function persistEvaluation({ spawnFn, execPath, root, markdown, url
   if (!meta.ok) return meta;
 
   const reserved = await spawnScript({
-    spawnFn, execPath, root, script: "reserve-report-num.mjs",
+    spawnFn, execPath, root, codeRoot, script: "reserve-report-num.mjs",
   });
   if (!reserved.ok) {
     return { ok: false, error: `Could not reserve a report number: ${reserved.stderr || "reserve-report-num.mjs failed"}.` };
@@ -205,7 +236,7 @@ export async function persistEvaluation({ spawnFn, execPath, root, markdown, url
   }
 
   const release = () => spawnScript({
-    spawnFn, execPath, root, script: "reserve-report-num.mjs", args: ["--release", num],
+    spawnFn, execPath, root, codeRoot, script: "reserve-report-num.mjs", args: ["--release", num],
   });
 
   // One release. A failed --release is not success: the sentinel would stay
@@ -254,7 +285,7 @@ export async function persistEvaluation({ spawnFn, execPath, root, markdown, url
   const notes = ISO_DATE_RE.test(String(postedAt ?? "")) ? `; posted: ${postedAt}` : "";
 
   const written = await spawnScript({
-    spawnFn, execPath, root,
+    spawnFn, execPath, root, codeRoot,
     script: "persist-evaluation-report.mjs",
     input: JSON.stringify({
       markdown,
@@ -274,7 +305,7 @@ export async function persistEvaluation({ spawnFn, execPath, root, markdown, url
   }
 
   const merged = await spawnScript({
-    spawnFn, execPath, root, script: "merge-tracker.mjs",
+    spawnFn, execPath, root, codeRoot, script: "merge-tracker.mjs",
   });
   if (!merged.ok) {
     return finish(`The report was saved but merge-tracker.mjs failed: ${merged.stderr || "non-zero exit"}.`);

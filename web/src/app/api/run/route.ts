@@ -392,7 +392,11 @@ export async function POST(req: Request) {
       // and the PDF renders correctly server-side. Emit a throttled keepalive so
       // the stream never idles during the filtered phase. Unknown event types are
       // ignored by the client's switch, so this is safe for older tabs too.
+      // The evaluate gate reads the agent's own words for a needs_confirmation
+      // line, so keep a bounded tail of them.
+      let agentTextTail = "";
       const sendAgentText = (text: string) => {
+        agentTextTail = (agentTextTail + text).slice(-20_000);
         const filter = cvFilter ?? reportFilter;
         const visible = filter ? filter.push(text) : text;
         if (visible) send({ type: "text", text: visible });
@@ -484,6 +488,7 @@ export async function POST(req: Request) {
             spawnFn: spawn,
             execPath: process.execPath,
             root: careerOpsRoot(),
+            codeRoot: careerOpsCodeRoot(),
             markdown,
             url: input,
             today,
@@ -627,6 +632,7 @@ export async function POST(req: Request) {
             noOutputMessage: noOutputError(),
             sawError,
             cleanExit,
+            agentText: agentTextTail,
           });
           if (!outcome.ok) {
             send({ type: "error", msg: outcome.message });

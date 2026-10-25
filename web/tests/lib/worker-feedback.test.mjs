@@ -81,3 +81,14 @@ test("unmount cancels pending work and ignores late worker events", () => {
   assert.deepEqual(f.notices, [""]);
   assert.equal(f.timers.size, 0);
 });
+
+test("a run stopped for the user's answer reads as needing an answer, not failed", async () => {
+  const { needsAnswer, workerState } = await import("../../src/lib/worker-feedback.mjs");
+  const stopped = { status: "error", steps: [{ kind: "status", label: "Needs your answer (agency): rerun with the agency it came through. Nothing was saved." }] };
+  const broken = { status: "error", steps: [{ kind: "status", label: "Could not reserve a report number: boom." }] };
+  assert.equal(needsAnswer(stopped), true);
+  assert.equal(needsAnswer(broken), false);
+  assert.equal(needsAnswer({ status: "done", steps: stopped.steps }), false);
+  assert.equal(workerState("error", true), "Needs answer");
+  assert.equal(workerState("error"), "Failed");
+});

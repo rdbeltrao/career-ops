@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { Check, X, Loader2, AlertTriangle } from "lucide-react";
 import type { Job } from "@/components/jobs/job-store";
-import { workerIdentity, workerState } from "@/lib/worker-feedback.mjs";
+import { needsAnswer, workerIdentity, workerState } from "@/lib/worker-feedback.mjs";
 import { jobErrorHint } from "@/lib/job-error-hint.mjs";
 import { cn } from "@/lib/cn";
 import { isFencingNotice } from "@/lib/cli-fencing.mjs";
@@ -71,7 +71,7 @@ export const TONE = {
 } as const;
 
 export function pillTone(j: Job): keyof typeof TONE {
-  if (j.status === "error") return "bad";
+  if (j.status === "error") return needsAnswer(j) ? "warn" : "bad";
   if (j.status === "done") return j.result?.tone ?? "muted";
   return "muted";
 }
@@ -124,7 +124,7 @@ export function WorkerCard({
         )}
       </div>
       <div className={cn("mt-1 text-muted", inline ? "text-xs" : "text-[10px]")}>
-        {job.subtitle && <span>{job.subtitle} · </span>}{workerState(job.status)}
+        {job.subtitle && <span>{job.subtitle} · </span>}{workerState(job.status, needsAnswer(job))}
       </div>
       <div className={cn("mt-1.5 w-full overflow-hidden rounded-full bg-surface-hover", inline ? "h-1.5" : "h-1")}>
         {job.status === "running" ? (
