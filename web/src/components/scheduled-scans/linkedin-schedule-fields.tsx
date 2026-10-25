@@ -169,18 +169,19 @@ export function LinkedInScheduleFields({
       {/* ── Filters: portals.yml unless set ── */}
       <div className="space-y-4">
         <p className="text-[12px] text-muted">
-          Results are filtered with your portals.yml title and location filters. Fill a field only to use a different list for this schedule.
+          Results use your saved title and location filters. Leave a field empty to inherit its list, or fill it to override that list for this schedule.{" "}
+          <Link href="/config#yaml-portals" target="_blank" rel="noreferrer" className="text-brand hover:underline">View or edit portals.yml in Config</Link>.
         </p>
         <div>
-          <Label hint={filters.positive.length ? "replaces your title keywords" : `empty = portals.yml: ${pf ? preview(pf.positive) : "…"}`}>Roles to find</Label>
+          <Label hint={filters.positive.length ? "replaces your title keywords" : `Uses portals.yml: ${pf ? preview(pf.positive) : "…"}`}>Roles to find</Label>
           <KeywordField ariaLabel="Roles to find" values={filters.positive} tone="inc" placeholder="Leave empty to use portals.yml" onChange={(v) => set({ positive: v })} />
         </div>
         <div>
-          <Label hint={filters.negative.length ? "replaces your exclusions" : `empty = portals.yml: ${pf ? preview(pf.negative) : "…"}`}>Exclude</Label>
+          <Label hint={filters.negative.length ? "replaces your exclusions" : `Uses portals.yml: ${pf ? preview(pf.negative) : "…"}`}>Exclude</Label>
           <KeywordField ariaLabel="Exclude" values={filters.negative} tone="exc" placeholder="Leave empty to use portals.yml" onChange={(v) => set({ negative: v })} />
         </div>
         <div>
-          <Label hint={filters.allow.length ? "replaces your allowed locations" : `empty = portals.yml: ${pf ? preview(pf.allow) : "…"}`}>
+          <Label hint={filters.allow.length ? "replaces your allowed locations" : `Uses portals.yml: ${pf ? preview(pf.allow) : "…"}`}>
             <span className="inline-flex items-center gap-1.5">
               <MapPin className="size-3.5 text-muted" /> City or location
             </span>

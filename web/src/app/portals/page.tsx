@@ -1,4 +1,5 @@
 import { Radar } from "lucide-react";
+import Link from "next/link";
 import path from "node:path";
 import { PortalsView } from "@/components/portals-view";
 import { careerOpsRoot, portalsConfigPath, careerOpsCodeRoot } from "@/lib/career-ops";
@@ -29,7 +30,7 @@ export default function PortalsPage() {
         broken — a broken link means that company silently disappears from every future scan.
       </p>
       <p className="mt-1.5 text-xs text-faint">
-        Backed by <code className="text-muted">portals.yml</code> — edit it directly or ask the assistant.
+        Backed by <Link href="/config#yaml-portals" className="text-brand hover:underline">portals.yml — view or edit in Config</Link>.
       </p>
       {error && (
         <p role="alert" className="mt-4 rounded-xl border border-rose-500/40 bg-rose-500/10 p-3 text-sm text-rose-600 dark:text-rose-400">

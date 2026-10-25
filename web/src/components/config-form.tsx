@@ -14,6 +14,7 @@ import { cn } from "@/lib/cn";
 import { CadenceSettings } from "@/components/followups/cadence-settings";
 import { persistCliId, readSavedCliId } from "@/lib/saved-cli";
 import { keepIfInstalled, pickDefaultInstalled } from "@/lib/cli-pick.mjs";
+import { ConfigFiles } from "@/components/config-files";
 
 type Cli = {
   id: string;
@@ -106,6 +107,7 @@ export function ConfigForm() {
       <p className="mt-1 text-sm text-muted">
         Run career-ops on your own AI, right on your computer. Your CV and data never leave your machine.
       </p>
+      <a href="#yaml-files" className="mt-3 inline-block text-sm text-brand hover:underline">View and edit YAML configuration files</a>
 
       {/* Engine mode */}
       <label className="mt-8 mb-2 block text-xs font-semibold uppercase tracking-[0.18em] text-muted">
@@ -327,6 +329,7 @@ export function ConfigForm() {
         </button>
         <span className="text-xs text-faint">Local-first · on our roadmap</span>
       </div>
+      <ConfigFiles />
     </div>
   );
 }
