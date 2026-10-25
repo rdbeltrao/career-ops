@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { PdfEngine } from '../vendor/bentopdf/core.js';
 import { paragraphText, replacementRuns, readParagraphs } from './model.mjs';
-import { reflowDocument, describePath } from './reflow.mjs';
+import { reflowDocument, describePath, preparePdfForReflow } from './reflow.mjs';
 import { analyzeCvSections } from './sections.mjs';
 
 const channel = 'career-ops-pdf-editor';
@@ -359,16 +359,29 @@ function clearPreview() {
 async function computeReflow(options) {
   const scratch=await PdfEngine.create();
   try {
-    scratch.open(stableBytes);
+    scratch.open(await preparePdfForReflow(stableBytes));
     const result=await reflowDocument(scratch,options);
     if(result.bytes.byteLength>MAX_BYTES)throw new Error('This edit would make the PDF larger than 20 MB.');
     scratch.open(result.bytes);
     result.rasters=[];
-    for(let index=0;index<scratch.pageCount;index++){scratch.loadPage(index);result.rasters.push(scratch.renderPage(native.zoomValue*devicePixelRatio));}
+    for(let index=0;index<scratch.pageCount;index++){
+      scratch.loadPage(index);
+      const raster=scratch.renderPage(native.zoomValue*devicePixelRatio);
+      // PDFium reuses its rendering buffer. Retain this page before rendering the next.
+      result.rasters.push({...raster,data:raster.data.slice()});
+    }
     return result;
   } finally {scratch.close();}
 }
+function visibleCaret() {
+  const editor=native.state.editing?.editable,selection=window.getSelection();
+  if(!editor||!selection?.rangeCount||!editor.contains(selection.focusNode))return null;
+  const range=document.createRange();range.setStart(selection.focusNode,selection.focusOffset);range.collapse(true);
+  const box=range.getBoundingClientRect();return box.height?box:null;
+}
 function displayLayout(result,kind,texts=[]) {
+  const stage=document.getElementById('stage'),stageBox=stage.getBoundingClientRect(),caretBefore=kind==='live'?visibleCaret():null;
+  const anchor=caretBefore&&caretBefore.top>=stageBox.top&&caretBefore.bottom<=stageBox.bottom?caretBefore:null;
   document.getElementById('career-pages-preview')?.remove();document.getElementById('career-preview-description')?.remove();
   const container=document.createElement('div');container.id='career-pages-preview';
   const offsets=[];let height=0;
@@ -383,18 +396,21 @@ function displayLayout(result,kind,texts=[]) {
   const wrap=document.getElementById('pageWrap');wrap.prepend(container);wrap.style.height=`${height-24}px`;
   document.body.classList.toggle('live-reflow',kind==='live');document.body.classList.toggle('ai-preview',kind==='ai');
   if(kind==='live')native.mapLayout(result.liveLines,result.pages,offsets,height,result.editedLayouts[0]);
+  // Earlier pages enter the stack when editing a later page. Keep the active
+  // caret at its current viewport position instead of moving it offscreen.
+  if(anchor){const caretAfter=visibleCaret();if(caretAfter)stage.scrollTop+=caretAfter.top-anchor.top;}
   if(texts.length){const description=document.createElement('div');description.id='career-preview-description';description.className='career-visually-hidden';description.setAttribute('role','region');description.setAttribute('aria-label','AI rewrite preview');description.textContent=texts.join('\n\n');wrap.append(description);container.setAttribute('aria-describedby',description.id);}
   paintChrome();
 }
 function scheduleLiveLayout() {
-  if(preview||internal||!loaded||!native.hasChanges())return;
+  if(preview||internal||!loaded||native.state.editing?.composing||!native.hasChanges())return;
   clearTimeout(layoutTimer);const generation=++layoutGeneration;
   layoutTimer=setTimeout(async()=>{
-    const pending=draft(),active=native.draft();if(!pending||!active)return;
+    const pending=draft(),active=native.draft();if(!pending||!active||native.state.editing?.composing)return;
     try {
       const identity=describeTarget(pending.paragraphId,pending.original);
       const result=await computeReflow({edits:[{identity,runs:active.runs,format:active.format}]});
-      if(generation!==layoutGeneration||preview||!native.draft())return;
+      if(generation!==layoutGeneration||preview||!native.draft()||native.state.editing?.composing)return;
       livePreview=result;previewPageIndex=Math.min(identity.pageIndex,result.pages.length-1);displayLayout(result,'live');
       document.getElementById('career-status').textContent=`Text flows across ${result.pages.length} ${result.pages.length===1?'page':'pages'}. Keep typing; Escape finishes this paragraph.`;
     } catch(error){if(generation===layoutGeneration)fail(error);}
@@ -411,8 +427,9 @@ async function showPreview(targets,requestId) {
 }
 async function replaceTargets(targets,requestId) {
   const prepared=validatedTargets(targets);clearPreview();await flush();
+  const pageIndex=engine.pageIndex;
   const result=await computeReflow({edits:prepared.map(target=>({identity:target.identity,text:target.text}))});
-  await transaction(()=>engine.open(result.bytes),requestId);
+  await transaction(()=>{engine.open(result.bytes);engine.loadPage(Math.min(pageIndex,engine.pageCount-1));},requestId);
 }
 async function goPage(index) {
   const layout=preview?.result??livePreview;
@@ -427,7 +444,10 @@ async function history(type,requestId) {
   if(preview)throw new Error('Finish the AI preview before undoing or redoing.');
   await flush();
   const from=type==='undo'?undo:redo,to=type==='undo'?redo:undo;
-  if(!from.length)throw new Error(`Nothing to ${type}.`);
+  if(!from.length){
+    send('history-state',{revision,canUndo:undo.length>0,canRedo:redo.length>0},requestId);
+    paintChrome();return;
+  }
   const before=stableBytes.slice(),savedUndo=[...undo],savedRedo=[...redo],identity=selectedIdentity(),pageIndex=engine.pageIndex;
   try{
     native.cancel();await rawSnapshot();

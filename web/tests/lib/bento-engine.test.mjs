@@ -112,6 +112,11 @@ test('BentoPDF iframe loads local assets, selects, rewrites, exports and undoes 
   assert.equal(initialization.type, 'ready', initialization.message);
   const load = await page.evaluate(async (bytes) => command('load', { bytes: new Uint8Array(bytes).buffer, filename: 'fixture.pdf' }), Array.from(syntheticPdf()));
   assert.equal(load.type, 'loaded');
+  const emptyUndo=await page.evaluate(()=>command('undo'));
+  assert.deepEqual({type:emptyUndo.type,revision:emptyUndo.revision,canUndo:emptyUndo.canUndo,canRedo:emptyUndo.canRedo},{type:'history-state',revision:0,canUndo:false,canRedo:false});
+  assert.equal(await page.evaluate(()=>messages.filter(message=>message.type==='changed').length),0,'An empty Undo is not a PDF mutation');
+  assert.deepEqual(await page.evaluate(async()=>Array.from(new Uint8Array((await command('export')).bytes))),Array.from(syntheticPdf()),'An empty Undo keeps PDF bytes unchanged');
+
   await page.frameLocator('iframe').getByRole('button', { name: 'Edit paragraph: Original profile sentence.', exact: true }).click();
   await page.frameLocator('iframe').getByRole('textbox', { name: 'Edit paragraph on page', exact: true }).waitFor({ timeout: 1500 });
   await page.waitForFunction(() => window.messages.some((message) => message.type === 'selection'));
@@ -213,7 +218,7 @@ test('BentoPDF iframe loads local assets, selects, rewrites, exports and undoes 
     engine.open(new Uint8Array(finalBytes));
     assert.equal(engine.pageCount, 2);
     assert.match(engine.buildModel().map(paragraphText).join('\n'), /First page original sentence/);
-    engine.loadPage(0);
+    engine.loadPage(1);
     const finalText = engine.buildModel().map(paragraphText).join('\n');
     assert.match(finalText, /Second page résumé sentence/);
     assert.doesNotMatch(finalText, /Second page original sentence/);
@@ -231,7 +236,7 @@ test('BentoPDF iframe loads local assets, selects, rewrites, exports and undoes 
     assert.match(await page.frameLocator('iframe').getByRole('textbox', { name: 'Edit paragraph on page' }).innerText(), /Second page résumé sentence/, 'Responsive redraw retains the inline editor');
     const afterResize = await page.evaluate(async () => Array.from(new Uint8Array((await command('export')).bytes)));
     engine.open(new Uint8Array(afterResize));
-    engine.loadPage(0);
+    engine.loadPage(1);
     assert.match(engine.buildModel().map(paragraphText).join('\n'), /Second page résumé sentence/);
     await page.setViewportSize({ width: 1200, height: 1000 });
     await page.evaluate(async (bytes) => command('load', { bytes: new Uint8Array(bytes).buffer, filename: 'typing.pdf' }), Array.from(syntheticPdf()));
@@ -249,6 +254,68 @@ test('BentoPDF iframe loads local assets, selects, rewrites, exports and undoes 
     const typedBytes = await page.evaluate(async () => Array.from(new Uint8Array((await command('export')).bytes)));
     engine.open(new Uint8Array(typedBytes));
     assert.match(engine.buildModel().map(paragraphText).join('\n'), /New\s+Original profile sentence/);
+
+    // A real caret insertion in a multi-page CV must keep the editing viewport stable.
+    const typingProducer=await browser.newPage();
+    const typingSummary='Detailed profile covering practical engineering, reliable services and thoughtful leadership. '.repeat(4).trim();
+    await typingProducer.setContent(`<style>@page{size:letter;margin:50px}body{font:14px Arial;background:white}h1{font-size:28px}h2{font-size:20px}p{line-height:1.45}.next{break-before:page}</style><h1>Fictional Candidate</h1><h2>Professional Summary</h2><p>${typingSummary}</p><h2>Work Experience</h2><p>Delivered software for growing teams.</p><h2 class="next">Education</h2><p>Computer science degree.</p>`);
+    const typingPdf=await typingProducer.pdf({preferCSSPageSize:true,printBackground:true});await typingProducer.close();
+    await page.evaluate(()=>document.querySelector('iframe').style.height='650px');
+    await page.evaluate(async bytes=>command('load',{bytes:new Uint8Array(bytes).buffer,filename:'middle-caret.pdf'}),Array.from(typingPdf));
+    await iframe.getByRole('button',{name:/Edit paragraph: Detailed profile/}).click({position:{x:95,y:8}});
+    const middleInline=iframe.getByRole('textbox',{name:'Edit paragraph on page'});await middleInline.waitFor();
+    const middlePoint=await middleInline.evaluate(ed=>{const walker=document.createTreeWalker(ed,NodeFilter.SHOW_TEXT);let node;while(node=walker.nextNode()){const at=node.textContent.indexOf(',');if(at>=0){const range=document.createRange();range.setStart(node,at+1);range.collapse(true);const rect=range.getBoundingClientRect();return {x:rect.x+1,y:rect.y+rect.height/2};}}throw new Error('Expected a visible comma in the summary');});
+    const iframeBounds=await page.locator('iframe').boundingBox();await page.mouse.click(iframeBounds.x+middlePoint.x,iframeBounds.y+middlePoint.y);
+
+    const headerPixels=await editorFrame.evaluate(()=>{const canvas=document.getElementById('page');return Array.from(canvas.getContext('2d').getImageData(0,0,canvas.width,Math.floor(canvas.height*.1)).data);});
+    const beforeTyping=await editorFrame.evaluate(()=>{const stage=document.getElementById('stage'),selection=getSelection(),range=selection.getRangeAt(0),caret=range.getBoundingClientRect(),ed=document.querySelector('[contenteditable="true"]'),prefix=document.createRange();prefix.selectNodeContents(ed);prefix.setEnd(selection.anchorNode,selection.anchorOffset);return {scroll:stage.scrollTop,caret:{x:caret.x,y:caret.y},offset:prefix.toString().length,text:ed.textContent};});
+    await page.keyboard.insertText('a');
+    await editorFrame.waitForFunction(()=>document.body.classList.contains('live-reflow'));
+    await editorFrame.waitForTimeout(400);
+    const afterTyping=await editorFrame.evaluate(()=>{const stage=document.getElementById('stage'),range=getSelection().getRangeAt(0),caret=range.getBoundingClientRect();return {scroll:stage.scrollTop,caret:{x:caret.x,y:caret.y},text:document.querySelector('[contenteditable="true"]').textContent};});
+    const rasterChecks=await editorFrame.evaluate(before=>{const canvases=[...document.querySelectorAll('.career-reflow-page canvas')];const pixels=canvas=>canvas.getContext('2d').getImageData(0,0,canvas.width,Math.floor(canvas.height*.1)).data;const first=pixels(canvases[0]),last=pixels(canvases.at(-1));return {firstMatchesOriginal:first.length===before.length&&first.every((value,index)=>value===before[index]),pagesDiffer:first.length!==last.length||first.some((value,index)=>value!==last[index])};},headerPixels);
+    assert.equal(rasterChecks.pagesDiffer,true,'Each preview page must retain its own raster, not repeat the last PDF page');
+    assert.equal(rasterChecks.firstMatchesOriginal,true,'Typing in Summary keeps the unchanged first-page header aligned with its caret');
+    assert.ok(Math.abs(afterTyping.scroll-beforeTyping.scroll)<3,`Middle typing keeps scroll position: ${JSON.stringify({before:beforeTyping,after:afterTyping})}`);
+    assert.ok(Math.abs(afterTyping.caret.y-beforeTyping.caret.y)<20,'Caret remains on the same visible line after pagination');
+    assert.ok(beforeTyping.offset>0&&beforeTyping.offset<beforeTyping.text.length,'The click placed the caret inside the paragraph');
+    assert.equal(afterTyping.text,beforeTyping.text.slice(0,beforeTyping.offset)+'a'+beforeTyping.text.slice(beforeTyping.offset),'Typing inserts exactly one character at the clicked position');
+    await editorFrame.evaluate(()=>{window.beforeTypingCanvas=document.querySelector('.career-reflow-page canvas');});
+    await page.keyboard.insertText('b');
+    await editorFrame.waitForFunction(()=>document.querySelector('.career-reflow-page canvas')!==window.beforeTypingCanvas);
+    const secondTyping=await editorFrame.evaluate(()=>({scroll:document.getElementById('stage').scrollTop,text:document.querySelector('[contenteditable="true"]').textContent,caretY:getSelection().getRangeAt(0).getBoundingClientRect().y}));
+    assert.equal(secondTyping.text,beforeTyping.text.slice(0,beforeTyping.offset)+'ab'+beforeTyping.text.slice(beforeTyping.offset),'Typing after the first preview keeps the same logical caret');
+    assert.ok(Math.abs(secondTyping.scroll-beforeTyping.scroll)<3&&Math.abs(secondTyping.caretY-beforeTyping.caret.y)<20,'A later preview preserves the visible editing position');
+    await page.evaluate(()=>command('export'));
+    await page.evaluate(()=>document.querySelector('iframe').style.height='900px');
+    await page.evaluate(async bytes=>command('load',{bytes:new Uint8Array(bytes).buffer,filename:'later-caret.pdf'}),Array.from(typingPdf));
+    await page.evaluate(()=>command('page',{pageIndex:1}));
+    await iframe.getByRole('button',{name:'Edit paragraph: Computer science degree.',exact:true}).click({position:{x:45,y:8}});
+    const laterBefore=await editorFrame.evaluate(()=>getSelection().getRangeAt(0).getBoundingClientRect().y);
+    await page.keyboard.insertText('a');await editorFrame.waitForFunction(()=>document.body.classList.contains('live-reflow'));
+    const laterAfter=await editorFrame.evaluate(()=>getSelection().getRangeAt(0).getBoundingClientRect().y);
+    assert.ok(Math.abs(laterAfter-laterBefore)<20,`Editing page2 must not move its caret offscreen: ${laterBefore} → ${laterAfter}`);
+    await editorFrame.evaluate(()=>{window.beforeTypingCanvas=document.querySelector('.career-reflow-page canvas');});
+    await editorFrame.evaluate(()=>{window.caretFrames=[];window.caretTraceDone=false;const until=performance.now()+450;const sample=()=>{const selection=getSelection();if(selection?.rangeCount)window.caretFrames.push(selection.getRangeAt(0).getBoundingClientRect().y);if(performance.now()<until)requestAnimationFrame(sample);else window.caretTraceDone=true;};requestAnimationFrame(sample);});
+    await page.keyboard.insertText('b');await editorFrame.waitForFunction(()=>document.querySelector('.career-reflow-page canvas')!==window.beforeTypingCanvas);
+    await editorFrame.waitForFunction(()=>window.caretTraceDone);
+    const caretFrames=await editorFrame.evaluate(()=>window.caretFrames);
+    assert.ok(caretFrames.length>5&&caretFrames.every(y=>Math.abs(y-laterBefore)<20),`Every frame must keep the later-page caret visible: ${JSON.stringify(caretFrames)}`);
+    const laterSecond=await editorFrame.evaluate(()=>getSelection().getRangeAt(0).getBoundingClientRect().y);
+    assert.ok(Math.abs(laterSecond-laterBefore)<20,'Typing after the later-page preview preserves the visible caret');
+    const cdp=await page.context().newCDPSession(page);
+    await cdp.send('Input.imeSetComposition',{text:'é',selectionStart:1,selectionEnd:1});
+    await editorFrame.evaluate(()=>{window.composingNode=getSelection().focusNode;window.composingCanvas=document.querySelector('.career-reflow-page canvas');});
+    await editorFrame.waitForTimeout(350);
+    const duringComposition=await editorFrame.evaluate(async()=>{const {careerNative}=await import('/vendor/bentopdf/app.js');return {composing:careerNative.state.editing.composing,nodeRetained:window.composingNode.isConnected,canvasRetained:document.querySelector('.career-reflow-page canvas')===window.composingCanvas};});
+    assert.deepEqual(duringComposition,{composing:true,nodeRetained:true,canvasRetained:true},'A real IME composition keeps its browser-owned buffer while pagination waits');
+    await cdp.send('Input.insertText',{text:'é'});await cdp.detach();
+    await editorFrame.waitForFunction(()=>document.querySelector('.career-reflow-page canvas')!==window.composingCanvas);
+    const committedComposition=await editorFrame.evaluate(async()=>{const {careerNative}=await import('/vendor/bentopdf/app.js');return {composing:careerNative.state.editing.composing,text:careerNative.draft().runs.map(run=>run.text).join('')};});
+    assert.equal(committedComposition.composing,false);assert.equal((committedComposition.text.match(/é/g)??[]).length,1,'IME commit retains exactly one composed character');
+
+    await page.evaluate(()=>command('export'));
+
 
     // Preview is real on-page ink but does not alter exported bytes or mutation history.
     await page.evaluate(async (bytes) => command('load', { bytes: new Uint8Array(bytes).buffer, filename: 'preview.pdf' }), Array.from(syntheticPdf()));
@@ -338,11 +405,23 @@ test('BentoPDF iframe loads local assets, selects, rewrites, exports and undoes 
     engine.loadPage(1);
     assert.doesNotMatch(engine.buildModel().map(paragraphText).join('\n'),/Education|Computer science/);
     assert.equal(bluePixels(engine.renderPage(1)),0,'Source page loses the transferred decoration');
-    assert.equal((await page.evaluate(()=>command('undo'))).type,'changed');
-    engine.open(new Uint8Array(await page.evaluate(async()=>Array.from(new Uint8Array((await command('export')).bytes)))));
+    const historyChanges=await page.evaluate(()=>messages.filter(message=>message.type==='changed').length);
+    await iframe.locator('#career-undo').click();
+    await page.waitForFunction(count=>messages.filter(message=>message.type==='changed').length>count,historyChanges);
+    const undoneSection=await page.evaluate(async()=>Array.from(new Uint8Array((await command('export')).bytes)));
+    const duplicateUndo=await page.evaluate(()=>command('undo'));
+    assert.equal(duplicateUndo.type,'history-state');assert.equal(duplicateUndo.canUndo,false);assert.equal(duplicateUndo.canRedo,true);
+    assert.equal(await page.evaluate(()=>messages.filter(message=>message.type==='changed').length),historyChanges+1,'One toolbar Undo creates exactly one restored PDF; duplicate Undo is harmless');
+    assert.deepEqual(await page.evaluate(async()=>Array.from(new Uint8Array((await command('export')).bytes))),undoneSection,'Duplicate Undo does not alter the restored section');
+    engine.open(new Uint8Array(undoneSection));
     assert.doesNotMatch(engine.buildModel().map(paragraphText).join('\n'),/Computer science/);
     engine.loadPage(1);assert.match(engine.buildModel().map(paragraphText).join('\n'),/Computer science/);
     assert.ok(bluePixels(engine.renderPage(1))>500,'Undo restores both section text and decoration');
+    await iframe.locator('#career-redo').click();
+    await page.waitForFunction(count=>messages.filter(message=>message.type==='changed').length===count+2,historyChanges);
+    engine.open(new Uint8Array(await page.evaluate(async()=>Array.from(new Uint8Array((await command('export')).bytes)))));
+    assert.match(engine.buildModel().map(paragraphText).join(' '),/Computer science/,'Redo restores the moved section again');
+    assert.ok(bluePixels(engine.renderPage(1))>500,'Redo restores its decoration on the destination page');
   } finally { engine.close(); }
   assert.deepEqual(errors, []);
   assert.ok(requests.every((url) => url.startsWith(origin)), 'No document, font or editor request leaves localhost');

@@ -5129,10 +5129,12 @@ function schedulePreview() {
         es2.para.format
       );
       if (!pvC || !pvC.lines.length) return;
+      if(es2.careerLayout&&pvC.lines.length!==es2.careerLayout.lines.length)return;
       inPreviewPass = true;
       try {
         es2.preview = pvC;
         applyLockedGeom(es2, pvC);
+        applyCareerLayout(es2,pvC);
         updateGlassSurface(es2, pvC, runsC);
         drawOverlay();
       } finally {
@@ -5149,6 +5151,7 @@ function schedulePreview() {
       es2.para.format
     );
     if (!pv || !pv.lines.length) return;
+    if(es2.careerLayout&&pv.lines.length!==es2.careerLayout.lines.length)return;
     inPreviewPass = true;
     try {
       const hadFocus =
@@ -5161,6 +5164,7 @@ function schedulePreview() {
       else if (hadFocus) lockedCaretSet(ed, caret);
       es2.preview = pv;
       applyLockedGeom(es2, pv);
+      applyCareerLayout(es2,pv);
       updateGlassSurface(es2, pv, runs);
       drawOverlay();
     } finally {
@@ -10278,6 +10282,24 @@ let careerHooks = {};
 openEditor = (spec, caret) => careerHooks.open?.(spec.para, caret);
 endEdit = (commit) => commit ? careerHooks.commit?.() : rawEndEdit(false);
 continueListItem = () => { if (state.editing) lockedInsertBreak(state.editing); };
+// Native immediate previews must retain the page transforms installed by the
+// whole-document preview, including the original-baseline path used by locked lines.
+function applyCareerLayout(e,pv) {
+  const layout=e.careerLayout;if(!layout)return;
+  const {lines,pages,offsets,height}=layout;
+  const divs=[...e.editable.children].filter(div=>div.classList.contains('eline'));
+  if(!pv?.lines?.length||divs.length!==lines.length)throw new Error('Could not align the editable lines with their page preview.');
+  const useOriginal=e.para?.lines?.length===pv.lines.length&&Math.abs(e.para.lines[0].y-pv.lines[0].baseline)<1.6*(pv.lines[0].size||12);
+  for(const [index,div]of divs.entries()){
+    const target=lines[index],baseline=useOriginal?e.para.lines[index].y:pv.lines[index].baseline;
+    const targetY=offsets[target.pageIndex]+(pages[target.pageIndex].height-target.baseline)*state.zoom;
+    const originalY=(P().pageHeight-baseline)*state.zoom;
+    div.style.transform=`translate(0px, ${targetY-originalY}px)`;
+  }
+  const editableHeight=Math.max(pv.height*state.zoom,height-(P().pageHeight-pv.top)*state.zoom);
+  e.el.style.overflow='visible';e.el.style.height=`${editableHeight}px`;e.el.style.minHeight=`${editableHeight}px`;
+  e.editable.style.height=`${editableHeight}px`;
+}
 export const careerNative = {
   get engine() { return P(); },
   get state() { return state; },
@@ -10326,21 +10348,12 @@ export const careerNative = {
     const caret=lockedCaretGet(e.editable),selected=lockedSelRange(e.editable);
     if(layout?.preview){renderLockedLines(e.editable,layout.runs,layout.preview,e.para,layout.preview.x);e.preview=layout.preview;applyLockedGeom(e,layout.preview);applyDocFonts(e.para,e.editable);if(selected)lockedSelSet(e.editable,selected.start,selected.end);else if(caret>=0)lockedCaretSet(e.editable,caret);}
     const pv=e.preview??P().previewParagraph(e.para.id,parseEditor(e.editable,e.para.runs),e.para.format);
-    const divs=[...e.editable.children].filter(div=>div.classList.contains('eline'));
-    if(!pv?.lines?.length||divs.length!==lines.length)throw new Error('Could not align the editable lines with their page preview.');
-    for(const [index,div] of divs.entries()){
-      const target=lines[index],line=pv.lines[index];
-      const targetY=offsets[target.pageIndex]+(pages[target.pageIndex].height-target.baseline)*state.zoom;
-      const originalY=(P().pageHeight-line.baseline)*state.zoom;
-      div.style.transform=`translate(0px, ${targetY-originalY}px)`;
-    }
-    const editableHeight=Math.max(pv.height*state.zoom,height-(P().pageHeight-pv.top)*state.zoom);
-    e.el.style.overflow='visible';e.el.style.height=`${editableHeight}px`;e.el.style.minHeight=`${editableHeight}px`;
-    e.editable.style.height=`${editableHeight}px`;
+    e.careerLayout={lines,pages,offsets,height};
+    applyCareerLayout(e,pv);
   },
   clearLayout() {
     const e=state.editing;
-    if(e){for(const line of e.editable.children)line.style.transform='';e.el.style.overflow='';e.el.style.height='';e.editable.style.height='100%';if(e.preview)applyLockedGeom(e,e.preview);}
+    if(e){delete e.careerLayout;for(const line of e.editable.children)line.style.transform='';e.el.style.overflow='';e.el.style.height='';e.editable.style.height='100%';if(e.preview)applyLockedGeom(e,e.preview);}
     if(P()?.doc)renderPage();
   },
   previewBitmap(para,runs,fmt,scale) {
