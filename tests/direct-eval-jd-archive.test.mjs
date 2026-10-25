@@ -167,7 +167,9 @@ test('openrouter-runner archives the pasted JD over a model-written paraphrase',
   const stub = writeFetchStub(dir, reply);
   const r = spawnSync(process.execPath, ['--import', pathToFileURL(stub).href, join(ROOT, 'openrouter-runner.mjs'), 'evaluate', JD], {
     cwd: dir, encoding: 'utf-8', timeout: 90_000,
-    env: envFor(dir, { OPENROUTER_API_KEY: 'test-key', CAREER_OPS_MODEL: 'test/model' }),
+    // The fork refuses pinned paid models (paidModelRefusal); the fetch stub
+    // answers locally, so no credit is spent.
+    env: envFor(dir, { OPENROUTER_API_KEY: 'test-key', CAREER_OPS_MODEL: 'test/model', CAREER_OPS_ALLOW_PAID_OPENROUTER: '1' }),
   });
   const report = onlyReport(dir, `${r.stdout}${r.stderr}`);
   assertArchivesJd(report, JD);
