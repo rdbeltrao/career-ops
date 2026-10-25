@@ -619,11 +619,17 @@ read_spend_tier() {
 }
 
 # Tier -> model mapping. Keep in sync with the table in modes/_shared.md.
+# Claude Code's family aliases, not full model ids: every CLI version resolves
+# an alias to the newest model it knows, while a full id the installed CLI's
+# catalog does not list makes every worker fail with "isn't described by this
+# version's model catalog" (2026-10-25, Claude Code 2.1.278 and
+# claude-sonnet-5-5). A model release or a CLI update can no longer break a
+# scheduled run.
 spend_tier_to_model() {
   case "$1" in
-    economy) echo "claude-haiku-5-5" ;;
-    premium) echo "claude-opus-5-5" ;;
-    standard|*) echo "claude-sonnet-5-5" ;;
+    economy) echo "haiku" ;;
+    premium) echo "opus" ;;
+    standard|*) echo "sonnet" ;;
   esac
 }
 
