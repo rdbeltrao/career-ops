@@ -60,6 +60,7 @@ export function answerBankPath(root) {
 /** Lowercase, accents and punctuation stripped, "(optional)" tags dropped. */
 export function normalizeQuestion(label) {
   return String(label ?? '')
+    .replace(/[łŁ]/g, 'l') // NFKD does not decompose ł, so "Hasło" would lose a letter
     .normalize('NFKD')
     .replace(/[̀-ͯ]/g, '')
     .toLowerCase()
@@ -89,9 +90,11 @@ const IDENTITY_RE = /\b(first name|last name|full name|given name|family name|su
 export function classifyQuestion(label) {
   const q = normalizeQuestion(label);
   if (PASSWORD_RE.test(q)) return 'password';
-  if (CONSENT_RE.test(q)) return 'consent';
   if (SENSITIVE_RE.test(q)) return 'sensitive';
+  // Before consent: "Do you agree to relocate?" is a knockout question phrased
+  // as agreement, and losing its class would lose its saved answer too.
   if (KNOCKOUT_RE.test(q)) return 'knockout';
+  if (CONSENT_RE.test(q)) return 'consent';
   if (IDENTITY_RE.test(q)) return 'identity';
   return 'other';
 }
@@ -125,13 +128,16 @@ function clean(value) {
  * snapshot shape, which is what the report section renders. Passwords and empty
  * answers are dropped here, so neither ever reaches the report or the bank.
  *
- * @param {{ fields: {id: string, type: string, label: string}[], answers: Record<string, string>, cvFile?: string | null }} input
+ * `password` is extract.ts's flag for an <input type="password">, which it maps
+ * to type "text"; it drops the field whatever the label says.
+ *
+ * @param {{ fields: {id: string, type: string, label: string, password?: boolean}[], answers: Record<string, string>, cvFile?: string | null }} input
  */
 export function snapshotFromForm({ fields = [], answers = {}, cvFile = null } = {}) {
   const snap = { freeText: [], selections: [], fieldValues: [], files: [] };
   for (const f of fields) {
     const question = clean(f.label).replace(/\s*\*+$/, '') || f.id;
-    if (classifyQuestion(question) === 'password') continue;
+    if (f.password || classifyQuestion(question) === 'password') continue;
     if (f.type === 'file') {
       if (cvFile && /resume|résumé|\bcv\b|lebenslauf/i.test(question)) snap.files.push({ field: question, path: cvFile });
       continue;
@@ -143,6 +149,38 @@ export function snapshotFromForm({ fields = [], answers = {}, cvFile = null } = 
     else snap.fieldValues.push({ question, answer: value });
   }
   return snap;
+}
+
+/** True when a snapshot holds at least one answer (a CV path alone is not one). */
+export function snapshotHasAnswers(snapshot) {
+  return ['freeText', 'selections', 'fieldValues'].some((k) => Array.isArray(snapshot?.[k]) && snapshot[k].length > 0);
+}
+
+const QUESTION_KEY = { freeText: 'question', selections: 'question', fieldValues: 'question', files: 'field' };
+
+/**
+ * Merge a new save into a report's existing `## Application Answers` snapshot,
+ * because writing the section replaces it whole. Entries for the same question
+ * take the new value; entries the new save does not mention are kept (a cover
+ * letter attached by hand, an answer written by the CLI apply mode). A section
+ * already marked submitted stays submitted: re-filling a form after applying
+ * does not un-submit the application.
+ */
+export function mergeSnapshots(existing, incoming, state) {
+  const out = { state: existing?.state === 'submitted' ? 'submitted' : state };
+  for (const [k, key] of Object.entries(QUESTION_KEY)) {
+    const next = Array.isArray(incoming?.[k]) ? incoming[k] : [];
+    const byQuestion = new Map(next.map((n) => [normalizeQuestion(n?.[key]), n]));
+    // Existing order first, each replaced in place; genuinely new entries after.
+    const merged = (Array.isArray(existing?.[k]) ? existing[k] : []).map((e) => {
+      const q = normalizeQuestion(e?.[key]);
+      const replacement = byQuestion.get(q);
+      byQuestion.delete(q);
+      return replacement ?? e;
+    });
+    out[k] = [...merged, ...byQuestion.values()];
+  }
+  return out;
 }
 
 function entries(list, kind, qKeys, aKeys) {
@@ -225,11 +263,18 @@ export function readBank(root) {
 // ---------------------------------------------------------------------------
 // Readers
 
-const LEGAL_SUFFIX_RE = /\b(gmbh|ag|se|kg|ug|inc|incorporated|ltd|limited|llc|plc|bv|nv|sa|sas|sarl|srl|spa|oy|ab|as|co|corp|corporation|company)\b/g;
+const LEGAL_FORMS = new Set(['gmbh', 'ag', 'se', 'kg', 'kgaa', 'ug', 'inc', 'incorporated', 'ltd', 'limited', 'llc', 'plc', 'bv', 'nv', 'sa', 'sas', 'sarl', 'srl', 'spa', 'oy', 'ab', 'as', 'co', 'corp', 'corporation', 'company']);
 
-/** Company identity for matching: case, punctuation and legal form folded. */
+/**
+ * Company identity for matching: case and punctuation folded, and legal forms
+ * dropped from the END only ("Acme Holding SE & Co. KG" is "acmeholding"), so a
+ * name that starts with one ("AS Software", "SE Ranking") keeps it. An unknown
+ * employer ("?") has no identity, so it never matches another unknown one.
+ */
 export function companyKey(name) {
-  return normalizeQuestion(name).replace(LEGAL_SUFFIX_RE, ' ').replace(/\s+/g, '');
+  const words = normalizeQuestion(name).split(' ').filter(Boolean);
+  while (words.length > 1 && LEGAL_FORMS.has(words[words.length - 1])) words.pop();
+  return words.join('');
 }
 
 function applicationKey(r) {
@@ -247,13 +292,22 @@ function chronological(records) {
  * Earlier applications to one company, one entry per application (the latest
  * save of each), newest first. This is what the repeat-application check shows.
  */
-export function companyHistory(records, company) {
+export function companyHistory(records, company, { exclude = {} } = {}) {
   const key = companyKey(company);
   if (!key) return [];
+  // The application being filled right now is not an "earlier" one, whatever
+  // its fill saves have already written to the bank.
+  const skip = new Set();
+  if (exclude.report && /^\d+$/.test(exclude.report)) skip.add(`r:${Number(exclude.report)}`);
+  if (exclude.url) skip.add(`u:${exclude.url}`);
   const latest = new Map();
   for (const r of chronological(records)) {
     if (companyKey(r.company) !== key) continue;
-    latest.set(applicationKey(r), r);
+    const appKey = applicationKey(r);
+    if (skip.has(appKey) || (exclude.url && r.url === exclude.url)) continue;
+    // A fill saved after the application was submitted does not un-submit it.
+    const prev = latest.get(appKey);
+    latest.set(appKey, prev?.state === 'submitted' && r.state !== 'submitted' ? { ...r, state: 'submitted' } : r);
   }
   return [...latest.values()].reverse().map((r) => ({ date: r.date, state: r.state, role: r.role, report: r.report, url: r.url, answers: r.answers }));
 }
@@ -329,15 +383,18 @@ export function matchPriorAnswers(records, fields, { company = '' } = {}) {
  * Enforce the field classes on the planner's draft. The prompt asks for the same
  * thing; this is the part that does not depend on the model listening.
  *   password, consent  blank, needs confirmation (never filled, never ticked)
- *   sensitive          needs confirmation; blank unless a saved answer backs it
- *                      (no source the planner reads states demographics)
- *   knockout           needs confirmation always; the draft is kept, because
- *                      config/profile.yml may state that exact answer (visa,
- *                      comp, location), and an empty draft takes the saved one
+ *   sensitive          blank, needs confirmation (no source the planner reads
+ *                      states demographics)
+ *   knockout           needs confirmation; a draft is kept only when it differs
+ *                      from the saved answer, because then it came from
+ *                      config/profile.yml (visa, comp, location), which states it
  *
- * JUDGMENT: knockout drafts are flagged, not blanked. Blanking them would undo
- * the profile-sourced visa and comp answers the prompt has always allowed; the
- * confirmation flag is what modes/apply.md's "ask every time" needs.
+ * A saved knockout or sensitive answer is returned as `suggestion` (with
+ * `suggestion_from`), never as `value`. The fill sends values only, and
+ * `needs_confirmation` is a badge, not a gate, so a saved salary or relocation
+ * answer from another company would otherwise reach this employer's form with
+ * nobody having looked at it. The page offers the suggestion as one click: the
+ * click is the confirmation modes/apply.md asks for.
  *
  * @param {{id: string, label: string}[]} fields
  * @param {Record<string, {value?: string, needs_confirmation?: boolean}>} answers
@@ -350,11 +407,15 @@ export function guardAnswers(fields, answers, priors = {}) {
     const drafted = clean(answers?.[f.id]?.value);
     if (cls === 'password' || cls === 'consent') {
       out[f.id] = { value: '', needs_confirmation: true };
-    } else if (cls === 'sensitive') {
+    } else if (cls === 'sensitive' || cls === 'knockout') {
       const prior = priors[f.id];
-      out[f.id] = { value: prior ? drafted || prior.answer : '', needs_confirmation: true };
-    } else if (cls === 'knockout') {
-      out[f.id] = { value: drafted || priors[f.id]?.answer || '', needs_confirmation: true };
+      const keep = cls === 'knockout' && drafted && (!prior || normalizeQuestion(drafted) !== normalizeQuestion(prior.answer));
+      const entry = { value: keep ? drafted : '', needs_confirmation: true };
+      if (prior) {
+        entry.suggestion = prior.answer;
+        entry.suggestion_from = [prior.company, prior.date].filter(Boolean).join(', ');
+      }
+      out[f.id] = entry;
     }
   }
   return out;

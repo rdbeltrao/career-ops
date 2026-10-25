@@ -31,6 +31,8 @@ import {
   companyHistory,
   companyKey,
   guardAnswers,
+  mergeSnapshots,
+  snapshotHasAnswers,
   matchPriorAnswers,
   normalizeQuestion,
   readBank,
@@ -70,6 +72,8 @@ const answers = {
 test('classifyQuestion: password, consent, sensitive, knockout, identity, other', () => {
   assert.equal(classifyQuestion('Password'), 'password');
   assert.equal(classifyQuestion('Passwort bestätigen'), 'password');
+  assert.equal(classifyQuestion('Hasło'), 'password');
+  assert.equal(classifyQuestion('Do you agree to relocate to Berlin?'), 'knockout', 'a knockout question phrased as agreement stays knockout');
   assert.equal(classifyQuestion('I agree to the privacy policy'), 'consent');
   assert.equal(classifyQuestion('Datenschutzerklärung akzeptieren'), 'consent');
   assert.equal(classifyQuestion('Gender'), 'sensitive');
@@ -138,10 +142,15 @@ test('readBank: a missing file is empty, a corrupt line is skipped and counted',
   assert.equal(skipped, 2);
 });
 
-test('companyKey folds case, punctuation and legal suffixes', () => {
+test('companyKey folds case, punctuation and a trailing legal form only', () => {
   assert.equal(companyKey('Acme GmbH'), companyKey('ACME'));
   assert.equal(companyKey('Acme, Inc.'), 'acme');
+  assert.equal(companyKey('Acme Holding SE & Co. KG'), companyKey('acme holding'));
   assert.notEqual(companyKey('Acme'), companyKey('Acmeo'));
+  assert.notEqual(companyKey('AS Software'), companyKey('Software AG'), 'a leading word is part of the name');
+  assert.equal(companyKey('SE Ranking'), 'seranking');
+  assert.equal(companyKey('Co-op'), 'coop');
+  assert.equal(companyKey('?'), '');
 });
 
 function rec(over) {
@@ -190,31 +199,77 @@ test('matchPriorAnswers: never consent, never password, never files; options mus
   assert.equal(priors.v.answer, 'no', 'mapped to the exact option text of the new form');
 });
 
-test('guardAnswers: knockout and sensitive always need confirmation; sensitive is blank without a saved answer', () => {
+test('guardAnswers: a saved knockout or sensitive answer is a suggestion, never a value the fill sends', () => {
   const guarded = guardAnswers(
     [
       { id: 'n', type: 'text', label: 'Notice period' },
       { id: 's', type: 'select', label: 'Salary expectation', options: [] },
       { id: 'g', type: 'select', label: 'Gender', options: ['Female', 'Male'] },
+      { id: 'g2', type: 'select', label: 'Gender identity', options: ['Female', 'Male'] },
       { id: 'c', type: 'checkbox', label: 'I consent to the talent pool' },
       { id: 'w', type: 'textarea', label: 'Why us?' },
       { id: 'e', type: 'text', label: 'Earliest start date' },
+      { id: 'v', type: 'text', label: 'Visa status' },
     ],
     {
       n: { value: '3 months', needs_confirmation: false },
       s: { value: '90000', needs_confirmation: false },
       g: { value: 'Female', needs_confirmation: false },
+      g2: { value: 'Male', needs_confirmation: false },
       c: { value: 'true', needs_confirmation: false },
       w: { value: 'Because.', needs_confirmation: false },
+      v: { value: 'EU citizen', needs_confirmation: false },
     },
-    { n: { answer: '3 months' }, e: { answer: '2027-01-01' } },
+    {
+      n: { answer: '3 months', company: 'Acme', date: '2026-09-01' },
+      e: { answer: '2027-01-01', company: 'Beta', date: '2026-08-01' },
+      g2: { answer: 'Male', company: 'Acme', date: '2026-09-01' },
+      v: { answer: 'Blue Card', company: 'Acme', date: '2026-09-01' },
+    },
   );
-  assert.deepEqual(guarded.n, { value: '3 months', needs_confirmation: true });
-  assert.deepEqual(guarded.s, { value: '90000', needs_confirmation: true }, 'a profile-sourced knockout draft is kept, but flagged');
-  assert.deepEqual(guarded.e, { value: '2027-01-01', needs_confirmation: true }, 'an empty knockout draft takes the saved answer');
+  assert.deepEqual(guarded.n, { value: '', needs_confirmation: true, suggestion: '3 months', suggestion_from: 'Acme, 2026-09-01' }, 'the planner copying the saved answer still leaves the value empty');
+  assert.deepEqual(guarded.e, { value: '', needs_confirmation: true, suggestion: '2027-01-01', suggestion_from: 'Beta, 2026-08-01' });
+  assert.deepEqual(guarded.v, { value: 'EU citizen', needs_confirmation: true, suggestion: 'Blue Card', suggestion_from: 'Acme, 2026-09-01' }, 'a draft that differs came from the profile and is kept, flagged');
+  assert.deepEqual(guarded.s, { value: '90000', needs_confirmation: true }, 'a profile-sourced knockout draft with no saved answer is kept, flagged');
   assert.deepEqual(guarded.g, { value: '', needs_confirmation: true }, 'no saved answer: a demographic is never invented');
+  assert.deepEqual(guarded.g2, { value: '', needs_confirmation: true, suggestion: 'Male', suggestion_from: 'Acme, 2026-09-01' });
   assert.deepEqual(guarded.c, { value: '', needs_confirmation: true }, 'consent is never ticked for the user');
   assert.deepEqual(guarded.w, { value: 'Because.', needs_confirmation: false });
+});
+
+test('mergeSnapshots: a new save updates matching questions and keeps the rest of the section', () => {
+  const existing = {
+    state: 'submitted',
+    freeText: [{ question: 'Why Acme?', answer: 'Old.' }, { question: 'Anything else?', answer: 'Kept.' }],
+    selections: [],
+    fieldValues: [{ question: 'Notice period', answer: '3 months' }],
+    files: [{ field: 'Cover letter', path: 'output/cover.pdf' }, { field: 'Resume/CV', path: 'output/old.pdf' }],
+  };
+  const incoming = {
+    freeText: [{ question: 'Why Acme?', answer: 'New.' }],
+    selections: [{ question: 'Sponsorship', selection: 'No' }],
+    fieldValues: [],
+    files: [{ field: 'Resume/CV', path: 'output/new.pdf' }],
+  };
+  const merged = mergeSnapshots(existing, incoming, 'filled');
+  assert.equal(merged.state, 'submitted', 'a later fill never downgrades a submitted section');
+  assert.deepEqual(merged.freeText, [{ question: 'Why Acme?', answer: 'New.' }, { question: 'Anything else?', answer: 'Kept.' }]);
+  assert.deepEqual(merged.selections, [{ question: 'Sponsorship', selection: 'No' }]);
+  assert.deepEqual(merged.fieldValues, [{ question: 'Notice period', answer: '3 months' }]);
+  assert.deepEqual(merged.files, [{ field: 'Cover letter', path: 'output/cover.pdf' }, { field: 'Resume/CV', path: 'output/new.pdf' }]);
+  assert.equal(mergeSnapshots(null, incoming, 'filled').state, 'filled');
+  assert.equal(mergeSnapshots({ ...existing, state: 'filled' }, incoming, 'submitted').state, 'submitted');
+});
+
+test('snapshotHasAnswers: an empty snapshot is never worth writing', () => {
+  assert.equal(snapshotHasAnswers({ freeText: [], selections: [], fieldValues: [], files: [] }), false);
+  assert.equal(snapshotHasAnswers({ files: [{ field: 'Resume/CV', path: 'x.pdf' }] }), false, 'a CV path alone is not an answer');
+  assert.equal(snapshotHasAnswers({ fieldValues: [{ question: 'a', answer: 'b' }] }), true);
+});
+
+test('snapshotFromForm: a field extract flags as a password is dropped whatever its label', () => {
+  const snap = snapshotFromForm({ fields: [{ id: 'p', type: 'text', label: 'Confirm', password: true }], answers: { p: 'hunter2' } });
+  assert.deepEqual(snap.fieldValues, []);
 });
 
 test('companyHistory: one entry per application, newest first, latest state wins', () => {
@@ -229,6 +284,21 @@ test('companyHistory: one entry per application, newest first, latest state wins
   assert.equal(history[0].role, 'Director');
   assert.equal(history[1].state, 'submitted');
   assert.equal(history[1].answers[0].a, 'v2');
+
+  const refilled = companyHistory([...records, rec({ date: '2026-06-01', company: 'Acme', report: '010', state: 'filled', role: 'EM', answers: [{ q: 'Why?', a: 'v4', kind: 'free' }] })], 'acme');
+  assert.equal(refilled.find((h) => h.report === '010').state, 'submitted', 'a later fill keeps the application submitted');
+  assert.equal(refilled.find((h) => h.report === '010').answers[0].a, 'v4');
+
+  const others = companyHistory(records, 'acme', { exclude: { report: '10', url: '' } });
+  assert.deepEqual(others.map((h) => h.role), ['Director'], 'the application being filled is not an earlier one');
+  const byUrl = companyHistory(records, 'acme', { exclude: { report: '', url: 'https://jobs.lever.co/acme/2' } });
+  assert.deepEqual(byUrl.map((h) => h.report), ['010']);
+});
+
+test('companyHistory and matching: an unknown employer has no identity', () => {
+  const records = [rec({ company: '?', state: 'submitted', answers: [{ q: 'Notice period', a: '1 month', kind: 'field' }] })];
+  assert.deepEqual(companyHistory(records, '?'), []);
+  assert.equal(matchPriorAnswers(records, [{ id: 'f', type: 'text', label: 'Notice period' }], { company: '?' }).f.sameCompany, false);
 });
 
 test('reportMeta reads company, role and URL from a report header', () => {
