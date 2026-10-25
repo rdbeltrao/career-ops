@@ -7,12 +7,13 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { mkdirSync, mkdtempSync, renameSync, symlinkSync, writeFileSync } from 'node:fs';
+import { hostname, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import {
   CRAWL_STATUS_FILE,
+  profileBusy,
   profileDir,
   readCrawlStatus,
   readSessionCookies,
@@ -70,11 +71,40 @@ test('sessionStatus: a crawl that hit the login wall after the cookie was set me
 });
 
 test('sessionStatus: a held profile is reported busy, and still read', () => {
+  // Chromium's SingletonLock is a symlink to "<hostname>-<pid>" whose target
+  // does not exist, so existsSync() never sees it.
   const dir = profileWith([LI_AT]);
-  writeFileSync(join(dir, 'SingletonLock'), '');
+  symlinkSync(`${hostname()}-${process.pid}`, join(dir, 'SingletonLock'));
   const s = sessionStatus({ profileDir: dir, now: NOW });
   assert.equal(s.busy, true);
   assert.equal(s.state, 'signed-in');
+});
+
+test('profileBusy: a lock left by a crashed browser is not busy; a lock from another host is', () => {
+  const stale = profileWith([LI_AT]);
+  symlinkSync(`${hostname()}-999999`, join(stale, 'SingletonLock'));
+  assert.equal(profileBusy(stale), false);
+  const other = profileWith([LI_AT]);
+  symlinkSync('some-other-host-123', join(other, 'SingletonLock'));
+  assert.equal(profileBusy(other), true, 'another machine on a shared folder: cannot check, so busy');
+  const plain = profileWith([LI_AT]);
+  writeFileSync(join(plain, 'SingletonLock'), '');
+  assert.equal(profileBusy(plain), true, 'a lock file that is not a symlink (Windows-style) counts');
+  assert.equal(profileBusy(profileWith([])), false);
+});
+
+test('readSessionCookies: a copy taken mid-write (hot journal) still reads', () => {
+  const dir = profileWith([LI_AT]);
+  // An empty journal beside the database stands in for one copied mid-transaction.
+  writeFileSync(join(dir, 'Default', 'Cookies-journal'), '');
+  assert.equal(sessionStatus({ profileDir: dir, now: NOW }).state, 'signed-in');
+});
+
+test('readSessionCookies: also finds the database under Default/Network (Windows layout)', () => {
+  const dir = profileWith([LI_AT]);
+  mkdirSync(join(dir, 'Default', 'Network'));
+  renameSync(join(dir, 'Default', 'Cookies'), join(dir, 'Default', 'Network', 'Cookies'));
+  assert.equal(sessionStatus({ profileDir: dir, now: NOW }).state, 'signed-in');
 });
 
 test('crawl status: recorded per run, read back, unreadable reads as none', () => {

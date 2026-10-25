@@ -1219,8 +1219,11 @@ export default {
     if (halted) throw halted;
     return withBrowserLock(async () => {
       if (halted) throw halted;
-      const context = await openProfile({ headed: process.env.LINKEDIN_HEADED === '1' });
+      // Launched inside the try: a launch that fails (profile in use, browser
+      // missing) is recorded as this search's result like any other failure.
+      let context;
       try {
+        context = await openProfile({ headed: process.env.LINKEDIN_HEADED === '1' });
         const page = context.pages()[0] ?? await context.newPage();
         const jobs = await walkSearch(page, {
           entry,
@@ -1239,7 +1242,7 @@ export default {
         });
         throw err;
       } finally {
-        await context.close().catch(() => {});
+        await context?.close().catch(() => {});
       }
     });
   },

@@ -4248,8 +4248,14 @@ async function main() {
         continue;
       }
       if (filterCompany && !entry.name.toLowerCase().includes(filterCompany)) continue;
+      // --provider: an entry that names another provider is not part of this run.
+      if (filterProvider && entry.provider && entry.provider !== filterProvider) continue;
 
       const resolved = resolveProvider(entry, providers);
+      // An entry resolved to another provider is dropped before any bookkeeping,
+      // so a LinkedIn-only run reports no skips, errors or hand-offs for the rest.
+      // One that names this provider keeps its skip/error report.
+      if (filterProvider && entry.provider !== filterProvider && resolved?.provider?.id !== filterProvider) continue;
       if (!resolved) {
         skippedCount++;
         if (entry.scan_method === 'websearch') {
@@ -4277,8 +4283,6 @@ async function main() {
         resolveErrors.push({ company: entry.name, error: resolved.error });
         continue;
       }
-
-      if (filterProvider && resolved.provider?.id !== filterProvider) continue;
 
       targets.push({ ...entry, _provider: resolved.provider, _isBoard: isBoard, _targetId: targets.length });
       if (isBoard) boardCount++;

@@ -15,7 +15,7 @@ import { fileURLToPath } from 'node:url';
 
 const ROOT = join(fileURLToPath(new URL('.', import.meta.url)), '..');
 
-function scan(args) {
+function scan(args, extra = '') {
   const dir = mkdtempSync(join(tmpdir(), 'scan-provider-'));
   try {
     mkdirSync(join(dir, 'data'), { recursive: true });
@@ -31,7 +31,7 @@ tracked_companies:
     parser:
       command: node
       script: tests/fixtures/same-title-board.mjs
-`);
+${extra}`);
     const r = spawnSync(process.execPath, [join(ROOT, 'scan.mjs'), ...args], {
       cwd: dir,
       env: { ...process.env, CAREER_OPS_ROOT: dir, CAREER_OPS_PORTALS: portals },
@@ -70,4 +70,12 @@ test('--help documents --provider', () => {
   const r = spawnSync(process.execPath, [join(ROOT, 'scan.mjs'), '--help'], { encoding: 'utf-8' });
   assert.equal(r.status, 0);
   assert.match(r.stdout, /--provider/);
+});
+
+test('--provider: entries of other providers add no skip count', () => {
+  // A company no provider claims counts as skipped in a full scan...
+  const unclaimed = '  - name: Nobody Reads Me\n    careers_url: https://unclaimed.example/careers\n';
+  assert.match(scan(['--dry-run'], unclaimed).stdout, /1 skipped — no provider matched/);
+  // ...and is simply not part of a single-provider run.
+  assert.match(scan(['--provider', 'local-parser', '--dry-run'], unclaimed).stdout, /0 skipped — no provider matched/);
 });
