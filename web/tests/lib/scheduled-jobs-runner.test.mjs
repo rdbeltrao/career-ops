@@ -114,11 +114,94 @@ test("scan command honors the selected engine and bounded filters", () => {
     args: ["--since", "5", "--ats", "lever,ashby", "--limit", "500", "--json"],
   });
   // LinkedIn searches alone: the same scanner as portals, limited to the
-  // signed-in LinkedIn provider (scan.mjs --provider).
+  // signed-in LinkedIn provider (scan.mjs --provider). By default each search
+  // keeps its own LinkedIn date window, so no --since narrows it.
   assert.deepEqual(buildScanCommand({ engine: "linkedin", filters }), {
+    script: "scan.mjs",
+    args: ["--quiet", "--provider", "linkedin-browser"],
+  });
+  assert.deepEqual(buildScanCommand({ engine: "linkedin", filters, linkedin: { searches: [], useSearchWindow: true } }), {
+    script: "scan.mjs",
+    args: ["--quiet", "--provider", "linkedin-browser"],
+  });
+  assert.deepEqual(buildScanCommand({ engine: "linkedin", filters, linkedin: { searches: [], useSearchWindow: false } }), {
     script: "scan.mjs",
     args: ["--since", "5", "--quiet", "--provider", "linkedin-browser"],
   });
+});
+
+const LINKEDIN_PORTALS = `title_filter:
+  positive: [Engineering Manager]
+  negative: [Werkstudent, Junior]
+location_filter:
+  allow: [Germany, Spain]
+  always_allow: [Berlin]
+  block_hard: [India]
+tracked_companies:
+  - name: Acme
+    careers_url: https://job-boards.greenhouse.io/acme
+  - name: LinkedIn em-de
+    provider: linkedin-browser
+    search_url: https://www.linkedin.com/jobs/search/?keywords=EM
+  - name: LinkedIn em-es
+    provider: linkedin-browser
+    search_url: https://www.linkedin.com/jobs/search/?keywords=EM&geoId=1
+  - name: LinkedIn off
+    provider: linkedin-browser
+    search_url: https://www.linkedin.com/jobs/search/?keywords=x
+    enabled: false
+`;
+
+function linkedinOverlay(job) {
+  const temp = fs.mkdtempSync(path.join(os.tmpdir(), "career-ops-scheduled-linkedin-"));
+  fs.writeFileSync(path.join(temp, "portals.yml"), LINKEDIN_PORTALS, "utf8");
+  let overlay = null;
+  try {
+    const result = executeJob(temp, { id: "22222222-2222-4222-8222-222222222222", engine: "linkedin", ...job }, {
+      spawnFn: (_node, _args, options) => {
+        overlay = yaml.load(fs.readFileSync(options.env.CAREER_OPS_PORTALS, "utf8"));
+        return { status: 0, stdout: "New offers added: 0", stderr: "" };
+      },
+    });
+    return { result, overlay };
+  } finally {
+    fs.rmSync(temp, { recursive: true, force: true });
+  }
+}
+
+test("LinkedIn schedule: empty fields keep the portals.yml title and location filters", () => {
+  const { result, overlay } = linkedinOverlay({ filters: { positive: [], negative: [], allow: [], block: [], blockHard: [], alwaysAllow: [] } });
+  assert.equal(result.state, "success");
+  assert.deepEqual(overlay.title_filter.positive, ["Engineering Manager"]);
+  assert.deepEqual(overlay.title_filter.negative, ["Werkstudent", "Junior"]);
+  assert.deepEqual(overlay.location_filter.allow, ["Germany", "Spain"]);
+  assert.deepEqual(overlay.location_filter.always_allow, ["Berlin"]);
+  assert.deepEqual(overlay.location_filter.block_hard, ["India"]);
+});
+
+test("LinkedIn schedule: a field that is set replaces only that filter", () => {
+  const { overlay } = linkedinOverlay({ filters: { positive: ["Head of Engineering"], negative: [], allow: ["Remote"], block: [], blockHard: [], alwaysAllow: [] } });
+  assert.deepEqual(overlay.title_filter.positive, ["Head of Engineering"]);
+  assert.deepEqual(overlay.title_filter.negative, ["Werkstudent", "Junior"], "exclusions not set: kept");
+  assert.deepEqual(overlay.location_filter.allow, ["Remote"]);
+  assert.deepEqual(overlay.location_filter.block_hard, ["India"]);
+});
+
+test("LinkedIn schedule: chosen searches run, the others are switched off for this run", () => {
+  const { overlay } = linkedinOverlay({ filters: {}, linkedin: { searches: ["LinkedIn em-es"], useSearchWindow: true } });
+  const enabled = (name) => overlay.tracked_companies.find((c) => c.name === name).enabled !== false;
+  assert.equal(enabled("LinkedIn em-es"), true);
+  assert.equal(enabled("LinkedIn em-de"), false);
+  assert.equal(enabled("LinkedIn off"), false, "a search that is off in portals.yml stays off");
+  assert.equal(enabled("Acme"), true, "other entries are untouched (the provider filter skips them)");
+  const all = linkedinOverlay({ filters: {}, linkedin: { searches: [], useSearchWindow: true } }).overlay;
+  assert.deepEqual(all.tracked_companies.filter((c) => c.provider === "linkedin-browser" && c.enabled !== false).map((c) => c.name), ["LinkedIn em-de", "LinkedIn em-es"], "no choice: every search that is on");
+});
+
+test("LinkedIn schedule: a choice that matches no search that is on fails with a clear message", () => {
+  const { result } = linkedinOverlay({ filters: {}, linkedin: { searches: ["LinkedIn off", "LinkedIn renamed"], useSearchWindow: true } });
+  assert.equal(result.state, "failed");
+  assert.match(result.message, /None of the LinkedIn searches/);
 });
 
 test("roles found for a LinkedIn run are read from scan.mjs's summary, like portals", () => {
