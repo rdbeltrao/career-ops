@@ -10,6 +10,7 @@ import { buildAnswerPrompt } from "@/lib/apply/answer-prompt.mjs";
 import { runPlanner } from "@/lib/apply/planner";
 import { extractJsonObject } from "@/lib/extract-json-object.mjs";
 import { readJsonObject } from "@/lib/json-body";
+import { loadAnswerBank, type AnswerBankModule, type PriorAnswer } from "@/lib/apply/answer-bank";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -96,7 +97,27 @@ export async function POST(req: Request) {
       // stapled to them cannot describe different documents.
       const cvPath = await resolveSessionCv({ company, application, title: s.title });
       const cvSource = cvPath ? applyCvSource(careerOpsRoot(), cvPath) : null;
-      const prompt = buildAnswerPrompt({ title: s.title, fields: s.fields, memory: mem, cvSource, profile: profileRef(careerOpsRoot()) });
+      // Answers the user reviewed and sent on earlier applications (answer-bank.mjs,
+      // data/application-answers.jsonl), matched to this form's questions. The
+      // same file gives the repeat-application check: earlier applications to
+      // this company are streamed to the page so the user sees what was sent.
+      // A missing or unreadable bank is logged and the prefill carries on.
+      let bank: AnswerBankModule | null = null;
+      let priorsById: Record<string, PriorAnswer> = {};
+      try {
+        bank = await loadAnswerBank();
+        const { records, skipped } = bank.readBank(careerOpsRoot());
+        priorsById = bank.matchPriorAnswers(records, s.fields, { company: company ?? "" });
+        const history = company ? bank.companyHistory(records, company) : [];
+        if (history.length) {
+          emit({ t: "history", company, applications: history.map(({ date, state, role, report }) => ({ date, state, role, report })) });
+        }
+        log(`Answer bank: ${records.length} saved application records · ${Object.keys(priorsById).length} of ${s.fields.length} fields have an earlier answer${history.length ? ` · ${history.length} earlier application(s) to ${company}` : ""}${skipped ? ` · ${skipped} unreadable line(s) skipped` : ""}`);
+      } catch (e) {
+        log(`Answer bank unavailable (${e instanceof Error ? e.message : "unknown error"}) — drafting without earlier answers`);
+      }
+      const priorAnswers = Object.entries(priorsById).map(([fieldId, p]) => ({ fieldId, ...p }));
+      const prompt = buildAnswerPrompt({ title: s.title, fields: s.fields, memory: mem, cvSource, profile: profileRef(careerOpsRoot()), priorAnswers });
 
       log(`Form: "${s.title}" · ${s.fields.length} fields · prompt ${prompt.length} chars · memory ${mem.length} chars`);
       log(`CV source: ${cvSource ?? "none found — answers will come from cv.md"}`);
@@ -134,7 +155,11 @@ export async function POST(req: Request) {
       }
       const count = Object.keys(obj).length;
       log(`Parsed ${count} answers${truncated ? " (RECOVERED from truncated output — some fields may be missing)" : ""}`);
-      emit({ t: "done", answers: obj, truncated, count });
+      // Enforce the field classes whatever the planner did: knockout and
+      // sensitive answers always need the user's confirmation, a demographic is
+      // never invented, and a consent box is never ticked for them.
+      const answers = bank ? bank.guardAnswers(s.fields, obj as Record<string, { value?: string; needs_confirmation?: boolean }>, priorsById) : obj;
+      emit({ t: "done", answers, truncated, count });
       controller.close();
     },
   });

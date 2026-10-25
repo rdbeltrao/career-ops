@@ -272,7 +272,7 @@ export function ApplyProvider({ children }: { children: React.ReactNode }) {
           const line = buf.slice(0, nl).trim();
           buf = buf.slice(nl + 1);
           if (!line) continue;
-          let ev: { t?: string; m?: string; el?: number; raw?: string; answers?: Record<string, { value?: string; needs_confirmation?: boolean }>; count?: number; truncated?: boolean };
+          let ev: { t?: string; m?: string; el?: number; raw?: string; answers?: Record<string, { value?: string; needs_confirmation?: boolean }>; count?: number; truncated?: boolean; company?: string; applications?: { date: string; state: string; role: string; report: string | null }[] };
           try {
             ev = JSON.parse(line);
           } catch {
@@ -280,6 +280,14 @@ export function ApplyProvider({ children }: { children: React.ReactNode }) {
           }
           if (ev.t === "log") {
             setPrefillLog((p) => [...p, `+${((ev.el ?? 0) / 1000).toFixed(1)}s  ${ev.m}`]);
+          } else if (ev.t === "history" && ev.applications?.length) {
+            // The repeat-application check (modes/apply.md #1920), from the answer bank.
+            const list = ev.applications
+              .slice(0, 3)
+              .map((x) => `${x.date} (${[x.role, x.state, x.report ? `report ${x.report}` : ""].filter(Boolean).join(", ")})`)
+              .join("; ");
+            const message = `You applied to ${ev.company} before: ${list}. Earlier answers are pre-filled where the questions match, so this application stays consistent. Some ATS keep your whole history, so check your candidate profile there too.`;
+            setIssues((prev) => [...prev.filter((i) => i.code !== "repeat-application"), { level: "info", code: "repeat-application", message }]);
           } else if (ev.t === "done") {
             got = true;
             applyAnswers(ev.answers ?? {});

@@ -83,3 +83,38 @@ test("a form with no fields still produces a well-formed prompt", () => {
   // prompt, it does not reword it.
   assert.match(prompt, /FIELDS \(id ⇥ type ⇥ label ⇥ options\):\n\n\nFor each field/);
 });
+
+// ── Saved answers from earlier applications (answer bank) ────────────────────
+
+const PRIORS = [
+  { fieldId: "f3", question: "Are you authorized to work in the EU?", answer: "Yes", company: "Acme", date: "2026-09-01", state: "submitted", class: "knockout", sameCompany: true },
+  { fieldId: "f2", question: "Why do you want to join?", answer: "Line one.\nLine\ttwo.", company: "Beta", date: "2026-08-01", state: "filled", class: "other", sameCompany: false },
+];
+
+test("no saved answers means no PRIOR ANSWERS block", () => {
+  for (const priorAnswers of [undefined, []]) {
+    assert.ok(!buildAnswerPrompt({ title: "Acme", fields: FIELDS, priorAnswers }).includes("PRIOR ANSWERS"));
+  }
+});
+
+test("saved answers become one row per field, single-line, with where they came from", () => {
+  const prompt = buildAnswerPrompt({ title: "Acme", fields: FIELDS, priorAnswers: PRIORS });
+  assert.ok(prompt.includes("PRIOR ANSWERS"));
+  assert.ok(prompt.includes("f3\tknockout\tYes\tAcme, 2026-09-01, submitted, same company"));
+  assert.ok(prompt.includes("f2\tother\tLine one. Line two.\tBeta, 2026-08-01, filled"), "newlines and tabs cannot break the table");
+});
+
+test("a long saved answer is cut so one essay cannot crowd out the form", () => {
+  const long = "x".repeat(2000);
+  const prompt = buildAnswerPrompt({ title: "Acme", fields: FIELDS, priorAnswers: [{ ...PRIORS[1], answer: long }] });
+  assert.ok(!prompt.includes(long));
+  assert.ok(prompt.includes(`${"x".repeat(600)}…`));
+});
+
+test("the rules for saved answers keep knockout confirmation and the CV as the source of numbers", () => {
+  const prompt = buildAnswerPrompt({ title: "Acme", fields: FIELDS, priorAnswers: PRIORS });
+  assert.match(prompt, /knockout or sensitive[^\n]*needs_confirmation:true/i);
+  assert.match(prompt, /number[^\n]*only if the CV/i);
+  assert.match(prompt, /same company[^\n]*consistent/i);
+  assert.match(prompt, /profile[^\n]*wins/i);
+});

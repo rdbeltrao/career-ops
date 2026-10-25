@@ -106,3 +106,25 @@ function objectArg(text, opener, what) {
   assert.ok(close > open, `could not find the end of ${what}`);
   return text.slice(open + opener.length, close);
 }
+
+// ── Answer bank wiring (saved answers feed the next prefill) ─────────────────
+
+test("the prefill route reads the answer bank, matches it to this form and passes it to the prompt", () => {
+  assert.match(route, /loadAnswerBank\(\)/);
+  assert.match(route, /matchPriorAnswers\(/);
+  assert.match(promptArgs(), /priorAnswers/);
+});
+
+test("the planner's answers pass through guardAnswers before they reach the page", () => {
+  assert.match(route, /guardAnswers\(/);
+  const done = route.indexOf('t: "done"');
+  const guard = route.indexOf("guardAnswers(");
+  assert.ok(guard > 0 && guard < done, "guardAnswers must run before the done event is emitted");
+});
+
+test("earlier applications to the same company are streamed and shown on the page", () => {
+  assert.match(route, /companyHistory\(/);
+  assert.match(route, /t: "history"/);
+  assert.match(provider, /ev\.t === "history"/);
+  assert.match(provider, /repeat-application/);
+});

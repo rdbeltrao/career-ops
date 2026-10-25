@@ -40,11 +40,28 @@ import { DEFAULT_PROFILE_REF } from "../core/profile-path.mjs";
  * 4b, which settles the same question on the CLI path. Null when no tailored CV
  * exists for this application, and only then does cv.md own the answers.
  *
- * @param {{title: string, fields: PromptField[], memory?: string, cvSource?: string | null, profile?: string}} opts
+ * `priorAnswers` are answers the user reviewed and sent on earlier applications,
+ * matched to this form's fields by answer-bank.mjs (matchPriorAnswers). They are
+ * the user's own statements to employers, so they may supply phrasing and keep
+ * a repeat application consistent, but they are derived sources: a number in one
+ * counts only when the CV carries it, and a knockout or sensitive answer is only
+ * a suggestion the user confirms (the route's guardAnswers enforces it too).
+ *
+ * @typedef {Object} PriorAnswer
+ * @property {string} fieldId
+ * @property {string} question
+ * @property {string} answer
+ * @property {string} company
+ * @property {string} date
+ * @property {string} state
+ * @property {string} class
+ * @property {boolean} sameCompany
+ *
+ * @param {{title: string, fields: PromptField[], memory?: string, cvSource?: string | null, profile?: string, priorAnswers?: PriorAnswer[]}} opts
  * `profile` is how the prompt names the profile file: profileRef() in core/profile-path.mjs.
  * @returns {string}
  */
-export function buildAnswerPrompt({ title, fields, memory = "", cvSource = null, profile = DEFAULT_PROFILE_REF }) {
+export function buildAnswerPrompt({ title, fields, memory = "", cvSource = null, profile = DEFAULT_PROFILE_REF, priorAnswers = [] }) {
   const fieldsList = fields
     .map((f) => `${f.id}\t${f.type}${f.required ? "*" : ""}\t${f.label}${f.options ? `\t[options: ${f.options.join(" | ")}]` : ""}`)
     .join("\n");
@@ -55,6 +72,16 @@ export function buildAnswerPrompt({ title, fields, memory = "", cvSource = null,
 - cv.md is the fallback only: read it for a whole section the tailored CV omits, never to top up a role the tailored CV already covers. Where the two disagree, the tailored CV wins.`
     : `SOURCES. No tailored CV was found for this application. Read cv.md and ${profile}; if a matching report for this company exists in reports/, read it too. ${profile} owns name, email, phone, address, links, work authorization, visa status and comp expectations, and is authoritative over cv.md.`;
 
+  const priors = priorAnswers.length
+    ? `\n\nPRIOR ANSWERS. The user reviewed these on earlier applications before they were sent (field id ⇥ class ⇥ earlier answer ⇥ from):
+${priorAnswers.map((p) => `${p.fieldId}\t${p.class}\t${oneLine(p.answer)}\t${p.company || "unknown company"}, ${p.date}, ${p.state}${p.sameCompany ? ", same company" : ""}`).join("\n")}
+- same company: keep the answer consistent with what was sent before, unless the CV or ${profile} now says otherwise.
+- free text from another company: adapt it to this company and role; never paste it unchanged.
+- identity: ${profile} wins over an earlier answer.
+- knockout or sensitive: use the earlier answer as the value and set needs_confirmation:true; the user confirms it every time.
+- a number in an earlier answer counts only if the CV carries it; otherwise leave it out.`
+    : "";
+
   return `You are pre-filling a job application for the user (company/role: ${title}).
 
 ${sources}
@@ -62,14 +89,24 @@ ${sources}
 Ground EVERY answer in the REAL candidate — never invent facts.${memory ? `\n\nDurable notes about the user:\n${memory}` : ""}
 
 FIELDS (id ⇥ type ⇥ label ⇥ options):
-${fieldsList}
+${fieldsList}${priors}
 
 For each field give the best answer:
 - identity/contact (name, email, phone, github, linkedin, location) → from ${profile}.
 - experience (employer, job title, dates, location, role description) → from the source that owns it above, verbatim in substance.
 - free-text (Why us?, cover-letter, "most impactful thing you've built", etc.) → a concise, honest, concrete answer in the candidate's own voice (no buzzwords, active voice, real metrics only). Keep each under ~120 words.
 - select/radio → choose the best-matching option using the EXACT option text from the list.
-- NEVER fill legal / visa / work-authorization / salary / demographic / sensitive fields → set needs_confirmation:true and value:"".
+- NEVER fill legal / visa / work-authorization / salary / demographic / sensitive fields → set needs_confirmation:true and value:"" (unless an earlier answer for that field is listed above: then use it, still needs_confirmation:true).
 
 Output ONLY a compact JSON object mapping each field id → {"value": "...", "needs_confirmation": boolean}. No prose, no markdown, no code fence.`;
+}
+
+// JUDGMENT: 600 characters keeps a full "why us" paragraph and stops one long
+// cover letter from crowding the form's own fields out of the prompt.
+const MAX_PRIOR_CHARS = 600;
+
+/** A saved answer as one table cell: no tabs or newlines, bounded length. */
+function oneLine(text) {
+  const flat = String(text ?? "").replace(/\s+/g, " ").trim();
+  return flat.length > MAX_PRIOR_CHARS ? `${flat.slice(0, MAX_PRIOR_CHARS)}…` : flat;
 }
