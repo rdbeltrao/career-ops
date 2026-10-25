@@ -554,43 +554,37 @@ export { callOpenRouter, rateLimitCounts, blacklistedModels };
 // ---------------------------------------------------------------------------
 // Context loading
 // ---------------------------------------------------------------------------
-function loadContext() {
-  // modes/_context.md is the source of truth about the candidate under the
-  // Source-of-Truth Boundary (AGENTS.md): every fact and figure in it is
-  // evidence, cited as _context.md:, and cv.md is a tailored rendering of it.
-  // readMaskedContext returns the file as written (masked: false) unless the
-  // user opts into masking with CAREER_OPS_MASK_CONTEXT=1 (lib/context-evidence.mjs).
-  // Optional: an install without it evaluates on cv.md and profile.yml exactly
-  // as before, with one line saying so.
-  const context = readMaskedContext(DATA_ROOT)?.text ?? null;
+export function loadContext() {
+  // Prefer the live Context library and its evidence roles. Older installations
+  // retain their context/CV/profile path, including optional number masking.
+  const context = readMaskedContext(DATA_ROOT);
+  const usingLibrary = context?.source === 'library';
   if (context === null) console.log('ℹ️  modes/_context.md not found — evaluating on cv.md and profile.yml only');
   return {
-    cv:          readFile('cv.md')               ?? 'CV not found.',
+    cv:          usingLibrary ? '' : readFile('cv.md') ?? 'CV not found.',
     profile:     readProfile()                   ?? '',
     shared:      readSystemFile('modes/_shared.md') ?? '',
-    profileMode: readFile('modes/_profile.md')   ?? '',
-    context:     context                         ?? '',
+    profileMode: usingLibrary ? '' : readFile('modes/_profile.md') ?? '',
+    context:     context?.text                   ?? '',
+    contextSource: context?.source,
+    contextNotice: context?.notice,
   };
 }
 
 export function buildSystemPrompt(modeContent, ctx) {
   const languageInstruction = outputLanguageInstruction(parseOutputLanguage(ctx.profile));
+  const usingLibrary = ctx.contextSource === 'library';
   // The context block is conditional as a whole: with no context file the
   // prompt is byte-identical to the one built before the block existed, so
   // prompt caching and the recorded prompts of older runs are undisturbed.
   const contextBlock = ctx.context
-    ? ['---', 'CANDIDATE CONTEXT (modes/_context.md — the source of truth about the candidate, read first: every fact and figure in it is evidence, cite it as _context.md:; cv.md is a tailored rendering of it):', ctx.context]
+    ? ['---', usingLibrary ? 'CANDIDATE CONTEXT' : 'CANDIDATE CONTEXT (modes/_context.md — the source of truth about the candidate, read first: every fact and figure in it is evidence, cite it as _context.md:; cv.md is a tailored rendering of it):', usingLibrary ? ctx.contextNotice : '', ctx.context]
     : [];
   return [
     ctx.shared,
-    ctx.profileMode,
+    usingLibrary ? '' : ctx.profileMode,
     modeContent,
-    '---',
-    'CANDIDATE PROFILE (YAML):',
-    ctx.profile,
-    '---',
-    'CV (Markdown):',
-    ctx.cv,
+    ...(usingLibrary ? [] : ['---', 'CANDIDATE PROFILE (YAML):', ctx.profile, '---', 'CV (Markdown):', ctx.cv]),
     ...contextBlock,
     '---',
     'OUTPUT LANGUAGE:',

@@ -17,6 +17,7 @@ import { createCvEnvelopeFilter, type CvEnvelope } from "@/lib/cv-envelope.mjs";
 import { createReportEnvelopeFilter } from "@/lib/report-envelope.mjs";
 import { persistEvaluation, evaluateRunOutcome } from "@/lib/report-persist.mjs";
 import { buildPrompt, isShellSafeCompanyName } from "@/lib/run-prompts.mjs";
+import { prefetchJd } from "@/lib/jd-prefetch.mjs";
 import { parseCoverRequest } from "@/lib/cover-brief.mjs";
 import { capabilitiesFor } from "@/lib/worker-capabilities.mjs";
 import { fencingReport, isCliAllowedForCapabilities } from "@/lib/cli-fencing.mjs";
@@ -26,6 +27,7 @@ import { profileRef } from "@/lib/core/profile-path.mjs";
 import { acquireTrackerWrite, releaseTrackerWrite } from "@/lib/core/run-registry";
 import { createRunFinalizer } from "@/lib/run-finalizer.mjs";
 import { readJsonObject } from "@/lib/json-body";
+import { candidateContextReady, readAppContextLibrary, type ContextLibrary } from "@/lib/core/context-library.mjs";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -96,11 +98,18 @@ export async function POST(req: Request) {
     );
   }
 
-  // An A–F score is meaningless without a CV to score against — the CLI would
-  // hallucinate a fit narrative and still emit a VERDICT. Require cv.md first.
-  if ((kind === "evaluate" || kind === "pdf" || kind === "cover") && !fs.existsSync(path.join(careerOpsRoot(), "cv.md"))) {
+  let contextLibrary: ContextLibrary | null = null;
+  if (kind !== "fix-portal") {
+    try { contextLibrary = await readAppContextLibrary(codeRoot, dataRoot); }
+    catch {
+      return Response.json({ error: "Your Context could not be read. Check its pages before starting this run." }, { status: 409 });
+    }
+  }
+  // The Context library is authoritative when present; an older CV must not
+  // stand in for a library that has no candidate evidence.
+  if ((kind === "evaluate" || kind === "pdf" || kind === "cover") && !candidateContextReady(contextLibrary, fs.existsSync(path.join(dataRoot, "cv.md")))) {
     return new Response(
-      JSON.stringify({ error: "Add your CV first so I can score this against you — drop it on the home page." }),
+      JSON.stringify({ error: contextLibrary ? "Add your career facts to Context before starting this run." : "Add your CV first so I can score this against you — drop it on the home page." }),
       { status: 400, headers: { "Content-Type": "application/json" } },
     );
   }
@@ -149,10 +158,28 @@ export async function POST(req: Request) {
   // The root is passed, not re-derived: a relative CAREER_OPS_PROFILE resolves
   // against it, and `process.cwd()` here is `<core>/web` (see cv-template.mjs).
   const cvTemplate = kind === "pdf" ? await resolveCvTemplate(careerOpsCodeRoot()) : undefined;
+  // Read the posting from its ATS's public API HERE, before the worker starts.
+  // The worker holds no Bash (#3629), so it cannot run fetch-jd.mjs itself, and
+  // WebFetch on a JavaScript-rendered board (Ashby, Workday, LinkedIn) returns an
+  // empty shell that the mode's "posting appears closed" rule then stops on: no
+  // report, for a posting that is live. A plain Node child, no agent involved. A
+  // miss leaves jdFile undefined and the prompt keeps its WebFetch path.
+  const jdPrefetch = kind === "evaluate"
+    ? await prefetchJd({
+      spawnFn: spawn,
+      execPath: process.execPath,
+      codeRoot,
+      dataRoot,
+      url: input,
+      outDir: path.join(/* turbopackIgnore: true */ dataRoot, ".career-ops-web", "jd-prefetch"),
+    })
+    : null;
+  const jdFile = jdPrefetch?.ok ? jdPrefetch.file : undefined;
+  const jdSource = jdPrefetch?.ok ? jdPrefetch.source : undefined;
   const prompt = buildPrompt({
     kind,
     input,
-    memory: readMemory(),
+    memory: contextLibrary ? "" : readMemory(),
     today,
     postedAt,
     lang,
@@ -161,6 +188,9 @@ export async function POST(req: Request) {
     coverBrief: coverRequest?.ok ? coverRequest.brief : undefined,
     profile: profileRef(careerOpsRoot()),
     dataRoot: splitLayout ? dataRoot : undefined,
+    contextLibrary,
+    jdFile,
+    jdSource,
   });
 
   const isClaude = cliId === "claude";
@@ -201,6 +231,7 @@ export async function POST(req: Request) {
       // The checkout: modes/ and scripts resolve there; the prompt carries the data root.
       { cwd: codeRoot, env: process.env },
       { cliId, capabilities },
+      { prompt },
     );
   } catch (e) {
     // Fencing refuses an argv that contradicts the capability record, so nothing
@@ -320,6 +351,14 @@ export async function POST(req: Request) {
       const fencing = fencingReport({ cliId, cliName: spec.name, capabilities: capabilitiesFor(kind) });
       if (fencing.notice) send({ type: "status", label: fencing.notice });
       if (substitution) send({ type: "status", label: substitution });
+      if (jdFile) {
+        send({
+          type: "status",
+          label: jdSource === "scan-store"
+            ? "Using the job description the scanner saved"
+            : "Read the posting from the ATS's public API",
+        });
+      }
       // Time-based keepalive. The stream is silent whenever the agent is thinking
       // or inside a long tool call, and in pdf mode it is silent for the whole
       // 15-25 KB <<cv-html>> envelope (cvFilter swallows every byte). Measured

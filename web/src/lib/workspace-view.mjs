@@ -62,11 +62,27 @@ export function collapsedSourcePageIds(documents, selectedId) {
   return new Set(pages.filter((page) => !open.has(page.id) && pages.some((child) => child.parentId === page.id)).map((page) => page.id));
 }
 
-/** @param {SourceDocument[]} documents @param {'context'|'cv'} route @param {string|null} sourceRootId */
-export function initialWorkspaceDocument(documents, route, sourceRootId) {
+/** Context has one hierarchy. Legacy files are a fallback only; CV is a separate output.
+ * @template {SourceDocument} T
+ * @param {T[]} documents @param {'context'|'cv'} route
+ */
+export function workspaceNavigationDocuments(documents, route) {
+  if (route === 'cv') return documents.filter((document) => document.id === 'cv');
+  const pages = documents.filter((document) => document.kind === 'source');
+  return pages.length ? pages : documents.filter((document) => document.kind !== 'source' && document.id !== 'cv');
+}
+
+/** A stale link to a legacy file must not expose a second Context hierarchy.
+ * @param {SourceDocument[]} documents @param {'context'|'cv'} route
+ * @param {string|null} sourceRootId @param {string|null} [requestedId]
+ */
+export function initialWorkspaceDocument(documents, route, sourceRootId, requestedId = null) {
   if (route === 'cv') return 'cv';
-  const pages = sourceTree(documents);
-  return pages.find((page) => page.id === sourceRootId)?.id ?? pages.find((page) => page.parentId === null)?.id ?? null;
+  const pages = workspaceNavigationDocuments(documents, route);
+  const requested = pages.find((page) => page.id === requestedId);
+  if (requested) return requested.id;
+  const sourceRoot = pages.find((page) => page.kind === 'source' && page.id === sourceRootId) ?? pages.find((page) => page.kind === 'source' && !page.parentDocumentId);
+  return sourceRoot?.id ?? pages.find((page) => page.id === 'context')?.id ?? pages[0]?.id ?? null;
 }
 
 /** @param {PageSection[]} sections @param {string|null} selectedId */

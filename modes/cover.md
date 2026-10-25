@@ -199,7 +199,13 @@ Wait for all four answers before proceeding to Step 7.
 
 ---
 
-## Step 7 — Achievement selection (from cv.md only)
+## Step 7 — Achievement selection
+
+Run `node context-evidence.mjs` first. When a Context library exists, select
+achievements from its career-fact pages with page citations. Preserve attribution
+and uncertainty limits; references and preferences never verify achievements.
+Use current Context over older CVs or summaries. The legacy steps below apply
+only when no library exists. A malformed library must not trigger that fallback.
 
 Select 4-5 achievement bullets from `cv.md` only (`article-digest.md` may be read for context but is not a source of achievement bullets):
 1. Read all bullet points across all roles in cv.md

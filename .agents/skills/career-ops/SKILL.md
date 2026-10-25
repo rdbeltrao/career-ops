@@ -211,7 +211,25 @@ After determining the mode, load the necessary files before executing:
 
 If `modes/_custom.md` exists, read it after `modes/_profile.md` and before the selected mode file. It contains user house rules and procedural preferences. It may override workflow/style defaults, but it never adds factual claims about the candidate.
 
-If `modes/_context.md` exists, read it after `modes/_profile.md` and before `modes/_custom.md`, for the shared-context modes and the standalone modes alike, and read it through `node context-evidence.mjs` (run from `PROJECT_ROOT`), never the raw file: the command prints the file as written under a one-line notice, so every path gets the same view (masking every quantity as `[n]` is an opt-in, `--mask` or `CAREER_OPS_MASK_CONTEXT=1`, for a user whose context still holds unresolved figures). It is the source of truth about the candidate — the record of what they have done (target role, location and language, preferences, deal-breakers, experience, technical tiers, match signals) — and it is read FIRST among the candidate files: every fact and figure in it is evidence for the evaluation (Block B rows, archetype and level calls, interview framing, gap mitigation, cited as `_context.md:`), `cv.md` is a tailored rendering of it, and when the two disagree the context wins and `cv.md` is the file to fix. Candidate-facing text (CV, letter, form answer, outreach) may take facts from it; a figure the file itself marks as held for confirmation, approximate or "not a claim" stays out of candidate-facing text (`AGENTS.md` → Source-of-Truth Boundary → Context file). When it is absent, say so in one line and continue on `cv.md` and `config/profile.yml`.
+**Context library first:** when `data/context-workspace/index.json` exists under
+`DATA_ROOT`, run `node context-evidence.mjs` from `PROJECT_ROOT` for every mode and
+worker, even when `modes/_context.md` does not exist. Pass the complete returned
+hierarchy and its notice once. Page purpose and uncertainty limits apply to all
+matching and drafting. Do not load old `_profile.md`, `_context.md`, the digest or
+`cv.md` as competing facts or targeting; `cv.md` may serve only as an output draft.
+Keep procedural `_custom.md` and operational configuration, subject to the current
+Context authority rule. A library read error stops the workflow until repaired.
+The file-loading instructions below are the legacy path only when no library
+exists; worker prompts must use the same library-first selection.
+
+Without a library, if `modes/_context.md` exists, read it after `modes/_profile.md`
+and before `modes/_custom.md`, through `node context-evidence.mjs`, never the raw
+file. It is the source of truth about the candidate, cited as `_context.md:`;
+`cv.md` is a tailored rendering of it. Every settled fact and figure may support
+matching or drafting. Masking quantities as `[n]` remains opt-in (`--mask` or
+`CAREER_OPS_MASK_CONTEXT=1`). Uncertain, approximate, conflicting or held claims
+remain excluded. When neither library nor context file exists, say so and
+continue on the legacy CV/profile sources.
 
 Resolve `language.modes_dir` before applying the path shorthand below. With no setting, use `modes`. With a scalar directory, preserve the existing behavior: use that directory's `_shared.md` and localized mode file when it provides one. With a list, load every declared directory's `_shared.md` exactly once (including the baseline `modes/_shared.md` when `modes` appears), but use only the FIRST entry's evaluation-mode file for Blocks A-F; later entries contribute context, never a competing evaluation file. User-layer `_profile.md` and `_custom.md` remain under `modes/` in `DATA_ROOT`.
 

@@ -1,7 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import { cliSubstitutionNotice, cliUnavailableError, resolveCliOrFallback } from "@/lib/clis";
-import { careerOpsRoot, findApplication, findReportFile, readMemory } from "@/lib/career-ops";
+import { careerOpsRoot, careerOpsCodeRoot, findApplication, findReportFile, readMemory } from "@/lib/career-ops";
+import { readAppContextLibrary, type ContextLibrary } from "@/lib/core/context-library.mjs";
 import { resolveCompany } from "@/lib/apply/answers-save.mjs";
 import { profileRef } from "@/lib/core/profile-path.mjs";
 import { getSession } from "@/lib/apply/session";
@@ -92,7 +93,10 @@ export async function POST(req: Request) {
       const substitution = cliSubstitutionNotice(resolved);
       if (substitution) log(substitution);
 
-      const mem = readMemory().trim();
+      let contextLibrary: ContextLibrary | null;
+      try { contextLibrary = await readAppContextLibrary(careerOpsCodeRoot(), careerOpsRoot()); }
+      catch { return fail("Your Context could not be read. Check its pages before drafting answers."); }
+      const mem = contextLibrary ? "" : readMemory().trim();
       // Draft from the SAME tailored CV the fill route uploads to this form,
       // resolved through the one shared call so the answers and the resume
       // stapled to them cannot describe different documents.
@@ -126,10 +130,10 @@ export async function POST(req: Request) {
         log(`Answer bank unavailable (${e instanceof Error ? e.message : "unknown error"}) — drafting without earlier answers`);
       }
       const priorAnswers = Object.entries(priorsById).map(([fieldId, p]) => ({ fieldId, ...p }));
-      const prompt = buildAnswerPrompt({ title: s.title, fields: s.fields, memory: mem, cvSource, profile: profileRef(careerOpsRoot()), priorAnswers });
+      const prompt = buildAnswerPrompt({ title: s.title, fields: s.fields, memory: mem, cvSource, profile: profileRef(careerOpsRoot()), priorAnswers, contextLibrary });
 
       log(`Form: "${s.title}" · ${s.fields.length} fields · prompt ${prompt.length} chars · memory ${mem.length} chars`);
-      log(`CV source: ${cvSource ?? "none found — answers will come from cv.md"}`);
+      log(contextLibrary ? "Career source: current Context pages" : `CV source: ${cvSource ?? "none found — answers will come from cv.md"}`);
       log(`Planner: ${cliId} (${binPath})`);
       const result = await runPlanner({
         cliId,

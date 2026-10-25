@@ -241,18 +241,16 @@ console.log('\n📂  Loading context files...');
 
 const sharedContext = readFile(PATHS.shared, 'modes/_shared.md');
 const ofertaLogic   = readFile(PATHS.oferta, 'modes/oferta.md');
-const cvContent     = readFile(PATHS.cv,     'cv.md');
-const profileContent = readFile(PATHS.profile, 'modes/_profile.md');
-// modes/_context.md is the source of truth about the candidate under the
-// Source-of-Truth Boundary (AGENTS.md): every fact and figure in it is
-// evidence, cited as _context.md:, and cv.md is a tailored rendering of it.
-// readMaskedContext returns the file as written (masked: false) unless the
-// user opts into masking with CAREER_OPS_MASK_CONTEXT=1 (lib/context-evidence.mjs).
-// Folded into the _profile.md section so the token budget treats the
-// two as one personalization block; absent, the prompt is exactly as before.
-const contextContent = readMaskedContext(DATA_ROOT)?.text ?? '';
-if (!contextContent) console.log('ℹ️   modes/_context.md not found — evaluating on cv.md and profile.yml only');
-const profileWithContext = contextContent
+const context = readMaskedContext(DATA_ROOT);
+const usingLibrary = context?.source === 'library';
+const cvContent     = usingLibrary ? '' : readFile(PATHS.cv,     'cv.md');
+const profileContent = usingLibrary ? '' : readFile(PATHS.profile, 'modes/_profile.md');
+// A library replaces legacy candidate facts and targeting. Its role notice
+// distinguishes evidence from preferences, references, and unconfirmed pages.
+// Without a library, preserve the legacy context/profile prompt and opt-in masking.
+const contextContent = context?.text ?? '';
+if (!context) console.log('ℹ️   modes/_context.md not found — evaluating on cv.md and profile.yml only');
+const profileWithContext = usingLibrary ? '' : contextContent
   ? `${profileContent}\n\n--- CANDIDATE CONTEXT (modes/_context.md — the source of truth about the candidate, read first: every fact and figure in it is evidence, cite it as _context.md:; cv.md is a tailored rendering of it) ---\n${contextContent}`
   : profileContent;
 const profileYml    = readFile(PATHS.profileYml, 'config/profile.yml');
@@ -265,11 +263,17 @@ const { contextBody, budgetReport } = buildBudgetedPrompt({
   sharedContent: sharedContext,
   ofertaContent: ofertaLogic,
   cvContent,
-  profileYml,
+  profileYml: usingLibrary ? '' : profileYml,
   profileContent: profileWithContext,
+  contextContent: usingLibrary ? `${context.notice}\n\n${contextContent}` : '',
   jdText,
   maxTokens: numCtx, // matches options.num_ctx below
 });
+
+if (usingLibrary && budgetReport.overBudget) {
+  console.error('Context library exceeds this model’s prompt budget. Increase OLLAMA_NUM_CTX for a model that supports it, or reduce the library; no evaluation was sent.');
+  process.exit(1);
+}
 
 if (budgetReport.compressed) {
   console.log(`📊  Token budget: ${budgetReport.beforeTokens} → ${budgetReport.afterTokens} tokens (saved ${budgetReport.beforeTokens - budgetReport.afterTokens})`);
@@ -284,7 +288,7 @@ if (budgetReport.compressed) {
 }
 
 const systemPrompt = `You are career-ops, an AI-powered job search assistant.
-You evaluate job offers against the user's CV using a structured A-G scoring system.
+You evaluate job offers against the user's ${usingLibrary ? 'Context' : 'CV'} using a structured A-G scoring system.
 
 Your evaluation methodology is defined below. Follow it exactly.
 

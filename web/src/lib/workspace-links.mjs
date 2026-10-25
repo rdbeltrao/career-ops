@@ -37,6 +37,12 @@ function notionPageId(value) {
   return match ? normalizedId(match[1]) : null;
 }
 
+function internalPageId(value) {
+  if (typeof value !== 'string' || !value.startsWith('/context?')) return null;
+  const document = new URL(value, 'https://workspace.invalid').searchParams.get('document');
+  return document?.startsWith('source-') ? normalizedId(document) : null;
+}
+
 function pageIndex(pages) {
   const result = new Map();
   for (const page of pages || []) {
@@ -105,7 +111,13 @@ function normalize(markdown, known) {
     if (node.type === 'definition') return isNotionUrl(node.url) ? '' : original(node);
     const reference = node.type === 'linkReference' || node.type === 'imageReference' ? definitions.get(node.identifier) : null;
     const destination = reference?.url || node.url;
-    if (!['link', 'image', 'linkReference', 'imageReference'].includes(node.type) || !isNotionUrl(destination)) return withChildren(node);
+    if (!['link', 'image', 'linkReference', 'imageReference'].includes(node.type)) return withChildren(node);
+    const plainLabel = node.children?.length === 1 && node.children[0].type === 'text' ? node.children[0].value : null;
+    if (!isNotionUrl(destination)) {
+      const internalPage = known.get(internalPageId(destination));
+      if (internalPage?.title && notionPageId(plainLabel) === internalPage.id) return `[${markdownText(internalPage.title)}](${destination}${titleSuffix(node.title || reference?.title)})`;
+      return withChildren(node);
+    }
 
     const text = caption(node);
     // Earlier imports used the containing page as a private-media fallback.
@@ -114,7 +126,8 @@ function normalize(markdown, known) {
     const imported = known.get(notionPageId(destination));
     const explicitLabel = /^!?\[/.test(original(node));
     if (!imported) return explicitLabel ? normalize(text, known) : unlinkedAutolink(node.children?.[0]?.value || node.alt || destination);
-    const displayed = !explicitLabel && imported.title ? markdownText(imported.title) : text;
+    const rawPageUrlLabel = explicitLabel && notionPageId(plainLabel) === imported.id;
+    const displayed = imported.title && (!explicitLabel || rawPageUrlLabel) ? markdownText(imported.title) : text;
     return `[${displayed}](/context?document=source-${imported.id}${titleSuffix(node.title || reference?.title)})`;
   }
   return render(tree);

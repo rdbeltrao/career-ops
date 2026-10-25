@@ -4,6 +4,8 @@ import os from "node:os";
 import path from "node:path";
 import { cliSubstitutionNotice, cliUnavailableError, resolveCliOrFallback } from "@/lib/clis";
 import { careerOpsRoot, readMemory, careerOpsCodeRoot } from "@/lib/career-ops";
+import { readAppContextLibrary, type ContextLibrary } from "@/lib/core/context-library.mjs";
+import { contextLibraryPrompt } from "@/lib/context-library-prompt.mjs";
 import { assembleDedupContext } from "@/lib/core/discover";
 import { makeKnownOfferFilter } from "@/lib/explore-ai";
 import { CAPS } from "@/lib/worker-capabilities.mjs";
@@ -70,10 +72,13 @@ export async function POST(req: Request) {
   }
 
   const { lines, urls: knownUrls } = assembleDedupContext();
-  const memory = readMemory();
+  let contextLibrary: ContextLibrary | null;
+  try { contextLibrary = await readAppContextLibrary(careerOpsCodeRoot(), careerOpsRoot()); }
+  catch { return Response.json({ error: "Your Context could not be read. Check its pages before searching." }, { status: 409 }); }
+  const memory = contextLibrary ? "" : readMemory();
   const memoryLine = memory.trim() ? `\n\nWHAT YOU KNOW ABOUT THE USER (persistent memory):\n${memory.trim()}` : "";
   const knownBlock = lines.length ? `\n\n--- ALREADY KNOWN (dedup — do NOT propose these) ---\n${lines.join("\n")}` : "";
-  const prompt = `${mode}${OUTPUT_CONTRACT}${memoryLine}${knownBlock}\n\n--- USER INTENT ---\n${query}\n`;
+  const prompt = `${mode}${OUTPUT_CONTRACT}\n${contextLibraryPrompt(contextLibrary)}${memoryLine}${knownBlock}\n\n--- USER INTENT ---\n${query}\n`;
 
   const isClaude = cliId === "claude";
   const isCodex = cliId === "codex";
@@ -182,6 +187,7 @@ export async function POST(req: Request) {
       args,
       { cwd: childCwd, env: process.env, detached: useCodexProcessGroup },
       { cliId, capabilities: CAPS.webSearchOnly },
+      { prompt },
     );
   } catch (e) {
     // Fencing refuses an argv that contradicts the capability record. Report it

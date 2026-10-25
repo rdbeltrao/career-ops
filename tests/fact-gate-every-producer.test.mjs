@@ -178,7 +178,7 @@ test('generate-latex names a --source file that does not exist', (t) => {
   assert.equal(result.report.engine, undefined, 'compilation was attempted after a missing --source');
 });
 
-test('generate-latex --skip-fact-check and a missing cv.md skip the gate', (t) => {
+test('generate-latex --skip-fact-check and a missing Context library and cv.md skip the gate', (t) => {
   const root = workspace();
   const bare = workspace({ withCv: false });
   t.after(() => { rmSync(root, { recursive: true, force: true }); rmSync(bare, { recursive: true, force: true }); });
@@ -191,5 +191,5 @@ test('generate-latex --skip-fact-check and a missing cv.md skip the gate', (t) =
 
   const noCv = runLatex(bare, 'output/cv.tex');
   assert.equal(noCv.report?.factCheck?.verdict, 'skipped', noCv.stdout + noCv.stderr);
-  assert.match(noCv.report.factCheck.reason, /no cv\.md/);
+  assert.match(noCv.report.factCheck.reason, /no Context library or cv\.md/);
 });

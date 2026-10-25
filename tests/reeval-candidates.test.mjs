@@ -85,6 +85,7 @@ function makeDataRoot(prefix) {
   writeFileSync(join(dir, 'article-digest.md'), '# Proof points\n');
   writeFileSync(join(dir, 'config', 'profile.yml'), 'candidate:\n  full_name: Test Person\n');
   writeFileSync(join(dir, 'modes', '_profile.md'), '# Profile\n');
+  writeFileSync(join(dir, 'modes', '_context.md'), '# Fit profile\n');
   return dir;
 }
 
@@ -248,6 +249,7 @@ eq('report links: Notes are read only when the Report cell has no link',
     setMtime(join(dir, 'article-digest.md'), '2026-08-01');
     setMtime(join(dir, 'config', 'profile.yml'), '2026-08-02');
     setMtime(join(dir, 'modes', '_profile.md'), '2026-08-03');
+    setMtime(join(dir, 'modes', '_context.md'), '2026-08-04');
 
     const sources = primarySourceChanges(dir, { profilePath: join(dir, 'config', 'profile.yml') });
     const cv = sources.find(s => s.source === 'cv.md');
@@ -311,7 +313,7 @@ if (!hasGit()) {
     g(['config', 'user.email', 'test@example.invalid']);
     g(['config', 'commit.gpgsign', 'false']);
     g(['config', 'core.autocrlf', 'false']);
-    g(['add', 'cv.md', 'article-digest.md', 'config/profile.yml', 'modes/_profile.md']);
+    g(['add', 'modes/_context.md', 'cv.md', 'article-digest.md', 'config/profile.yml', 'modes/_profile.md']);
     g(['commit', '-q', '-m', 'evidence'], '2026-08-01');
     writeFileSync(join(dir, 'cv.md'), '# CV\n\n- Built the thing\n- Shipped the other thing\n');
     g(['add', 'cv.md']);

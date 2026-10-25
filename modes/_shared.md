@@ -1,5 +1,15 @@
 # System Context -- career-ops
 
+**Context authority:** when `data/context-workspace/index.json` exists, run
+`node context-evidence.mjs` and use its current page hierarchy for every career
+fact, preference and citation. References below to old context/profile/digest/CV
+files describe the legacy path only when no library exists. They must not
+supersede Context or supply a removed claim. Facts pages can support explicitly
+attributed claims; preferences guide matching; reference and unconfirmed pages
+are not verified evidence. Preserve all uncertainty, privacy and authorship
+rules. A broken library is an error, never a legacy fallback. The Block B and
+skill-gap checkers read Context directly.
+
 <!-- ============================================================
      THIS FILE IS AUTO-UPDATABLE. Don't put personal data here.
      
@@ -61,7 +71,7 @@ All User Layer files (such as `cv.md`, `config/profile.yml`, `modes/_profile.md`
 
 | CLI | economy | standard | premium | Extended thinking |
 |-----|---------|----------|---------|--------------------|
-| Claude Code | Haiku 5.5 | Sonnet 5.5 | Opus 5.5 | off / off / adaptive |
+| Claude Code | `haiku` (Haiku 5.5) | `sonnet` (Sonnet 5.5) | `opus` (Opus 5.5) | off / off / adaptive |
 | OpenCode | your CLI's cheapest/fastest available model | balanced model | most capable model | off / off / adaptive |
 | Gemini CLI | your CLI's cheapest/fastest available model | balanced model | most capable model | off / off / adaptive |
 | Copilot CLI | your CLI's cheapest/fastest available model | balanced model | most capable model | off / off / adaptive |

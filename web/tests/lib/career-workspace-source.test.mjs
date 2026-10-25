@@ -4,6 +4,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
 import { listWorkspaceDocuments, readWorkspaceDocument, saveWorkspaceDocument } from '../../src/lib/career-workspace-store.mjs';
+import { validateSourceManifest } from '../../src/lib/source-workspace-store.mjs';
+import { validateContextManifest } from '../../../lib/context-library.mjs';
 import '../helpers/web-ts-alias-loader.mjs';
 const { atomicWriteWithBackup } = await import('../../src/lib/core/safe-write.ts');
 
@@ -221,4 +223,54 @@ test('source conversion notes remain visible and survive metadata edits', (t) =>
     m.pages[1].importNotes = notes; put(root, manifestRel, JSON.stringify(m));
     assert.throws(() => readWorkspaceDocument(root, id(ROOT)), (e) => e.code === 'invalid_manifest');
   }
+});
+
+test('page purpose inherits through the tree and changes with revision protection', (t) => {
+  const m = manifest(); m.pages[0].usage = 'reference'; m.pages[1].usage = 'facts';
+  const root = fixture(t, m);
+  assert.equal(readWorkspaceDocument(root, id(ROOT)).usage, 'reference');
+  assert.equal(readWorkspaceDocument(root, id(CHILD)).usage, 'facts');
+  const before = readWorkspaceDocument(root, id(CHILD));
+  const changed = save(root, id(FIRST), 'usage', { usage: 'preferences' });
+  assert.equal(changed.usage, 'preferences');
+  assert.equal(readWorkspaceDocument(root, id(CHILD)).usage, 'preferences');
+  assert.equal(readWorkspaceDocument(root, id(CHILD)).content, before.content);
+  assert.throws(() => saveWorkspaceDocument({ root, request: { document: id(CHILD), revision: before.revision, action: 'usage', usage: 'facts' }, write: atomicWriteWithBackup }), (e) => e.code === 'stale');
+  save(root, id(CHILD), 'usage', { usage: 'unconfirmed' });
+  save(root, id(FIRST), 'usage', { usage: 'facts' });
+  assert.equal(readWorkspaceDocument(root, id(CHILD)).usage, 'unconfirmed');
+  assert.equal(save(root, id(FIRST), 'add', { title: 'New career record' }).usage, 'facts');
+  assert.ok(fs.readdirSync(path.join(root, 'data/context-workspace')).some((p) => p.startsWith('index.json.bak-')));
+});
+
+test('unknown page purposes are rejected without writing and ordinary pages default to facts', (t) => {
+  const root = fixture(t); let writes = 0;
+  assert.equal(readWorkspaceDocument(root, id(ROOT)).usage, 'facts');
+  for (const usage of ['instructions', '', null, 42]) {
+    assert.throws(() => save(root, id(FIRST), 'usage', { usage }, () => writes++), (e) => e.code === 'invalid_usage');
+    const m = manifest(); m.pages[1].usage = usage; put(root, manifestRel, JSON.stringify(m));
+    assert.throws(() => readWorkspaceDocument(root, id(ROOT)), (e) => e.code === 'invalid_manifest');
+    put(root, manifestRel, JSON.stringify(manifest()));
+  }
+  assert.equal(writes, 0);
+});
+
+test('workspace manifest validation agrees with the core context reader', () => {
+  const variants = [manifest()];
+  for (const usage of ['facts', 'preferences', 'reference', 'unconfirmed', 'invalid', null, 42]) {
+    const m = manifest(); m.pages[1].usage = usage; variants.push(m);
+  }
+  for (const corrupt of [
+    (m) => { m.pages[2].order = 0; },
+    (m) => { m.pages[1].parentId = CHILD; },
+    (m) => { m.pages[0].sourceEditedAt = '2026-02-30'; },
+    (m) => { m.pages[0].sourceUrl = 'javascript:alert(1)'; },
+    (m) => { m.pages[0].importNotes = ['Bad\nline']; },
+  ]) { const m = manifest(); corrupt(m); variants.push(m); }
+  for (const depth of [64, 65]) {
+    const pages = Array.from({ length: depth + 1 }, (_, index) => ({ id: index.toString(16).padStart(32, '0'), title: 'Page', parentId: index ? (index - 1).toString(16).padStart(32, '0') : null, order: 0 }));
+    variants.push({ version: 1, rootId: pages[0].id, pages });
+  }
+  const accepts = (validate, input) => { try { validate(input); return true; } catch { return false; } };
+  for (const value of variants) assert.equal(accepts(validateSourceManifest, value), accepts(validateContextManifest, value), JSON.stringify(value));
 });

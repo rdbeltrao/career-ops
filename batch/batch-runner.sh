@@ -619,21 +619,32 @@ read_spend_tier() {
 }
 
 # Tier -> model mapping. Keep in sync with the table in modes/_shared.md.
+# Claude Code's family aliases, not full model ids: every CLI version resolves
+# an alias to the newest model it knows, while a full id the installed CLI's
+# catalog does not list makes every worker fail with "isn't described by this
+# version's model catalog" (2026-10-25, Claude Code 2.1.278 and
+# claude-sonnet-5-5). A model release or a CLI update can no longer break a
+# scheduled run.
 spend_tier_to_model() {
   case "$1" in
-    economy) echo "claude-haiku-5-5" ;;
-    premium) echo "claude-opus-5-5" ;;
-    standard|*) echo "claude-sonnet-5-5" ;;
+    economy) echo "haiku" ;;
+    premium) echo "opus" ;;
+    standard|*) echo "sonnet" ;;
   esac
 }
 
-# Run one worker CLI with stdin closed, so a CLI that waits for input reads EOF
-# instead of hanging on the runner's terminal. With WORKER_TIMEOUT > 0 a
+# Run one worker CLI with stdin closed or an explicit prompt file, so a CLI
+# never waits on the runner's terminal. With WORKER_TIMEOUT > 0 a
 # watchdog sends TERM at the limit and KILL 10 s later, and the worker exits
 # 124. Background jobs ignore SIGINT in a non-interactive shell, so Ctrl+C is
 # forwarded to the worker by hand.
 run_worker() {
-  "$@" </dev/null &
+  local input_file=/dev/null
+  if [[ "${1:-}" == "--input-file" ]]; then
+    input_file="$2"
+    shift 2
+  fi
+  "$@" < "$input_file" &
   local pid=$!
   local watchdog=""
   if (( WORKER_TIMEOUT > 0 )); then
@@ -1093,6 +1104,33 @@ process_offer() {
   started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
   local retries
   retries=$(get_retries "$id")
+  # Read the live Context library before any pre-screen or worker can run. A
+  # broken library is an error, never permission to use stale candidate files.
+  local using_context_library=false library_context="" context_source=legacy
+  # The shared reader checks every ancestor, including dangling symlinks that
+  # an existence check on index.json would mistake for an absent library.
+  if [[ -f "$PROJECT_DIR/lib/context-library.mjs" ]]; then
+    if ! library_context=$(node --input-type=module -e '
+      import { pathToFileURL } from "node:url";
+      const { readContext } = await import(pathToFileURL(process.argv[1]));
+      const context = readContext(process.argv[2]);
+      process.stdout.write(context?.source === "library"
+        ? `library\n${context.notice}\n\n${context.text}` : "legacy");
+    ' "$PROJECT_DIR/lib/context-evidence.mjs" "$DATA_ROOT"); then
+      echo "    ❌ Context library could not be read; no pre-screen or worker was launched." >&2
+      update_state_retrying "$id" "$url" "failed" "$started_at" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "-" "-" "Context library could not be read" "$retries" || true
+      return 1
+    fi
+    context_source="${library_context%%$'\n'*}"
+    library_context="${library_context#*$'\n'}"
+  elif [[ -e "$DATA_ROOT/data/context-workspace/index.json" || -L "$DATA_ROOT/data/context-workspace/index.json" || -L "$DATA_ROOT/data/context-workspace" || -L "$DATA_ROOT/data" ]]; then
+    echo "    ❌ Context library could not be read; install the shared Context reader before running this batch." >&2
+    update_state_retrying "$id" "$url" "failed" "$started_at" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "-" "-" "Context library reader is missing" "$retries" || true
+    return 1
+  fi
+  if [[ "$context_source" == "library" ]]; then
+    using_context_library=true
+  fi
   local report_num
   if ! report_num=$(reserve_report_num_retrying "$id" "$url" "$started_at" "$retries"); then
     return 1
@@ -1574,6 +1612,19 @@ process_offer() {
   # it as written under a one-line notice so every path gets the same view
   # (masking as [n] is opt-in via CAREER_OPS_MASK_CONTEXT=1); when the script
   # is missing from this checkout the file is pasted directly and a line says so.
+  if [[ "$using_context_library" == "true" ]]; then
+    if [[ -f "$DATA_ROOT/modes/_custom.md" ]]; then
+      {
+        printf '\n\n---\n\n## Runtime workflow rules\n\n'
+        sed 's/^/    /' "$DATA_ROOT/modes/_custom.md"
+      } >> "$resolved_prompt"
+    fi
+    {
+      printf '\n\n---\n\n## Runtime Context library\n\n'
+      printf 'Use this live Context for candidate facts and preferences. Its page roles supersede older source-file instructions. Do not supplement it with `cv.md`, `article-digest.md`, `modes/_profile.md`, `modes/_context.md` or candidate targeting from `config/profile.yml`. The profile may still supply operational settings such as output language; workflow rules may supply procedure, never candidate facts.\n\n'
+      printf '%s\n' "$library_context" | sed 's/^/    /'
+    } >> "$resolved_prompt"
+  else
   for context_file in "$DATA_ROOT/modes/_profile.md" "$PROFILE_FILE" "$DATA_ROOT/modes/_context.md" "$DATA_ROOT/modes/_custom.md"; do
     if [[ -f "$context_file" ]]; then
       {
@@ -1589,6 +1640,7 @@ process_offer() {
       } >> "$resolved_prompt"
     fi
   done
+  fi
 
   # The Jev pre-screen is the one per-offer block in the resolved prompt. It
   # goes LAST, after every block that is the same for all offers, so the
@@ -1618,15 +1670,27 @@ process_offer() {
   fi
   claude_args+=(--append-system-prompt-file "$resolved_prompt" "$prompt")
 
-  # Non-claude CLIs lack --append-system-prompt-file, so concatenate the
-  # resolved system prompt and the per-job prompt into a single argument.
+  # Non-Claude CLIs receive a combined prompt. Keep large prompts off argv;
+  # the same 16 KiB ceiling as the web adapter leaves room for flags/environment.
   # model_args is expanded with the ${arr[@]+"${arr[@]}"} idiom below: under
   # `set -u`, bash 3.2 (macOS /bin/bash) treats an empty array expansion as an
   # unbound variable and would abort every worker launched without --model.
   local full_prompt=""
   local -a model_args=()
+  local full_prompt_file="" prompt_bytes=0 large_prompt=false
   if [[ "$CLI" != "claude" ]]; then
-    full_prompt="$(cat "$resolved_prompt")"$'\n\n'"$prompt"
+    if [[ "${using_context_library:-false}" == "true" ]]; then
+      full_prompt_file=$(mktemp "${resolved_prompt}.input.XXXXXX")
+      { cat "$resolved_prompt"; printf '\n\n%s' "$prompt"; } > "$full_prompt_file"
+      prompt_bytes=$(wc -c < "$full_prompt_file")
+      if (( prompt_bytes > 16384 )); then
+        large_prompt=true
+      else
+        full_prompt="$(cat "$full_prompt_file")"
+      fi
+    else
+      full_prompt="$(cat "$resolved_prompt")"$'\n\n'"$prompt"
+    fi
     [[ -n "$MODEL" ]] && model_args=(--model "$MODEL")
   fi
 
@@ -1644,19 +1708,44 @@ process_offer() {
         ;;
       opencode)
         if command -v opencode &>/dev/null; then
-          run_worker opencode run ${model_args[@]+"${model_args[@]}"} "$full_prompt" > "$log_file" 2>&1 || exit_code=$?
+          if [[ "$large_prompt" == "true" ]]; then
+            # OpenCode run reads its complete message from piped stdin.
+            run_worker --input-file "$full_prompt_file" opencode run ${model_args[@]+"${model_args[@]}"} > "$log_file" 2>&1 || exit_code=$?
+          else
+            run_worker opencode run ${model_args[@]+"${model_args[@]}"} "$full_prompt" > "$log_file" 2>&1 || exit_code=$?
+          fi
         else
-          run_worker ollama launch opencode ${model_args[@]+"${model_args[@]}"} -y -- run "$full_prompt" > "$log_file" 2>&1 || exit_code=$?
+          if [[ "$large_prompt" == "true" ]]; then
+            echo 'Context is too large for the ollama launch adapter. Install opencode directly or choose --cli claude or --cli gemini; nothing was truncated.' | tee "$log_file" >&2
+            exit_code=1
+          else
+            run_worker ollama launch opencode ${model_args[@]+"${model_args[@]}"} -y -- run "$full_prompt" > "$log_file" 2>&1 || exit_code=$?
+          fi
         fi
         ;;
       gemini)
-        run_worker gemini ${model_args[@]+"${model_args[@]}"} -p "$full_prompt" > "$log_file" 2>&1 || exit_code=$?
+        if [[ "$large_prompt" == "true" ]]; then
+          # Gemini appends stdin to -p in headless mode, as the web adapter does.
+          run_worker --input-file "$full_prompt_file" gemini ${model_args[@]+"${model_args[@]}"} -p 'Follow the complete request supplied on stdin.' > "$log_file" 2>&1 || exit_code=$?
+        else
+          run_worker gemini ${model_args[@]+"${model_args[@]}"} -p "$full_prompt" > "$log_file" 2>&1 || exit_code=$?
+        fi
         ;;
       qwen)
-        run_worker qwen ${model_args[@]+"${model_args[@]}"} -p "$full_prompt" > "$log_file" 2>&1 || exit_code=$?
+        if [[ "$large_prompt" == "true" ]]; then
+          echo 'Context is too large for the qwen input adapter. Choose --cli claude, --cli gemini or direct --cli opencode; nothing was truncated.' | tee "$log_file" >&2
+          exit_code=1
+        else
+          run_worker qwen ${model_args[@]+"${model_args[@]}"} -p "$full_prompt" > "$log_file" 2>&1 || exit_code=$?
+        fi
         ;;
       grok)
-        run_worker grok --always-approve --output-format plain ${model_args[@]+"${model_args[@]}"} -p "$full_prompt" > "$log_file" 2>&1 || exit_code=$?
+        if [[ "$large_prompt" == "true" ]]; then
+          echo 'Context is too large for the grok input adapter. Choose --cli claude, --cli gemini or direct --cli opencode; nothing was truncated.' | tee "$log_file" >&2
+          exit_code=1
+        else
+          run_worker grok --always-approve --output-format plain ${model_args[@]+"${model_args[@]}"} -p "$full_prompt" > "$log_file" 2>&1 || exit_code=$?
+        fi
         ;;
     esac
 
@@ -1716,6 +1805,7 @@ process_offer() {
 
   # Cleanup resolved prompt and pre-fetched JD file
   rm -f "$resolved_prompt" "$jd_file"
+  [[ -z "$full_prompt_file" ]] || rm -f "$full_prompt_file"
 
   local completed_at
   completed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)

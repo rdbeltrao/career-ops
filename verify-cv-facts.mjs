@@ -12,39 +12,17 @@
  *   node verify-cv-facts.mjs --self-test
  */
 
-import { existsSync, readFileSync } from 'fs';
-import { isAbsolute, join, basename } from 'path';
+import { existsSync, readFileSync, realpathSync } from 'fs';
+import { isAbsolute, join, basename, relative, resolve, sep } from 'path';
 import { isMainModule } from './lib/is-main-module.mjs';
 import { getCareerOpsRoot } from './path-resolver.mjs';
+import { readContextLibrary } from './lib/context-library.mjs';
 
-// Two roots, because this gate compares user-layer files against a user-layer
-// config and previously resolved neither from the user's data root.
-//
-// modes/_context.md, cv.md and article-digest.md are the Source-of-Truth
-// Boundary's primary files: the context file is the record of what the
-// candidate has done and every fact and figure in it is evidence, cv.md is a
-// tailored rendering of it, and article-digest.md holds the proof points. As
-// bare relative strings the sources once resolved against process.cwd(), so
-// from any directory that is not the data root the gate read NO sources — and
-// a fact check with no sources does not fail open quietly, it fails LOUD and
-// WRONG: every quantified claim in the generated CV is reported as "absent
-// from sources", including claims copied verbatim out of the user's own cv.md.
-// A default source that does not exist reads as empty (readIfExists), so a
-// data root without a context file or a digest is checked against the files it
-// has.
-//
-// config/cv-facts.json is user-layer too (it holds the user's forbidden and
-// advisory phrases). Resolved from the CODE root it was simply absent for any
-// configured data root, and the gate said so and carried on:
-//
-//     ⚠️  fact-gate config not found: <CHECKOUT>/config/cv-facts.json
-//         — forbidden/advisory phrase checks did not run.
-//
-// So one invocation both invented failures and silently skipped half its
-// checks. --source and --config still override; only the defaults move.
-const DATA_ROOT = getCareerOpsRoot();
-const DEFAULT_SOURCES = [join(DATA_ROOT, 'modes', '_context.md'), join(DATA_ROOT, 'cv.md'), join(DATA_ROOT, 'article-digest.md')];
-const DEFAULT_CONFIG = join(DATA_ROOT, 'config', 'cv-facts.json');
+// The Context hierarchy is authoritative when its manifest exists. Older
+// installations still read these three defaults. Resolve both evidence and
+// user phrase policy from the selected data root at call time, never the code
+// checkout or an import-time snapshot of the environment.
+const defaultSources = (root) => [join(root, 'modes', '_context.md'), join(root, 'cv.md'), join(root, 'article-digest.md')];
 const TOOL_PROSE_WORDS = new Set([
   'a', 'an', 'and', 'at', 'built', 'by', 'containerized', 'deployment',
   'deployments', 'delivery', 'diagnosing', 'efficiency', 'feedback', 'for', 'from', 'improve',
@@ -1857,7 +1835,7 @@ function countShapedSpans(text) {
  * @param {string} targetText
  * @returns {{reason: string, message: string, spans: string[]}|null}
  */
-export function diagnoseCoverage(targetText) {
+export function diagnoseCoverage(targetText, { source = 'legacy' } = {}) {
   const spans = countShapedSpans(targetText);
   if (spans.length < 2) return null;
   // RAW matches on purpose. This asks "could the extractor read any count here?",
@@ -1873,8 +1851,8 @@ export function diagnoseCoverage(targetText) {
     message:
       `${spans.length} count-like claims are present but none matched the metric extractor, whose noun ` +
       'list is English-only — so no count in this document was checked against your sources. ' +
-      'Percentages, currency and multipliers were still checked. Verify the counts by hand, or add ' +
-      'them to allow_metrics in config/cv-facts.json once confirmed.',
+      'Percentages, currency and multipliers were still checked. ' +
+      (source === 'library' ? 'Verify the counts by hand against confirmed facts in Context.' : 'Verify the counts by hand, or add them to allow_metrics in config/cv-facts.json once confirmed.'),
     spans,
   };
 }
@@ -2019,6 +1997,22 @@ function resolveInputPath(path, cwd = process.cwd()) {
   return isAbsolute(path) ? path : join(cwd, path);
 }
 
+function canonicalSourcePath(path) {
+  try { return realpathSync(path); }
+  catch (error) { if (error.code === 'ENOENT') return resolve(path); throw error; }
+}
+
+/** Explicit evidence cannot reintroduce replaced defaults or bypass page roles. */
+function supplementalLibrarySources(paths, dataRoot, cwd) {
+  const legacy = new Set(defaultSources(dataRoot).map(canonicalSourcePath));
+  const libraryDirectory = canonicalSourcePath(join(dataRoot, 'data', 'context-workspace'));
+  return paths.map((path) => resolveInputPath(path, cwd)).filter((path) => {
+    const canonical = canonicalSourcePath(path);
+    const inside = relative(libraryDirectory, canonical);
+    return !legacy.has(canonical) && inside !== '' && (inside === '..' || inside.startsWith(`..${sep}`) || isAbsolute(inside));
+  });
+}
+
 // No name or title is this long. A tool claim has no word limit, so a capture
 // that runs on for hundreds of capitalised words, or one enormous token, can
 // reach the lookup below, and escaped into a pattern it is more than the
@@ -2037,7 +2031,10 @@ function sourceContainsFact(sourceText, value) {
 
 /**
  * @param {string} targetText generated candidate-facing HTML/Markdown/text
- * @param {{ sourcePaths?: string[], planTexts?: string[], configPath?: string, cwd?: string }} options
+ * @param {{ dataRoot?: string, sourcePaths?: string[], planTexts?: string[], configPath?: string, cwd?: string }} options
+ *   dataRoot: Context is authoritative when its manifest exists. Explicit
+ *   sourcePaths add independent evidence then; without Context they retain
+ *   their legacy override behavior. Raw Context files never bypass page roles.
  *   planTexts: what the candidate wrote for one document, such as the answers
  *   for a cover letter. They support only a number the document states as a
  *   plan, never an employer, title, tool, or past experience. The rendered
@@ -2046,22 +2043,30 @@ function sourceContainsFact(sourceText, value) {
  * @throws when the config is invalid
  */
 export function verifyFacts(targetText, {
-  sourcePaths = DEFAULT_SOURCES,
+  dataRoot = getCareerOpsRoot(),
+  sourcePaths,
   planTexts = [],
-  configPath = DEFAULT_CONFIG,
+  configPath,
   cwd = process.cwd(),
 } = {}) {
   // Per file, before the join: stripMarkup keeps only the body of a LaTeX
   // document, and run on the joined text it would discard every source read
   // ahead of a .tex one as if it were that document's preamble.
-  const sourceText = sourcePaths.map(path => latexBody(readIfExists(resolveInputPath(path, cwd)))).join('\n');
-  const { missing: configMissing, config } = loadFactConfig(resolveInputPath(configPath, cwd));
-  const allowed = allowedMetricSet(sourceText, config.allow_metrics);
+  const root = resolveInputPath(dataRoot, cwd);
+  // Read each time: an edited Context page must affect the very next check.
+  // A present but invalid library throws; stale documents never become fallback.
+  const library = readContextLibrary(root);
+  const paths = library ? supplementalLibrarySources(sourcePaths ?? [], root, cwd) : (sourcePaths ?? defaultSources(root)).map((path) => resolveInputPath(path, cwd));
+  const sourceText = [library ? latexBody(library.evidenceText) : '', ...paths.map((path) => latexBody(readIfExists(path)))].join('\n');
+  const { missing: configMissing, config } = loadFactConfig(resolveInputPath(configPath ?? join(root, 'config', 'cv-facts.json'), cwd));
+  // Context records approvals as current facts. Stored legacy exceptions must
+  // not become a second source of truth after a page is corrected or removed.
+  const allowed = allowedMetricSet(sourceText, library ? [] : config.allow_metrics);
   const targetClaims = metricClaims(targetText);
   const planned = plannedClaims(targetText, planTexts);
   const invented = [...targetClaims].filter(claim => !allowed.has(claim) && !planned.has(claim));
   const sourceNormalized = normalizeFact(stripMarkup(sourceText));
-  const allowedFacts = new Set(config.allow_facts.map(normalizeFact));
+  const allowedFacts = new Set((library ? [] : config.allow_facts).map(normalizeFact));
   const unsourced = ({ value }) => !sourceContainsFact(sourceNormalized, value) && !allowedFacts.has(value);
   const fieldClaims = structuredFieldClaims(targetText).filter(unsourced);
   const namedFacts = [
@@ -2098,12 +2103,13 @@ export function verifyFacts(targetText, {
   // 'pass' into 'warn' so the caller is told the gate could not read it.
   // One coverage object, so callers that read `coverage.reason` keep working.
   // A count gap keeps its reason and gains the scope sentence.
-  const countGap = diagnoseCoverage(targetText);
+  const countGap = diagnoseCoverage(targetText, { source: library ? 'library' : 'legacy' });
   const coverage = !languageGap ? countGap
     : countGap ? { ...countGap, message: `${countGap.message} ${languageGap}` }
       : { reason: 'scope-not-checked', message: languageGap, spans: [] };
   const blocked = invented.length || unsupportedFacts.length || forbidden.length;
   return {
+    source: library ? 'library' : 'legacy',
     verdict: blocked ? 'block' : (warnings.length || advisoryFacts.length || coverage) ? 'warn' : 'pass',
     invented,
     unsupportedFacts,
@@ -2206,7 +2212,11 @@ function plannedClaims(targetText, planTexts) {
 }
 
 /** Say which sources the gate read, so nobody looks for evidence it never checked. */
-export function factSourceAdvice({ letterAnswers = false } = {}) {
+export function factSourceAdvice({ letterAnswers = false, source = 'legacy' } = {}) {
+  if (source === 'library') {
+    return 'These claims are not supported by confirmed facts in Context. Update the relevant Context page after verifying the evidence. Reference, preference and unconfirmed pages cannot substantiate career claims.' +
+      (letterAnswers ? ' Letter answers support only numbers stated as future plans, never past experience.' : '');
+  }
   if (!letterAnswers) {
     return 'cv.md and article-digest.md do not contain these claims. Add career evidence to one of them. A verified exception belongs in config/cv-facts.json.';
   }
@@ -2224,7 +2234,8 @@ export function factSourceAdvice({ letterAnswers = false } = {}) {
  *
  * The value is the exact string `allow_facts` matches, so the user can copy it.
  */
-export function scopeClaimAdvice({ value }) {
+export function scopeClaimAdvice({ value }, { source = 'legacy' } = {}) {
+  if (source === 'library') return 'the source gives this work a weaker verb than the CV. If the CV is right, verify the evidence and update the relevant Context page';
   return `the source gives this work a weaker verb than the CV. If the CV is right, add "${value}" to allow_facts in config/cv-facts.json`;
 }
 
@@ -2236,11 +2247,11 @@ export function assertFacts(targetText, options = {}) {
     if (result.invented.length) details.push(`metric-like claims absent from sources: ${result.invented.join(', ')}`);
     if (result.unsupportedFacts.length) details.push(`non-metric facts absent from sources: ${result.unsupportedFacts.map((claim) => {
       const { kind, value, sourceLine } = claim;
-      if (kind === 'scope') return `${kind}=${value} (source says: ${sourceLine}; ${scopeClaimAdvice(claim)})`;
+      if (kind === 'scope') return `${kind}=${value} (source says: ${sourceLine}; ${scopeClaimAdvice(claim, { source: result.source })})`;
       return sourceLine ? `${kind}=${value} (source says: ${sourceLine})` : `${kind}=${value}`;
     }).join(', ')}`);
     if (result.forbidden.length) details.push(`forbidden phrases found: ${result.forbidden.join(', ')}`);
-    throw new Error(`Fact check failed${options.label ? ` for ${options.label}` : ''}: ${details.join('; ')}. ${factSourceAdvice({ letterAnswers: Array.isArray(options.planTexts) })}`);
+    throw new Error(`Fact check failed${options.label ? ` for ${options.label}` : ''}: ${details.join('; ')}. ${factSourceAdvice({ letterAnswers: Array.isArray(options.planTexts), source: result.source })}`);
   }
   return result;
 }
@@ -2249,7 +2260,7 @@ export function assertFacts(targetText, options = {}) {
 function parseCliArgs(args) {
   const sourcePaths = [];
   let targetArg = '';
-  let configPath = DEFAULT_CONFIG;
+  let configPath;
   let json = false;
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
@@ -2280,7 +2291,10 @@ function usage() {
 Checks generated candidate-facing text for unsupported metrics and explicitly asserted
 non-metric facts (employers, titles, tools, delegated-work authorship, scope-verb
 inflation, and unsourced adoption claims) absent from source files.
+Context pages marked as facts are authoritative when a Context library exists.
 Default sources: modes/_context.md, cv.md and article-digest.md.
+Those legacy defaults apply only without a Context library. --source adds independent
+evidence when Context exists; it cannot restore legacy files or bypass page roles.
 A cover letter also reads the answers supplied for that letter, which support
 only a number the letter states as a plan. The rendered letter is not a source.
 Default config:  config/cv-facts.json (optional)`;
@@ -2388,7 +2402,7 @@ function runSelfTest() {
   // filtered matches turned a false block into a false warn whose message blamed
   // the English-only noun list for counts that were English and recognized.
   const verdictOf = (t) => {
-    const r = verifyFacts(t, { sourcePaths: [], configPath: '/nonexistent' });
+    const r = verifyFacts(t, { dataRoot: '/nonexistent', sourcePaths: [], configPath: '/nonexistent' });
     return `${r.verdict}${r.coverage ? ' +' + r.coverage.reason : ''}`;
   };
   equal('two plan horizons do not trigger a coverage warning',
@@ -2883,15 +2897,18 @@ export function runCli(args = process.argv.slice(2)) {
     return 1;
   }
   try {
+    const dataRoot = getCareerOpsRoot();
+    const configPath = parsed.configPath ?? join(dataRoot, 'config', 'cv-facts.json');
     const result = verifyFacts(readFileSync(targetPath, 'utf-8'), {
-      sourcePaths: parsed.sourcePaths.length ? parsed.sourcePaths : DEFAULT_SOURCES,
-      configPath: parsed.configPath,
+      dataRoot,
+      sourcePaths: parsed.sourcePaths.length ? parsed.sourcePaths : undefined,
+      configPath,
     });
     // On stderr, before any verdict line and regardless of it: with no config
     // the phrase lists are empty, so "passed" below means the phrase check never
     // ran. stdout stays clean so --json remains parseable.
     if (result.configMissing) {
-      console.error(`⚠️  fact-gate config not found: ${parsed.configPath} — forbidden/advisory phrase checks did not run.`);
+      console.error(`⚠️  fact-gate config not found: ${configPath} — forbidden/advisory phrase checks did not run.`);
     }
     if (parsed.json) {
       console.log(JSON.stringify(result));
@@ -2919,7 +2936,7 @@ export function runCli(args = process.argv.slice(2)) {
         if (line && line !== value) console.error(`      CV:     ${line}`);
         if (sourceLine) console.error(`      source: ${sourceLine}`);
         if (kind === 'scope') {
-          const advice = scopeClaimAdvice(claim);
+          const advice = scopeClaimAdvice(claim, { source: result.source });
           console.error(`      ${advice[0].toUpperCase()}${advice.slice(1)}`);
         }
       }
@@ -2928,7 +2945,7 @@ export function runCli(args = process.argv.slice(2)) {
       console.error('\nForbidden phrases found:');
       for (const phrase of result.forbidden) console.error(`  - ${phrase}`);
     }
-    console.error(`\n${factSourceAdvice()}`);
+    console.error(`\n${factSourceAdvice({ source: result.source })}`);
     return 1;
   } catch (err) {
     if (parsed.json) {

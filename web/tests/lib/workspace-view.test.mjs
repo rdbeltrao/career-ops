@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { pageBreadcrumbs, visiblePageIds, siblingAvailability, selectedPageContent, navigationSections, collapsedPageKeys, sourcePageBreadcrumbs, visibleSourcePageIds, sourcePageMovement, collapsedSourcePageIds, initialWorkspaceDocument } from '../../src/lib/workspace-view.mjs';
+import { pageBreadcrumbs, visiblePageIds, siblingAvailability, selectedPageContent, navigationSections, collapsedPageKeys, sourcePageBreadcrumbs, visibleSourcePageIds, sourcePageMovement, collapsedSourcePageIds, initialWorkspaceDocument, workspaceNavigationDocuments } from '../../src/lib/workspace-view.mjs';
 
 const sections = [
   { id: 'career', title: 'Career history', parentId: null, level: 2, bodyStart: 18, end: 90 },
@@ -104,5 +104,24 @@ test('Context opens the source root, while CV opens its separate local draft', (
   assert.equal(initialWorkspaceDocument(sourcePages, 'context', 'source-root'), 'source-root');
   assert.equal(initialWorkspaceDocument(sourcePages, 'context', null), 'source-root');
   assert.equal(initialWorkspaceDocument(sourcePages, 'cv', 'source-root'), 'cv');
-  assert.equal(initialWorkspaceDocument(sourcePages.filter(({ kind }) => kind === 'local'), 'context', null), null);
+  assert.equal(initialWorkspaceDocument(sourcePages.filter(({ kind }) => kind === 'local'), 'context', null), 'context');
+});
+
+test('a populated Context hierarchy resolves stale legacy links to its root', () => {
+  for (const legacyId of ['context', 'profile', 'cv', 'unknown']) {
+    assert.equal(initialWorkspaceDocument(sourcePages, 'context', 'source-root', legacyId), 'source-root');
+  }
+  assert.equal(initialWorkspaceDocument(sourcePages, 'context', 'source-root', 'source-role'), 'source-role');
+  assert.equal(initialWorkspaceDocument(sourcePages, 'cv', 'source-root', 'source-role'), 'cv');
+  const legacy = [{ id: 'profile', title: 'Preferences', kind: 'local' }, ...sourcePages.filter(({ kind }) => kind === 'local')];
+  assert.equal(initialWorkspaceDocument(legacy, 'context', null, 'profile'), 'profile');
+  assert.equal(initialWorkspaceDocument(legacy, 'context', null, 'cv'), 'context');
+});
+
+test('Context has one page hierarchy, with legacy documents only as fallback and CV separate', () => {
+  assert.deepEqual(workspaceNavigationDocuments(sourcePages, 'context').map(({ id }) => id), ['source-root', 'source-work', 'source-role', 'source-learning']);
+  assert.deepEqual(workspaceNavigationDocuments(sourcePages, 'cv').map(({ id }) => id), ['cv']);
+  const legacy = sourcePages.filter(({ kind }) => kind === 'local');
+  assert.deepEqual(workspaceNavigationDocuments(legacy, 'context').map(({ id }) => id), ['context']);
+  assert.equal(sourcePages.length, 6, 'filtering navigation never changes the document catalog');
 });

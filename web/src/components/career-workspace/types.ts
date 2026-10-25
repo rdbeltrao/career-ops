@@ -1,3 +1,5 @@
+export type PageUsage = "facts" | "preferences" | "reference" | "unconfirmed";
+
 export type WorkspaceSection = {
   id: string;
   title: string;
@@ -23,6 +25,7 @@ export type WorkspaceDocumentSummary = {
   sourceUrl?: string | null;
   sourceEditedAt?: string | null;
   importNotes?: string[];
+  usage?: PageUsage;
   order?: number;
 };
 

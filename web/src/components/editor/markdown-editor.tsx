@@ -16,6 +16,7 @@ import { OnChangePlugin } from "@lexical/react/LexicalOnChangePlugin";
 import type { EditorState } from "lexical";
 import { Code2, PenLine } from "lucide-react";
 import { analyzeMarkdown, EDITOR_NODES, EDITOR_TRANSFORMERS, exportMarkdown, importMarkdown, registerAllowedLinkTransform, roundTripMarkdown, safeLinkUrl } from "@/lib/editor-markdown.mjs";
+import { normalizeWorkspaceLinks } from "@/lib/workspace-links.mjs";
 import { EditorToolbar } from "./editor-toolbar";
 import { BlockMovePlugin, EditablePlugin, SlashMenuPlugin } from "./editor-plugins";
 
@@ -24,6 +25,7 @@ export type MarkdownEditorProps = {
   onChange: (markdown: string) => void;
   documentKey: string;
   disabled?: boolean;
+  linkPages?: { id: string; title?: string }[];
 };
 
 const theme = {
@@ -42,8 +44,8 @@ export function MarkdownEditor(props: MarkdownEditorProps) {
   return <EditorDocument key={props.documentKey} {...props} />;
 }
 
-function EditorDocument({ value, onChange, disabled = false }: MarkdownEditorProps) {
-  const [initialAnalysis] = useState(() => analyzeMarkdown(value));
+function EditorDocument({ value, onChange, disabled = false, linkPages = [] }: MarkdownEditorProps) {
+  const [initialAnalysis] = useState(() => analyzeMarkdown(normalizeWorkspaceLinks(value, linkPages)));
   const [draft, setDraft] = useState(value);
   const [sourceMode, setSourceMode] = useState(false);
   const [richMode, setRichMode] = useState(initialAnalysis.safe);
@@ -54,7 +56,7 @@ function EditorDocument({ value, onChange, disabled = false }: MarkdownEditorPro
 
   function toggleMode() {
     if (!sourceMode) { setSourceMode(true); return; }
-    const analysis = analyzeMarkdown(draft);
+    const analysis = analyzeMarkdown(normalizeWorkspaceLinks(draft, linkPages));
     setReason(analysis.reason);
     setRichMode(analysis.safe);
     if (analysis.safe) setGeneration((value) => value + 1);
@@ -71,15 +73,16 @@ function EditorDocument({ value, onChange, disabled = false }: MarkdownEditorPro
     {reason && <p role="status" className="border-b border-border/60 px-4 py-3 text-xs leading-relaxed text-muted">{reason}</p>}
     {sourceMode ? <>
       <textarea aria-label="Markdown source" disabled={disabled} value={draft} onChange={(event) => changed(event.target.value)} spellCheck={false} className="min-h-[55vh] w-full resize-y rounded-b-xl bg-transparent p-5 font-mono text-sm leading-7 text-foreground outline-none focus:ring-2 focus:ring-inset focus:ring-brand/30 disabled:opacity-60" />
-    </> : richMode ? <RichEditor key={generation} initialValue={draft} disabled={disabled} onChange={changed} onError={() => { setReason("Rich editing stopped. Your last recoverable draft is shown below; review its Source before saving."); setRichMode(false); }} /> : <FormattedPage value={draft} />}
+    </> : richMode ? <RichEditor key={generation} initialValue={draft} linkPages={linkPages} disabled={disabled} onChange={changed} onError={() => { setReason("Rich editing stopped. Your last recoverable draft is shown below; review its Source before saving."); setRichMode(false); }} /> : <FormattedPage value={draft} linkPages={linkPages} />}
   </div>;
 }
 
 /** Rendering never imports or rewrites the canonical Markdown draft. */
-function FormattedPage({ value }: { value: string }) {
+function FormattedPage({ value, linkPages }: { value: string; linkPages: NonNullable<MarkdownEditorProps["linkPages"]> }) {
+  const displayValue = useMemo(() => normalizeWorkspaceLinks(value, linkPages), [value, linkPages]);
   return <article aria-label="Formatted page" className="report-prose min-h-[55vh] min-w-0 overflow-x-auto px-6 py-5 text-sm text-foreground [&>*:first-child]:mt-0">
     {/* No raw-HTML plugin: comments stay hidden and embedded HTML cannot run. */}
-    <ReactMarkdown remarkPlugins={[remarkGfm]} skipHtml urlTransform={(url) => safeLinkUrl(url) ? url : undefined}>{value}</ReactMarkdown>
+    <ReactMarkdown remarkPlugins={[remarkGfm]} skipHtml urlTransform={(url) => safeLinkUrl(url) ? url : undefined}>{displayValue}</ReactMarkdown>
   </article>;
 }
 
@@ -89,18 +92,19 @@ function AllowedLinksPlugin() {
   return null;
 }
 
-function RichEditor({ initialValue, disabled, onChange, onError }: { initialValue: string; disabled: boolean; onChange: (markdown: string) => void; onError: () => void }) {
+function RichEditor({ initialValue, linkPages, disabled, onChange, onError }: { initialValue: string; linkPages: NonNullable<MarkdownEditorProps["linkPages"]>; disabled: boolean; onChange: (markdown: string) => void; onError: () => void }) {
   const [anchor, setAnchor] = useState<HTMLDivElement | null>(null);
+  const [displayValue] = useState(() => normalizeWorkspaceLinks(initialValue, linkPages));
   const original = useRef(initialValue);
   const baseline = useRef<string | null>(null);
-  if (baseline.current === null) baseline.current = roundTripMarkdown(initialValue);
+  if (baseline.current === null) baseline.current = roundTripMarkdown(displayValue);
   const previous = useRef(baseline.current);
   const config = useMemo(() => ({
     namespace: "career-document",
     nodes: EDITOR_NODES,
     theme,
     editable: !disabled,
-    editorState: () => importMarkdown(initialValue),
+    editorState: () => importMarkdown(displayValue),
     onError,
     // The component is remounted explicitly when its document or mode changes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -111,8 +115,8 @@ function RichEditor({ initialValue, disabled, onChange, onError }: { initialValu
       const markdown = state.read(() => exportMarkdown());
       if (markdown === previous.current) return;
       previous.current = markdown;
-      // EVIDENCE: import/export may normalise Markdown spelling. Never publish
-      // that normalisation on open; undoing to the baseline restores exact bytes.
+      // Display labels and import/export may normalise Markdown spelling. Never
+      // publish that on open; undoing to the display baseline restores exact source.
       onChange(markdown === baseline.current ? original.current : markdown);
     } catch { onError(); }
   }

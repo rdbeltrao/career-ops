@@ -148,9 +148,19 @@ test('generated CV uses the linked report identity when its application number d
       `018\toutput/${basename(first.paths.finalPdf)}\t\tletter\t2026-07-26`,
       `019\toutput/${basename(second.paths.finalPdf)}\t\tletter\t2026-07-26`,
     ].join('\n'));
-    assert.equal(await resolveTailoredCv(undefined, '309'), first.paths.finalPdf);
-    assert.equal(await resolveTailoredCv(undefined, '310'), second.paths.finalPdf);
-    assert.equal(await resolveTailoredCv(undefined, '0309'), first.paths.finalPdf);
+    // tracker-utils.mjs is an engine script, which the web loads from the code
+    // checkout (CAREER_OPS_CODE_ROOT), not the data root; point the checkout at
+    // this fixture so the stub above is the one imported.
+    const prevCodeRoot = process.env.CAREER_OPS_CODE_ROOT;
+    process.env.CAREER_OPS_CODE_ROOT = root;
+    try {
+      assert.equal(await resolveTailoredCv(undefined, '309'), first.paths.finalPdf);
+      assert.equal(await resolveTailoredCv(undefined, '310'), second.paths.finalPdf);
+      assert.equal(await resolveTailoredCv(undefined, '0309'), first.paths.finalPdf);
+    } finally {
+      if (prevCodeRoot === undefined) delete process.env.CAREER_OPS_CODE_ROOT;
+      else process.env.CAREER_OPS_CODE_ROOT = prevCodeRoot;
+    }
   });
 });
 

@@ -276,7 +276,7 @@ function batchFixture(t, { jevStub = true, context = false } = {}) {
   writeFileSync(join(dir, 'batch', 'batch-input.tsv'), 'id\turl\tsource\tnotes\n1\thttps://example.com/jobs/one\tfixture\t-\n');
   writeFileSync(join(dir, 'path-resolver.mjs'), read('path-resolver.mjs'));
   mkdirSync(join(dir, 'lib'), { recursive: true });
-  for (const rel of ['lib/is-main-module.mjs', 'lib/context-evidence.mjs']) writeFileSync(join(dir, rel), read(rel));
+  for (const rel of ['lib/is-main-module.mjs', 'lib/context-evidence.mjs', 'lib/context-library.mjs']) writeFileSync(join(dir, rel), read(rel));
   writeFileSync(join(dir, 'context-evidence.mjs'), read('context-evidence.mjs'));
   writeFileSync(join(dir, 'reserve-report-num.mjs'), "if (!process.argv.includes('--release')) console.log('001');\n");
   for (const name of ['merge-tracker.mjs', 'reconcile-pipeline.mjs', 'verify-pipeline.mjs']) writeFileSync(join(dir, name), '// Not under test here.\n');

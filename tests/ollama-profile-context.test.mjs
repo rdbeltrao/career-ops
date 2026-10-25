@@ -50,6 +50,7 @@ for (const relativePath of [
   // ollama-eval reads modes/_context.md number-masked, sends the shared
   // sampling parameters and runs the Jev pre-screen through lib/ helpers.
   'lib/context-evidence.mjs',
+  'lib/context-library.mjs',
   'lib/sampling.mjs',
   'lib/jev-prescreen.mjs',
   'utils/token-tracker.mjs',

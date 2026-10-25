@@ -115,6 +115,9 @@ function sentSystemPrompt(base, dataRoot, args) {
       CAREER_OPS_ROOT: dataRoot,
       OPENROUTER_API_KEY: 'split-root-fixture-key',
       CAREER_OPS_MODEL: 'fixture/model',
+      // The fork refuses pinned paid models (paidModelRefusal); the fixture
+      // server answers locally, so no credit is spent.
+      CAREER_OPS_ALLOW_PAID_OPENROUTER: '1',
       SPLIT_ROOT_CAPTURE: capture,
     }),
   });
