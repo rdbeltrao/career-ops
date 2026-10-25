@@ -112,7 +112,7 @@ function effectiveUsage(page, pages) {
 }
 /** @param {SourcePage} page @param {string} workspaceId @param {SourcePage[]} pages */
 function metadata(page, workspaceId, pages) {
-  return { id: `source-${page.id}`, title: page.title, kind: 'source', group: 'Context', description: 'Part of the career context used for job matching and CV generation.', usage: effectiveUsage(page, pages), workspaceId, parentDocumentId: page.parentId === null ? null : `source-${page.parentId}`, order: page.order, sourceUrl: page.sourceUrl ?? null, sourceEditedAt: page.sourceEditedAt ?? null, importNotes: page.importNotes ?? [], sections: [] };
+  return { id: `source-${page.id}`, title: page.title, kind: 'source', group: 'Context', description: 'Part of the career context used for job matching and CV generation.', usage: effectiveUsage(page, pages), declaredUsage: page.usage ?? null, workspaceId, parentDocumentId: page.parentId === null ? null : `source-${page.parentId}`, order: page.order, sourceUrl: page.sourceUrl ?? null, sourceEditedAt: page.sourceEditedAt ?? null, importNotes: page.importNotes ?? [], sections: [] };
 }
 /** @param {SourcePage} page @param {string} content @param {string} manifestText @param {string} workspaceId @param {SourcePage[]} pages */
 function snapshot(page, content, manifestText, workspaceId, pages) {

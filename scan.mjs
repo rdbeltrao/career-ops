@@ -3353,6 +3353,47 @@ export function loadDedupSnapshot(policy = {}, canonicalize = defaultCompanyNorm
   return { seen, identityPromotableUrls, recheckEligible, seenUrlVariants, seenCompanyRoles, seenCompanyRoleBases, seenCompanyRoleRequisitions, locatedRequisitionsByBase, seenCompanyRoleLanguages, locatedLanguagesByBase, fingerprintHistory };
 }
 
+/**
+ * The company+role check `main()` applies, packaged for another scanner.
+ *
+ * scan-ats-full.mjs deduplicates by URL, so a role the user already has under
+ * one URL (say a LinkedIn posting, evaluated) came back as a new pipeline row
+ * when the sweep found the employer's own Ashby or Greenhouse URL. This gate
+ * reads the same three sources (tracker, pipeline, scan history) under the same
+ * portals.yml policy (recheck window, company aliases, opt-in location key) and
+ * answers one question per offer.
+ *
+ * `admit(job)` returns false when the role is already known, true otherwise,
+ * and records an admitted role so a second URL for it later in the same run is
+ * rejected too. Postings that name different requisition IDs stay distinct,
+ * exactly as in `main()`. Language-aware dedup is not applied here.
+ *
+ * @param {object} [config] - Parsed portals.yml.
+ * @param {{scanHistoryPath?: string, pipelinePath?: string, applicationsPath?: string}} [paths]
+ * @returns {{admit: (job: {company?: string, title?: string, url?: string, location?: string, requisitionId?: string}) => boolean}}
+ */
+export function createCompanyRoleGate(config = {}, paths = {}) {
+  const canonicalize = buildCompanyCanonicalizer(config?.company_aliases);
+  const includeLocation = resolveDedupIncludeLocation(config || {});
+  const snapshot = loadDedupSnapshot(scanHistoryPolicy(config || {}), canonicalize, { ...paths, includeLocation });
+  const seen = snapshot.seenCompanyRoles;
+  const requisitions = snapshot.seenCompanyRoleRequisitions;
+  const locatedRequisitions = snapshot.locatedRequisitionsByBase;
+  return {
+    admit(job) {
+      if (!job?.company || !job?.title) return true;
+      const baseKey = companyRoleDedupKey(job.company, job.title, canonicalize);
+      const key = includeLocation ? companyRoleDedupKey(job.company, job.title, canonicalize, job.location) : baseKey;
+      const requisition = requisitionIdsForDedup({ url: job.url, text: job.title, requisitionId: job.requisitionId });
+      if (matchesSeenCompanyRole({ key, baseKey, seen, requisitions, locatedRequisitions }, requisition)) return false;
+      seen.add(key);
+      recordForms(requisitions, key, requisition);
+      if (key !== baseKey) recordForms(locatedRequisitions, baseKey, requisition);
+      return true;
+    },
+  };
+}
+
 // Standard skeleton created on fresh install — matches the format documented
 // in modes/pipeline.md and expected by /career-ops pipeline.
 const PIPELINE_SKELETON = `# Pipeline — Pending URLs

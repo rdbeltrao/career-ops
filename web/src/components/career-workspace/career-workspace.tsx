@@ -1,18 +1,20 @@
 "use client";
 
 import dynamic from "next/dynamic";
-import Link from "next/link";
 import { useSearchParams } from "next/navigation";
-import { useCallback, useEffect, useRef, useState } from "react";
-import { ArrowDown, ArrowUp, BookOpen, Check, ChevronRight, Files, ListChecks, Loader2, PanelLeft, Pencil, Plus, X } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { ArrowDown, ArrowUp, BookOpen, Check, ChevronRight, Loader2, PanelLeft, Pencil, Plus, X } from "lucide-react";
 import { SkillGaps } from "@/components/skill-gaps";
 import { cn } from "@/lib/cn";
-import { collapsedPageKeys, collapsedSourcePageIds, initialWorkspaceDocument, navigationSections, pageBreadcrumbs, selectedPageContent, siblingAvailability, sourcePageBreadcrumbs, sourcePageMovement, workspaceNavigationDocuments } from "@/lib/workspace-view.mjs";
+import { collapsedSourcePageIds, inheritingSourcePageCount, initialWorkspaceDocument, sourcePageBreadcrumbs, sourcePageMovement, sourcePurposeOrigin, workspaceNavigationDocuments } from "@/lib/workspace-view.mjs";
 import { workspaceDrafts } from "@/lib/workspace-drafts.mjs";
-import { PageTree } from "./page-tree";
+import { documentOutline, wholeDocumentDraft } from "@/lib/document-outline.mjs";
+import { DocumentOutline, type OutlineSection } from "./document-outline";
+import { DocumentList } from "./document-list";
+import { PageActionsMenu, PagePurpose, type PageAction } from "./page-menus";
 import { SourcePageTree } from "./source-page-tree";
 import { UnsavedDialog } from "./unsaved-dialog";
-import type { PageSelection, PageUsage, WorkspaceDocument, WorkspaceDocumentSummary, WorkspaceSection } from "./types";
+import type { PageSelection, PageUsage, WorkspaceDocument, WorkspaceDocumentSummary } from "./types";
 
 // EVIDENCE: Next's bundled lazy-loading guide requires ssr:false in a client
 // component. Lexical owns browser selection and is loaded only for this surface.
@@ -30,12 +32,6 @@ const TRUST: Record<string, { label: string; text: string }> = {
   guide: { label: "Writing and workflow rules", text: "Instructions for how your search runs. These rules do not establish career facts." },
 };
 
-const PAGE_PURPOSE: Record<PageUsage, { label: string; description: string }> = {
-  facts: { label: "Career facts", description: "Use this page as evidence of your experience." },
-  preferences: { label: "Job preferences", description: "Guide job matching with your preferences, not claims about past work." },
-  reference: { label: "Reference material", description: "Keep this page as background material, not career evidence." },
-  unconfirmed: { label: "Unconfirmed notes", description: "Keep these notes out of factual claims until you confirm them." },
-};
 
 type Mutation = { action: "replace" | "add" | "rename" | "move" | "usage"; content?: string; title?: string; direction?: "up" | "down"; usage?: PageUsage };
 type ActionForm = { kind: "add" | "rename"; title: string } | null;
@@ -56,7 +52,7 @@ export function CareerWorkspace({ initialDocument = "context" }: { initialDocume
   const requestedDocument = useSearchParams().get("document");
   const [documents, setDocuments] = useState<WorkspaceDocumentSummary[]>([]);
   const [current, setCurrent] = useState<WorkspaceDocument | null>(null);
-  const [sectionId, setSectionId] = useState<string | null>(null);
+  const [sectionTarget, setSectionTarget] = useState<(OutlineSection & { request: number }) | null>(null);
   const [draft, setDraft] = useState("");
   const [original, setOriginal] = useState("");
   const [editorVersion, setEditorVersion] = useState(0);
@@ -68,7 +64,7 @@ export function CareerWorkspace({ initialDocument = "context" }: { initialDocume
   const [conflict, setConflict] = useState(false);
   const [notice, setNotice] = useState("");
   const [query, setQuery] = useState("");
-  const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+  const [sectionQuery, setSectionQuery] = useState("");
   const [collapsedSources, setCollapsedSources] = useState<Set<string>>(new Set());
   const [mobilePages, setMobilePages] = useState(false);
   const [form, setForm] = useState<ActionForm>(null);
@@ -82,31 +78,37 @@ export function CareerWorkspace({ initialDocument = "context" }: { initialDocume
   const requestNumber = useRef(0);
   const indexRequestNumber = useRef(0);
   const currentRef = useRef<WorkspaceDocument | null>(null);
-  const sectionRef = useRef<string | null>(null);
   const savingRef = useRef(false);
   const loadingRef = useRef(true);
   const dirtyRef = useRef(false);
   const dirty = draft !== original;
   const busy = loading || saving;
-  const selected = current?.sections.find((section) => section.id === sectionId) ?? null;
   const isSource = current?.kind === "source";
-  const formDirty = Boolean(form && (form.kind === "add" ? form.title.trim() : form.title !== (isSource ? current?.title : selected?.title)));
+  const isCv = initialDocument === "cv";
+  const isDocument = isCv || Boolean(current && !isSource);
+  const outline = useMemo(() => isDocument ? documentOutline(draft) : [], [isDocument, draft]);
+  const formDirty = Boolean(form && (form.kind === "add" ? form.title.trim() : form.title !== current?.title));
   const hasEdits = dirty || formDirty;
   dirtyRef.current = hasEdits;
-  const displaySections = current ? navigationSections(current.sections) as WorkspaceSection[] : [];
-  const trail = pageBreadcrumbs(displaySections, sectionId) as WorkspaceSection[];
   const sourceTrail = current ? sourcePageBreadcrumbs(documents, current.id) : [];
-  const movement = current ? isSource ? sourcePageMovement(documents, current.id) : siblingAvailability(current.sections, sectionId) : { up: false, down: false };
+  const movement = current && isSource ? sourcePageMovement(documents, current.id) : { up: false, down: false };
+  const purposeOrigin = isSource && current ? sourcePurposeOrigin(documents, current.id).from : null;
+  const inheritingCount = isSource && current ? inheritingSourcePageCount(documents, current.id) : 0;
+  const pageActions: PageAction[] = isSource && current ? [
+    { label: "New child page", icon: <Plus aria-hidden="true" className="size-4" />, onSelect: () => startForm("add") },
+    { label: "Rename page", icon: <Pencil aria-hidden="true" className="size-4" />, onSelect: () => startForm("rename") },
+    { label: "Move page up", icon: <ArrowUp aria-hidden="true" className="size-4" />, disabled: !movement.up, onSelect: () => beforeAction(() => void mutate({ action: "move", direction: "up" })) },
+    { label: "Move page down", icon: <ArrowDown aria-hidden="true" className="size-4" />, disabled: !movement.down, onSelect: () => beforeAction(() => void mutate({ action: "move", direction: "down" })) },
+  ] : [];
   const trust = current ? TRUST[current.id] : undefined;
 
-  const acceptDocument = useCallback((document: WorkspaceDocument, nextSection: string | null) => {
-    const validSection = document.sections.some((section) => section.id === nextSection) ? nextSection : null;
-    const content = selectedPageContent(document, validSection);
+  const acceptDocument = useCallback((document: WorkspaceDocument) => {
+    const content = document.content;
     currentRef.current = document;
-    sectionRef.current = validSection;
     dirtyRef.current = false;
     setCurrent(document);
-    setSectionId(validSection);
+    setSectionTarget(null);
+    setSectionQuery("");
     setDraft(content);
     setOriginal(content);
     setEditorVersion((version) => version + 1);
@@ -117,7 +119,6 @@ export function CareerWorkspace({ initialDocument = "context" }: { initialDocume
     if (!nextDocuments.some((item) => item.id === document.id)) nextDocuments.push(document);
     documentsRef.current = nextDocuments;
     setDocuments(nextDocuments);
-    setCollapsed(collapsedPageKeys(nextDocuments, { document: document.id, section: validSection }));
     setCollapsedSources(collapsedSourcePageIds(nextDocuments, document.kind === "source" ? document.id : null));
   }, []);
 
@@ -132,7 +133,7 @@ export function CareerWorkspace({ initialDocument = "context" }: { initialDocume
       const body = await responseBody(response);
       if (!response.ok) throw new Error(body.error || "This page could not be opened.");
       if (request !== requestNumber.current) return;
-      acceptDocument(body, selection.section);
+      acceptDocument(body);
       setRecovered(workspaceDrafts.read(draftStorage(), body.workspaceId, body.id));
     } catch (problem) {
       if (request === requestNumber.current) setError(problem instanceof Error ? problem.message : "This page could not be opened.");
@@ -153,7 +154,6 @@ export function CareerWorkspace({ initialDocument = "context" }: { initialDocume
       documentsRef.current = nextDocuments;
       setDocuments(nextDocuments);
       setSourceError(body.sourceError?.error || "");
-      setCollapsed(collapsedPageKeys(nextDocuments, { document: latest?.id || initialDocument, section: sectionRef.current }));
       setCollapsedSources(collapsedSourcePageIds(nextDocuments, latest?.kind === "source" ? latest.id : body.sourceRootDocumentId || null));
       if (openInitial) {
         const invalidContext = initialDocument === "context" && body.sourceError && !nextDocuments.some((item: WorkspaceDocumentSummary) => item.kind === "source");
@@ -191,9 +191,9 @@ export function CareerWorkspace({ initialDocument = "context" }: { initialDocume
       setRecoveryWarning(false);
       return;
     }
-    const persisted = workspaceDrafts.write(draftStorage(), current.workspaceId, current.id, { section: sectionId, revision: current.revision, content: draft, original, form });
+    const persisted = workspaceDrafts.write(draftStorage(), current.workspaceId, current.id, { section: null, revision: current.revision, content: draft, original, form });
     setRecoveryWarning(!persisted);
-  }, [current, hasEdits, loading, recovered, sectionId, draft, original, form]);
+  }, [current, hasEdits, loading, recovered, draft, original, form]);
 
   const beforeAction = useCallback((action: () => void, openSaved = false) => {
     if (busy) return;
@@ -236,7 +236,7 @@ export function CareerWorkspace({ initialDocument = "context" }: { initialDocume
       const response = await fetch("/api/workspace", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ document: document.id, revision: document.revision, section: sectionRef.current, ...mutation }),
+        body: JSON.stringify({ document: document.id, revision: document.revision, section: null, ...mutation }),
       });
       const body = await responseBody(response);
       if (!response.ok) {
@@ -245,7 +245,7 @@ export function CareerWorkspace({ initialDocument = "context" }: { initialDocume
       }
       workspaceDrafts.clear(draftStorage(), document.workspaceId, document.id);
       setRecoveryWarning(false);
-      acceptDocument(body, body.selectedSection === undefined ? sectionRef.current : body.selectedSection);
+      acceptDocument(body);
       if (document.kind === "source") await loadIndex();
       setNotice(mutation.action === "add" ? "Page created." : mutation.action === "rename" ? "Page renamed." : mutation.action === "move" ? "Page moved." : mutation.action === "usage" ? "Page purpose updated." : "Saved.");
       if (document.id === "cv") window.dispatchEvent(new CustomEvent("co-cv-saved"));
@@ -283,27 +283,27 @@ export function CareerWorkspace({ initialDocument = "context" }: { initialDocume
   }
 
   function selectPage(selection: PageSelection) {
-    if (current?.id === selection.document && sectionId === selection.section) return;
+    if (current?.id === selection.document) return;
     beforeAction(() => void loadDocument(selection));
   }
 
   function startForm(kind: "add" | "rename") {
-    beforeAction(() => setForm({ kind, title: kind === "rename" ? (isSource ? current?.title : selected?.title) || "" : "" }));
+    beforeAction(() => setForm({ kind, title: kind === "rename" ? current?.title || "" : "" }));
   }
 
   function restoreDraft() {
     if (!current || !recovered || (recovered.section && !current.sections.some((page) => page.id === recovered.section))) return;
+    let restoredDraft = recovered;
+    try { if (!isSource) restoredDraft = wholeDocumentDraft(current, recovered) as RecoveredDraft; }
+    catch (problem) { setError(problem instanceof Error ? problem.message : "The recovered section could not be restored. Copy its text before continuing."); return; }
     const revisionChanged = current.revision !== recovered.revision;
     const restored = { ...current, revision: recovered.revision };
     currentRef.current = restored;
-    sectionRef.current = recovered.section;
     setCurrent(restored);
-    setSectionId(recovered.section);
-    setCollapsed(collapsedPageKeys(documentsRef.current, { document: current.id, section: recovered.section }));
     setCollapsedSources(collapsedSourcePageIds(documentsRef.current, current.kind === "source" ? current.id : null));
-    setDraft(recovered.content);
-    setOriginal(recovered.original);
-    setForm(recovered.form);
+    setDraft(restoredDraft.content);
+    setOriginal(restoredDraft.original);
+    setForm(restoredDraft.form);
     setEditorVersion((version) => version + 1);
     setRecovered(null);
     setConflict(revisionChanged);
@@ -317,48 +317,49 @@ export function CareerWorkspace({ initialDocument = "context" }: { initialDocume
     setRecovered(null);
   }
 
-  const displayedSelection = displaySections.find((section) => section.id === sectionId);
-  const pageTitle = displayedSelection?.title || current?.title || (initialDocument === "cv" ? "CV draft" : "Your career context");
+  const pageTitle = current?.title || (initialDocument === "cv" ? "CV draft" : "Your career context");
   const navigationDocuments = workspaceNavigationDocuments(documents, initialDocument);
   const hasContextPages = initialDocument === "context" && navigationDocuments.some((document) => document.kind === "source");
-  const selection = { document: current?.id || initialDocument, section: sectionId };
+  const navigationTitle = isCv ? "In this document" : hasContextPages ? "Pages" : "Documents";
+  const navigationKind = hasContextPages ? "pages" : "documents";
+  const selection = { document: current?.id || initialDocument, section: null };
   const button = "inline-flex min-h-9 items-center justify-center gap-1.5 rounded-lg border border-border bg-surface px-3 py-1.5 text-sm text-muted transition-colors hover:bg-surface-hover focus-visible:outline-2 focus-visible:outline-brand disabled:opacity-40";
-  const toggleCollapsed = (setter: typeof setCollapsed, key: string) => setter((previous) => { const next = new Set(previous); if (next.has(key)) next.delete(key); else next.add(key); return next; });
-  const pageTree = <>
+  const toggleCollapsed = (setter: typeof setCollapsedSources, key: string) => setter((previous) => { const next = new Set(previous); if (next.has(key)) next.delete(key); else next.add(key); return next; });
+  const sectionOutline = <DocumentOutline sections={outline} selected={sectionTarget?.id || null} query={sectionQuery} busy={busy || Boolean(recovered)} onQuery={setSectionQuery} onSelect={(section) => { setMobilePages(false); setSectionTarget((previous) => ({ ...section, request: (previous?.request || 0) + 1 })); }} />;
+  const pageTree = isCv ? sectionOutline : <>
     {indexError ? <div role="alert" className="p-2 text-sm text-muted"><p>{indexError}</p><button type="button" onClick={() => void loadIndex(!current)} className={cn(button, "mt-3")}>Retry page list</button></div> : !documents.length && loading ? <p role="status" className="p-2 text-sm text-muted">Loading pages…</p> : <>
       {initialDocument === "context" && sourceError && <div role="alert" className="mb-4 p-2 text-sm text-muted"><p>{sourceError}</p><button type="button" onClick={() => void loadIndex(!current)} className={cn(button, "mt-3")}>Retry pages</button></div>}
-      {hasContextPages ? <SourcePageTree documents={navigationDocuments} selectedDocument={isSource ? current?.id || null : null} collapsed={collapsedSources} query={query} busy={busy} onQuery={setQuery} onToggle={(id) => toggleCollapsed(setCollapsedSources, id)} onSelect={(document) => selectPage({ document, section: null })} /> : !(initialDocument === "context" && sourceError) && <PageTree documents={navigationDocuments} selected={selection} collapsed={collapsed} query={query} busy={busy} onQuery={setQuery} onToggle={(key) => toggleCollapsed(setCollapsed, key)} onSelect={selectPage} />}
+      {hasContextPages ? <SourcePageTree documents={navigationDocuments} selectedDocument={isSource ? current?.id || null : null} collapsed={collapsedSources} query={query} busy={busy} onQuery={setQuery} onToggle={(id) => toggleCollapsed(setCollapsedSources, id)} onSelect={(document) => selectPage({ document, section: null })} /> : !(initialDocument === "context" && sourceError) && <>
+        <DocumentList documents={navigationDocuments} selectedDocument={current?.id || null} query={query} busy={busy} onQuery={setQuery} onSelect={(document) => selectPage({ document, section: null })} />
+        {current && <section aria-label="Document outline" className="mt-6 border-t border-border pt-4"><h3 className="mb-3 px-2 text-sm font-medium">In this document</h3>{sectionOutline}</section>}
+      </>}
     </>}
   </>;
 
   return (
     <div className="mx-auto w-full max-w-[1680px] px-4 py-6 sm:px-6 xl:px-8">
-      <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
-        <div><p className="text-xs font-medium uppercase tracking-[0.16em] text-faint">{initialDocument === "cv" ? "Your CV draft" : "Your career context"}</p><p className="mt-1 text-sm text-muted">{initialDocument === "cv" ? "Résumé output built from your career context" : "Used for job matching and CV generation"}</p></div>
-        <div className="flex items-center gap-2">
-          <Link href="/documents" className={button}><Files aria-hidden="true" className="size-4" />Documents</Link>
-          <Link href="/pipeline" className={button}><ListChecks aria-hidden="true" className="size-4" />Applications</Link>
-        </div>
-      </div>
+      {initialDocument === "context" && <div className="mb-6"><p className="text-xs font-medium uppercase tracking-[0.16em] text-faint">Your career context</p><p className="mt-1 text-sm text-muted">Used for job matching and CV generation</p></div>}
 
-      <button type="button" onClick={() => setMobilePages(true)} aria-expanded={mobilePages} aria-controls="workspace-pages-drawer" className={cn(button, "mb-4 xl:hidden")}><PanelLeft aria-hidden="true" className="size-4" />Show pages</button>
+      {isCv && indexError && <div role="alert" className="mb-4 text-sm text-muted"><p>{indexError}</p><button type="button" onClick={() => void loadIndex(!current)} className={cn(button, "mt-3")}>Retry opening document</button></div>}
 
-      <dialog ref={pagesDialog} id="workspace-pages-drawer" aria-label="Workspace page navigation" onClose={() => setMobilePages(false)} onCancel={() => setMobilePages(false)} onClick={(event) => { if (event.target === event.currentTarget) setMobilePages(false); }} className="fixed inset-y-0 left-0 right-auto m-0 h-dvh max-h-none w-[min(360px,calc(100vw-2rem))] max-w-none border-r border-border bg-background p-0 text-foreground shadow-xl backdrop:bg-black/40 open:flex open:flex-col">
-        <div className="flex shrink-0 items-center justify-between border-b border-border px-4 py-3"><h2 className="text-sm font-medium">Pages</h2><button type="button" aria-label="Hide pages" onClick={() => setMobilePages(false)} className={button}><X aria-hidden="true" className="size-4" /></button></div>
+      <button type="button" onClick={() => setMobilePages(true)} aria-expanded={mobilePages} aria-controls="workspace-pages-drawer" className={cn(button, "mb-4 xl:hidden")}><PanelLeft aria-hidden="true" className="size-4" />{isCv ? "Show sections" : `Show ${navigationKind}`}</button>
+
+      <dialog ref={pagesDialog} id="workspace-pages-drawer" aria-label={isCv ? "Document section navigation" : hasContextPages ? "Workspace page navigation" : "Workspace document navigation"} onClose={() => setMobilePages(false)} onCancel={() => setMobilePages(false)} onClick={(event) => { if (event.target === event.currentTarget) setMobilePages(false); }} className="fixed inset-y-0 left-0 right-auto m-0 h-dvh max-h-none w-[min(360px,calc(100vw-2rem))] max-w-none border-r border-border bg-background p-0 text-foreground shadow-xl backdrop:bg-black/40 open:flex open:flex-col">
+        <div className="flex shrink-0 items-center justify-between border-b border-border px-4 py-3"><h2 className="text-sm font-medium">{isCv ? "Sections" : navigationTitle}</h2><button type="button" aria-label={isCv ? "Hide sections" : `Hide ${navigationKind}`} onClick={() => setMobilePages(false)} className={button}><X aria-hidden="true" className="size-4" /></button></div>
         <div className="overflow-y-auto p-4">{pageTree}</div>
       </dialog>
 
       <div className="grid min-w-0 gap-8 xl:grid-cols-[304px_minmax(0,1fr)] 2xl:grid-cols-[320px_minmax(0,1fr)]">
         <aside id="workspace-sidebar" aria-label="Workspace sidebar" className="sticky top-6 hidden max-h-[calc(100dvh-3rem)] min-w-0 self-start overflow-y-auto rounded-2xl border border-border bg-surface/50 p-4 xl:block">
-          <h2 className="mb-4 px-2 text-sm font-medium">Pages</h2>
+          <h2 className="mb-4 px-2 text-sm font-medium">{navigationTitle}</h2>
           {pageTree}
         </aside>
 
-        <section aria-label="Page editor" aria-busy={busy} className="min-w-0">
-          <nav aria-label="Page breadcrumbs" className="mb-4 flex flex-wrap items-center gap-1 text-xs text-muted">
+        <section aria-label={isDocument ? "Document editor" : "Page editor"} aria-busy={busy} className="min-w-0">
+          <nav aria-label={isDocument ? "Document breadcrumbs" : "Page breadcrumbs"} className="mb-4 flex flex-wrap items-center gap-1 text-xs text-muted">
             <BookOpen aria-hidden="true" className="mr-1 size-3.5" />
             {initialDocument === "context" && <span>Context</span>}
-            {isSource ? sourceTrail.map((page) => <span key={page.id} className="inline-flex min-w-0 items-center gap-1"><ChevronRight aria-hidden="true" className="size-3 shrink-0" /><button type="button" title={page.title} aria-current={page.id === current?.id ? "page" : undefined} disabled={busy} onClick={() => selectPage({ document: page.id, section: null })} className="rounded px-1 py-1 text-left break-words hover:text-foreground focus-visible:outline-2 focus-visible:outline-brand">{page.title}</button></span>) : current && <><ChevronRight aria-hidden="true" className="size-3 shrink-0" /><button type="button" disabled={busy} onClick={() => selectPage({ document: current.id, section: null })} className="rounded px-1 py-1 hover:text-foreground focus-visible:outline-2 focus-visible:outline-brand">{current.title}</button>{trail.map((page) => <span key={page.id} className="inline-flex min-w-0 items-center gap-1"><ChevronRight aria-hidden="true" className="size-3 shrink-0" /><button type="button" title={page.title} aria-current={page.id === sectionId ? "page" : undefined} disabled={busy} onClick={() => selectPage({ document: current.id, section: page.id })} className="rounded px-1 py-1 text-left break-words hover:text-foreground focus-visible:outline-2 focus-visible:outline-brand">{page.title}</button></span>)}</>}
+            {isSource ? sourceTrail.map((page) => <span key={page.id} className="inline-flex min-w-0 items-center gap-1"><ChevronRight aria-hidden="true" className="size-3 shrink-0" /><button type="button" title={page.title} aria-current={page.id === current?.id ? "page" : undefined} disabled={busy} onClick={() => selectPage({ document: page.id, section: null })} className="rounded px-1 py-1 text-left break-words hover:text-foreground focus-visible:outline-2 focus-visible:outline-brand">{page.title}</button></span>) : current && <><ChevronRight aria-hidden="true" className="size-3 shrink-0" /><button type="button" disabled={busy} onClick={() => selectPage({ document: current.id, section: null })} className="rounded px-1 py-1 hover:text-foreground focus-visible:outline-2 focus-visible:outline-brand">{current.title}</button></>}
           </nav>
 
           <div className="flex flex-wrap items-start justify-between gap-4">
@@ -367,30 +368,18 @@ export function CareerWorkspace({ initialDocument = "context" }: { initialDocume
               {!isSource && (trust?.text || current?.description) && <p className="mt-3 max-w-2xl text-sm leading-relaxed text-muted">{trust?.text || current?.description}</p>}
               {isSource && Boolean(current?.importNotes?.length) && <details className="mt-3 max-w-2xl text-sm text-muted"><summary className="w-fit cursor-pointer rounded focus-visible:outline-2 focus-visible:outline-brand">Formatting notes</summary><ul className="mt-2 list-disc space-y-1 pl-5 text-xs leading-relaxed">{current!.importNotes!.map((note, index) => <li key={index}>{note}</li>)}</ul></details>}
             </div>
+            <div className="flex items-center gap-2">
+            {pageActions.length > 0 && <PageActionsMenu actions={pageActions} disabled={busy || Boolean(recovered) || Boolean(current?.outlineWarning)} className={button} />}
             <button type="button" onClick={() => void mutate({ action: "replace", content: draft })} disabled={busy || !dirty || !current} className={cn("inline-flex min-h-10 items-center justify-center gap-2 rounded-full px-5 py-2 text-sm font-medium transition-colors focus-visible:outline-2 focus-visible:outline-brand disabled:opacity-50", dirty ? "bg-brand text-brand-foreground hover:bg-brand-200" : "border border-border bg-surface text-muted")}>
               {saving ? <Loader2 aria-hidden="true" className="size-4 animate-spin" /> : !dirty && notice === "Saved." ? <Check aria-hidden="true" className="size-4" /> : null}{saving ? "Saving…" : "Save"}
             </button>
+            </div>
           </div>
 
-          <div className="my-5 flex flex-wrap items-center gap-2">
-            {trust && <span className="mr-1 rounded-full bg-surface-hover px-2.5 py-1 text-xs text-muted">{trust.label}</span>}
-            {isSource && <div className="mr-2 flex flex-wrap items-center gap-2">
-              <label className="text-xs text-muted" htmlFor="page-purpose">Use this page as</label>
-              <select id="page-purpose" aria-describedby={current?.usage ? "page-purpose-description" : undefined} value={current?.usage || ""} disabled={busy || Boolean(recovered)} onChange={(event) => { const usage = event.target.value as PageUsage; if (usage !== current?.usage) beforeAction(() => void mutate({ action: "usage", usage })); }} className="min-h-9 rounded-lg border border-border bg-surface px-2 text-sm text-foreground focus-visible:outline-2 focus-visible:outline-brand disabled:opacity-40">
-                {!current?.usage && <option value="" disabled>Choose a purpose</option>}
-                {Object.entries(PAGE_PURPOSE).map(([value, purpose]) => <option key={value} value={value}>{purpose.label}</option>)}
-              </select>
-            </div>}
-            {current && current.id !== "cv" && <button type="button" disabled={busy || Boolean(recovered) || Boolean(current.outlineWarning) || Boolean(selected && selected.level >= 6)} onClick={() => startForm("add")} className={button}><Plus aria-hidden="true" className="size-3.5" />{selected || isSource ? "New child page" : "New page"}</button>}
-            {(selected || isSource) && <>
-              <button type="button" disabled={busy || Boolean(recovered) || Boolean(current?.outlineWarning)} onClick={() => startForm("rename")} className={button}><Pencil aria-hidden="true" className="size-3.5" />Rename page</button>
-              <span className="inline-flex shrink-0 gap-2">
-                <button type="button" aria-label="Move page up" disabled={busy || Boolean(recovered) || !movement.up || Boolean(current?.outlineWarning)} onClick={() => beforeAction(() => void mutate({ action: "move", direction: "up" }))} className={button}><ArrowUp aria-hidden="true" className="size-3.5" /></button>
-                <button type="button" aria-label="Move page down" disabled={busy || Boolean(recovered) || !movement.down || Boolean(current?.outlineWarning)} onClick={() => beforeAction(() => void mutate({ action: "move", direction: "down" }))} className={button}><ArrowDown aria-hidden="true" className="size-3.5" /></button>
-              </span>
-            </>}
+          <div className="mt-4">
+            {isSource && current?.usage ? <PagePurpose usage={current.usage} inheritedFrom={purposeOrigin?.title ?? null} inheritingCount={inheritingCount} disabled={busy || Boolean(recovered)} onChange={(usage) => beforeAction(() => void mutate({ action: "usage", usage }))} />
+              : trust && <p className="mb-5"><span className="rounded-full bg-surface-hover px-2.5 py-1 text-xs text-muted">{trust.label}</span></p>}
           </div>
-          {isSource && current?.usage && <p id="page-purpose-description" className="-mt-3 mb-5 text-xs text-muted">{PAGE_PURPOSE[current.usage].description}</p>}
 
           {form && <form onSubmit={(event) => { event.preventDefault(); if (form.title.trim()) void mutate({ action: form.kind, title: form.title.trim() }); }} className="mb-5 rounded-xl border border-border bg-surface p-4">
             <label className="block text-sm font-medium text-foreground">Page title<input autoFocus value={form.title} onChange={(event) => setForm({ ...form, title: event.target.value })} maxLength={200} required disabled={busy} className="mt-2 min-h-10 w-full rounded-lg border border-border bg-background px-3 text-sm text-foreground outline-none focus:border-brand" /></label>
@@ -406,13 +395,13 @@ export function CareerWorkspace({ initialDocument = "context" }: { initialDocume
             <details className="mt-3"><summary className="cursor-pointer text-sm text-muted">Preview recovered draft</summary><textarea aria-label="Recovered draft text" readOnly value={recovered.content} className="mt-2 min-h-40 w-full rounded-lg border border-border bg-surface p-3 font-mono text-xs text-foreground" />{recovered.form && <p className="mt-2 text-sm text-muted">Pending page title: {recovered.form.title}</p>}</details>
             <div className="mt-3 flex flex-wrap gap-2"><button type="button" disabled={busy || Boolean(recovered.section && !current?.sections.some((page) => page.id === recovered.section))} onClick={restoreDraft} className={button}>Restore draft</button><button type="button" disabled={busy} onClick={discardRecoveredDraft} className={button}>Discard recovered draft</button></div>
           </section>}
-          {current?.outlineWarning && <p role="note" className="mb-4 rounded-xl border border-border bg-surface-hover px-4 py-3 text-sm text-muted">{current.outlineWarning} Page organization is paused; edit the complete document to preserve its structure.</p>}
+          {current?.outlineWarning && <p role="note" className="mb-4 rounded-xl border border-border bg-surface-hover px-4 py-3 text-sm text-muted">{current.outlineWarning} Section navigation is unavailable; edit the complete document.</p>}
           {recoveryWarning && hasEdits && <p role="note" className="mb-4 text-xs text-muted">Browser storage is unavailable. Your draft can recover during app navigation, but save before closing or reloading this tab.</p>}
-          <p role="status" aria-live="polite" aria-atomic="true" aria-label="Page save status" className="mb-3 min-h-5 text-xs text-muted">{saving ? "Saving your page…" : loading ? "Opening page…" : hasEdits ? "Unsaved changes" : notice || (current ? "All changes saved" : "No page open")}</p>
+          <p role="status" aria-live="polite" aria-atomic="true" aria-label={isDocument ? "Document save status" : "Page save status"} className="mb-3 min-h-5 text-xs text-muted">{saving ? isDocument ? "Saving your document…" : "Saving your page…" : loading ? isDocument ? "Opening document…" : "Opening page…" : hasEdits ? "Unsaved changes" : notice || (current ? "All changes saved" : isDocument ? "No document open" : "No page open")}</p>
 
           {current && <div className={cn("min-w-0 rounded-2xl border border-border bg-surface", loading && "opacity-60")}>
-            {!current.exists && <p className="border-b border-border px-5 py-3 text-sm text-muted">This document is empty. Start writing or add your first page.</p>}
-            <MarkdownEditor value={draft} linkPages={documents} onChange={(value) => { if (!busy && !form && !recovered) { setDraft(value); setNotice(""); } }} documentKey={`${current.id}:${sectionId || "root"}:${editorVersion}`} disabled={busy || Boolean(form) || Boolean(recovered)} />
+            {!current.exists && <p className="border-b border-border px-5 py-3 text-sm text-muted">{isDocument ? "This document is empty. Start writing and use headings to organize its sections." : "This document is empty. Start writing or add your first page."}</p>}
+            <MarkdownEditor value={draft} linkPages={documents} sectionTarget={isDocument ? sectionTarget : null} onChange={(value) => { if (!busy && !form && !recovered) { setDraft(value); setNotice(""); } }} documentKey={`${current.id}:${editorVersion}`} disabled={busy || Boolean(form) || Boolean(recovered)} />
           </div>}
 
           {current?.id === "cv" && <SkillGaps />}

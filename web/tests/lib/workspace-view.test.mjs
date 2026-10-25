@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { pageBreadcrumbs, visiblePageIds, siblingAvailability, selectedPageContent, navigationSections, collapsedPageKeys, sourcePageBreadcrumbs, visibleSourcePageIds, sourcePageMovement, collapsedSourcePageIds, initialWorkspaceDocument, workspaceNavigationDocuments } from '../../src/lib/workspace-view.mjs';
+import { pageBreadcrumbs, visiblePageIds, siblingAvailability, selectedPageContent, navigationSections, collapsedPageKeys, sourcePageBreadcrumbs, visibleSourcePageIds, sourcePageMovement, collapsedSourcePageIds, evidenceSourcePageIds, sourcePurposeOrigin, inheritingSourcePageCount, initialWorkspaceDocument, workspaceNavigationDocuments } from '../../src/lib/workspace-view.mjs';
 
 const sections = [
   { id: 'career', title: 'Career history', parentId: null, level: 2, bodyStart: 18, end: 90 },
@@ -124,4 +124,38 @@ test('Context has one page hierarchy, with legacy documents only as fallback and
   const legacy = sourcePages.filter(({ kind }) => kind === 'local');
   assert.deepEqual(workspaceNavigationDocuments(legacy, 'context').map(({ id }) => id), ['context']);
   assert.equal(sourcePages.length, 6, 'filtering navigation never changes the document catalog');
+});
+
+test('page purpose: fact markers keep ancestors, inherited purpose names its source, and changes count followers', () => {
+  // Given: a root of reference material with one fact branch, where some pages set a purpose and others inherit it.
+  const page = (id, parent, order, usage, declaredUsage = usage) => ({ id, title: id.replace('source-', ''), kind: 'source', parentDocumentId: parent, order, usage, declaredUsage });
+  const pages = [
+    page('source-root', null, 0, 'reference'),
+    page('source-history', 'source-root', 0, 'facts'),
+    page('source-employer', 'source-history', 0, 'facts', null),
+    page('source-project', 'source-employer', 0, 'facts', null),
+    page('source-draft', 'source-history', 1, 'unconfirmed'),
+    page('source-draft-child', 'source-draft', 0, 'unconfirmed', null),
+    page('source-notes', 'source-root', 1, 'reference', null),
+  ];
+  // Then: the evidence filter keeps fact pages and the path to them, never other branches.
+  assert.deepEqual([...evidenceSourcePageIds(pages)].sort(), ['source-employer', 'source-history', 'source-project', 'source-root']);
+  // Then: an inheriting page names the nearest ancestor that sets its purpose; a page that sets its own names none.
+  assert.deepEqual(sourcePurposeOrigin(pages, 'source-project'), { from: { id: 'source-history', title: 'history' } });
+  assert.deepEqual(sourcePurposeOrigin(pages, 'source-history'), { from: null });
+  assert.deepEqual(sourcePurposeOrigin(pages, 'source-missing'), { from: null });
+  // Then: a change reaches descendants without their own purpose and stops at one that sets it.
+  assert.equal(inheritingSourcePageCount(pages, 'source-history'), 2);
+  assert.equal(inheritingSourcePageCount(pages, 'source-root'), 1);
+  assert.equal(inheritingSourcePageCount(pages, 'source-project'), 0);
+});
+
+test('page purpose helpers survive cyclic parents', () => {
+  const pages = [
+    { id: 'source-a', title: 'a', kind: 'source', parentDocumentId: 'source-b', order: 0, usage: 'facts', declaredUsage: null },
+    { id: 'source-b', title: 'b', kind: 'source', parentDocumentId: 'source-a', order: 0, usage: 'facts', declaredUsage: null },
+  ];
+  assert.deepEqual([...evidenceSourcePageIds(pages)].sort(), ['source-a', 'source-b']);
+  assert.deepEqual(sourcePurposeOrigin(pages, 'source-a'), { from: null });
+  assert.equal(inheritingSourcePageCount(pages, 'source-a'), 1);
 });
