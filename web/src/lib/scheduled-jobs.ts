@@ -11,7 +11,8 @@ import { assertScheduledJobBody } from "./scheduled-job-input.mjs";
 import { scheduledStorePath } from "./scheduled-runner-path.mjs";
 
 export type JobStatus = "active" | "paused" | "deleted";
-export type ScanEngine = "full" | "portals";
+export type ScanEngine = "full" | "portals" | "linkedin";
+export const SCAN_ENGINES: readonly ScanEngine[] = ["full", "portals", "linkedin"];
 export type ScheduleUnit = "minutes" | "hours" | "days";
 
 export type ScheduledJob = {
@@ -96,8 +97,9 @@ export function parseScheduledJobInput(raw: unknown, base?: ScheduledJob): JobFi
   }
   const fallbackName = base?.name || "Scheduled scan";
   const name = String(input.name ?? fallbackName).trim().slice(0, 80) || fallbackName;
-  if (input.engine !== undefined && input.engine !== "portals" && input.engine !== "full") throw new ScheduledJobValidationError("Invalid scan engine.");
-  const engine: ScanEngine = input.engine === "portals" || input.engine === "full" ? input.engine : base?.engine || "full";
+  const isEngine = (v: unknown): v is ScanEngine => typeof v === "string" && (SCAN_ENGINES as readonly string[]).includes(v);
+  if (input.engine !== undefined && !isEngine(input.engine)) throw new ScheduledJobValidationError("Invalid scan engine.");
+  const engine: ScanEngine = isEngine(input.engine) ? input.engine : base?.engine || "full";
   const unit = cleanUnit(input.unit, base?.unit || "hours");
   const every = cleanEvery(input.every, unit, base?.every || 1);
   const timezone = validateTimezone(String(input.timezone ?? base?.timezone ?? Intl.DateTimeFormat().resolvedOptions().timeZone ?? "UTC")

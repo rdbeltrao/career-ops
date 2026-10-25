@@ -121,7 +121,8 @@ export function EditJobModal({
                 className="w-full rounded-xl border border-border bg-surface-hover/60 px-3.5 py-2 text-sm text-foreground outline-none focus:border-brand/60"
               >
                 <option value="full">Full ATS Dataset Sweep</option>
-                <option value="portals">Zero-Token Portals.yml</option>
+                <option value="portals">Zero-Token Portals.yml (boards + LinkedIn searches)</option>
+                <option value="linkedin">LinkedIn searches only</option>
               </select>
             </div>
 

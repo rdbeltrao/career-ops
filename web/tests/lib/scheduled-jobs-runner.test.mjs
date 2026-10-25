@@ -113,6 +113,17 @@ test("scan command honors the selected engine and bounded filters", () => {
     script: "scan-ats-full.mjs",
     args: ["--since", "5", "--ats", "lever,ashby", "--limit", "500", "--json"],
   });
+  // LinkedIn searches alone: the same scanner as portals, limited to the
+  // signed-in LinkedIn provider (scan.mjs --provider).
+  assert.deepEqual(buildScanCommand({ engine: "linkedin", filters }), {
+    script: "scan.mjs",
+    args: ["--since", "5", "--quiet", "--provider", "linkedin-browser"],
+  });
+});
+
+test("roles found for a LinkedIn run are read from scan.mjs's summary, like portals", () => {
+  assert.equal(extractRolesFound("linkedin", "...\nNew offers added: 7\n"), 7);
+  assert.equal(extractRolesFound("portals", "New offers added: 3"), 3);
 });
 
 test("scheduled overlay falls back to portal title keywords and preserves hard location blocks", () => {
