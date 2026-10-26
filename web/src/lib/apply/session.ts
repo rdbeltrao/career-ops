@@ -12,6 +12,7 @@ import { fencingReport } from "../cli-fencing.mjs";
 import { CAPS } from "../worker-capabilities.mjs";
 import { assertSafeApplyUrl, installApplyEgressGuard, isUnsafeApplyUrlError, isBlockedNavigation, UnsafeApplyUrlError } from "./url-guard.mjs";
 import { isLoginWall, LOGIN_WALL_MESSAGE } from "./login-wall.mjs";
+import { looksLikeApplicationForm } from "./form-policy.mjs";
 
 type ApplyLaunch = { headless?: boolean; channel?: string; args?: string[] };
 
@@ -26,7 +27,7 @@ async function richestControlFrame(page: Page): Promise<Frame> {
   let best = page.mainFrame();
   let bestN = -1;
   for (const fr of page.frames()) {
-    const n = await fr.evaluate(() => document.querySelectorAll('input, textarea, select, [role="combobox"], [contenteditable="true"]').length).catch(() => 0);
+    const n = await fr.evaluate(() => Array.from(document.querySelectorAll('input, textarea, select, [role="combobox"], [contenteditable="true"]')).filter((el) => !el.hasAttribute("data-co-cookie")).length).catch(() => 0);
     if (n > bestN) {
       bestN = n;
       best = fr;
@@ -65,29 +66,11 @@ async function gotoResilient(page: Page, url: string): Promise<Response | null> 
   throw lastErr instanceof Error ? lastErr : new Error("could not open the page");
 }
 
-/** Distinguish a real APPLICATION form from a careers-listing / job-search form
- *  (a closed Greenhouse posting redirects to the board, whose keyword/department
- *  filters would otherwise look like a fillable form). */
-function looksLikeApplicationForm(form: ExtractedForm): boolean {
-  const fs = form.fields;
-  if (fs.length === 0) return false;
-  const lab = (f: ApplyField) => (f.label || "").toLowerCase();
-  const hasFile = fs.some((f) => f.type === "file");
-  const hasEmail = fs.some((f) => f.type === "email" || /e-?mail/.test(lab(f)));
-  const hasAppish = fs.some((f) => /first name|last name|full name|resume|résumé|\bcv\b|cover letter|phone|linkedin|github|why |portfolio|sponsorship|relocat/.test(lab(f)));
-  if (hasFile || hasEmail || hasAppish) return true; // clearly an application
-  const allSearch = fs.every(
-    (f) => /search|buscar|filtr|keyword|palabra|department|departa|office|oficina|location|ubicaci|remote|category|categor/.test(lab(f)) || /filter|search|keyword/.test((f.nativeId || "").toLowerCase()),
-  );
-  if (allSearch) return false; // a job-board search/filter form
-  if (fs.length <= 3 && fs.every((f) => !f.required)) return false; // too sparse + all optional = not an app form
-  return true;
-}
-
 /** ATS forms are often embedded in an <iframe> on a company career site
  *  (greenhouse/lever/smartrecruiters embeds), sometimes cross-origin — the main
- *  frame then has 0 fields. Extract from EVERY frame and keep the richest one. */
-async function pickFormFrame(page: Page): Promise<{ frame: Frame; form: ExtractedForm }> {
+ *  frame then has 0 fields. Prefer an application over a larger settings/search
+ *  panel, then use field count to break ties within the same kind of frame. */
+export async function pickFormFrame(page: Page): Promise<{ frame: Frame; form: ExtractedForm }> {
   let best: { frame: Frame; form: ExtractedForm } = {
     frame: page.mainFrame(),
     form: { title: "", url: page.url(), fields: [] },
@@ -95,7 +78,9 @@ async function pickFormFrame(page: Page): Promise<{ frame: Frame; form: Extracte
   for (const fr of page.frames()) {
     try {
       const form = await extractForm(fr);
-      if (form.fields.length > best.form.fields.length) best = { frame: fr, form };
+      const application = looksLikeApplicationForm(form);
+      const bestApplication = looksLikeApplicationForm(best.form);
+      if ((application && !bestApplication) || (application === bestApplication && form.fields.length > best.form.fields.length)) best = { frame: fr, form };
     } catch {
       /* detached / cross-origin restriction → skip */
     }
@@ -306,7 +291,7 @@ export async function openSession(url: string, cliId?: string, forceAgent?: bool
     const ai = await interpretFormWithAgent(aiFrame, cliId, form.title || (await page.title().catch(() => ""))).catch(() => ({ fields: [] as ApplyField[], spawned: false }));
     agentSpawned = ai.spawned;
     const aiFields = ai.fields;
-    if (aiFields.length) {
+    if (aiFields.length && looksLikeApplicationForm({ ...form, fields: aiFields })) {
       frame = aiFrame;
       form = { ...form, fields: aiFields };
       aiInterpreted = true;

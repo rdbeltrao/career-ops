@@ -1,4 +1,5 @@
 import type { Page, Frame } from "playwright-core";
+import { markCookieControls } from "./form-policy.mjs";
 
 export type ApplyField = {
   id: string; // our stable handle, also set as data-co-field on the live element
@@ -21,6 +22,7 @@ export type ExtractedForm = { title: string; url: string; fields: ApplyField[] }
 // the later fill phase can locate each field deterministically. Generic DOM/a11y
 // introspection — clean ATS (Ashby/Lever/Greenhouse) work well; Workday best-effort.
 export async function extractForm(ctx: Page | Frame): Promise<ExtractedForm> {
+  await ctx.evaluate(markCookieControls);
   const data = await ctx.evaluate(() => {
     const clean = (s: string | null | undefined) => (s || "").replace(/\s+/g, " ").trim().slice(0, 160);
     const isUuid = (s: string) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(s.trim());
@@ -122,6 +124,7 @@ export async function extractForm(ctx: Page | Frame): Promise<ExtractedForm> {
     let n = 0;
 
     for (const el of els) {
+      if (el.hasAttribute("data-co-cookie")) continue;
       const tag = el.tagName.toLowerCase();
       const itype = ((el as HTMLInputElement).type || "").toLowerCase();
       if (tag === "input" && ["hidden", "submit", "button", "image", "reset"].includes(itype)) continue;
@@ -155,7 +158,7 @@ export async function extractForm(ctx: Page | Frame): Promise<ExtractedForm> {
           continue;
         }
         if (name) seenRadio.add(name);
-        const group = Array.from(document.querySelectorAll(`input[type=radio][name="${CSS.escape(name)}"]`));
+        const group = Array.from(document.querySelectorAll(`input[type=radio][name="${CSS.escape(name)}"]:not([data-co-cookie])`));
         const options = group.map((r) => clean(labelFor(r) || (r as HTMLInputElement).value)).filter(Boolean);
         group.forEach((r, i) => {
           r.setAttribute("data-co-field", fid);

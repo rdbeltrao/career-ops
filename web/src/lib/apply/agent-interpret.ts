@@ -5,6 +5,7 @@ import { careerOpsRoot } from "@/lib/career-ops";
 import type { ApplyField } from "./extract";
 import { CAPS } from "../worker-capabilities.mjs";
 import { scopeFrom } from "../claude-invocation.mjs";
+import { markCookieControls } from "./form-policy.mjs";
 
 // Deny list DERIVED, never hand-written: every one of the six advisor argvs
 // that spelled its own omitted MultiEdit, which --permission-mode acceptEdits
@@ -24,7 +25,8 @@ type Cand = { n: number; tag: string; type: string; name: string; placeholder: s
 
 /** Tag + capture every interactive control in the frame as a browser_snapshot-style
  *  text list the LLM can reason over. Radio groups collapse to one candidate. */
-async function captureCandidates(frame: Frame): Promise<Cand[]> {
+export async function captureCandidates(frame: Frame): Promise<Cand[]> {
+  await frame.evaluate(markCookieControls);
   return frame.evaluate(() => {
     const clean = (s: string | null | undefined) => (s || "").replace(/\s+/g, " ").trim().slice(0, 220);
     const cands: Cand[] = [];
@@ -32,6 +34,7 @@ async function captureCandidates(frame: Frame): Promise<Cand[]> {
     const els = Array.from(document.querySelectorAll('input, textarea, select, [role="combobox"], [role="radiogroup"], [contenteditable="true"]'));
     let n = 0;
     for (const el of els) {
+      if (el.hasAttribute("data-co-cookie")) continue;
       const tag = el.tagName.toLowerCase();
       const itype = ((el as HTMLInputElement).type || "").toLowerCase();
       const role = el.getAttribute("role") || "";
@@ -50,7 +53,7 @@ async function captureCandidates(frame: Frame): Promise<Cand[]> {
         const rname = (el as HTMLInputElement).name;
         if (rname && seenRadio.has(rname)) continue;
         if (rname) seenRadio.add(rname);
-        const group = Array.from(document.querySelectorAll(`input[type=radio][name="${CSS.escape(rname)}"]`));
+        const group = Array.from(document.querySelectorAll(`input[type=radio][name="${CSS.escape(rname)}"]:not([data-co-cookie])`));
         const opts = group.map((r) => clean((document.querySelector(`label[for="${CSS.escape((r as HTMLElement).id)}"]`)?.textContent) || r.closest("label")?.textContent || (r as HTMLInputElement).value)).filter(Boolean);
         group.forEach((r) => r.setAttribute("data-co-cand", String(n)));
         cands.push({ n, tag: "radiogroup", type: "radio", name: rname || "", placeholder, aria, req, ctx, opts });
