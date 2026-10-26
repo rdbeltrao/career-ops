@@ -40,9 +40,9 @@ import { execFileSync } from 'child_process';
 import { normalizeReportLink } from './tracker-links.mjs';
 import { getCareerOpsRoot, resolveTrackerPath } from './path-resolver.mjs';
 import { flagValue, validateFlags } from './lib/cli-flags.mjs';
-import { LockTimeoutError } from './pipeline-lock.mjs';
+import { LockTimeoutError, withPipelineLock } from './pipeline-lock.mjs';
 import { sectionKind } from './lib/pipeline-sections.mjs';
-import { markPipelineProcessed, rowKey, pendingRowFields, PENDING_ITEM_RE } from './lib/pipeline-processed.mjs';
+import { markPipelineProcessed, rowKey, pendingRowFields, withJevSegment, PENDING_ITEM_RE } from './lib/pipeline-processed.mjs';
 import { companyRoleDedupKey, requisitionIdsForDedup } from './scan.mjs';
 import { resolveColumns, parseTrackerRow, extractTrackerReportNumbers, extractCellUrl } from './tracker-parse.mjs';
 import { trackerTsvLine, normalizedTrackerScore, isPostingUrl } from './lib/tracker-addition.mjs';
@@ -230,6 +230,17 @@ function reportTitle(reportFile) {
 // ---- source 1: batch-state.tsv ----
 // columns: id  url  status  started_at  completed_at  report_num  score  error  retries
 const entriesByKey = new Map(); // posting key -> entry for lib/pipeline-processed.mjs
+// A row the batch declined to evaluate on its own Jev pre-screen. The batch
+// scores the posting again at evaluation time, with the full JD, and that
+// verdict can differ from the one the row got when it was ingested. The row
+// stays pending (it was never evaluated) but takes the batch's verdict, so the
+// inbox does not show a skip as waiting for an evaluation.
+const batchJevVerdicts = new Map(); // posting key -> `jev: …` segment
+function batchJevSegment(error) {
+  const m = String(error || '').match(/^jev:\s+(\d{1,3}|n\/a)\s+(apply|maybe|skip)\s+(?:verdict-skip|below-min-jev)(?:\s+\((.*)\))?\s*$/i);
+  if (!m) return null;
+  return `jev: ${m[1]} ${m[2].toLowerCase()}${m[3] ? ` — ${m[3].trim()}` : ''}`;
+}
 const skippedNoReport = [];
 function addEntry(entry, { source }) {
   const key = rowKey(entry.url);
@@ -261,7 +272,11 @@ if (existsSync(STATE_FILE)) {
       // posting was not evaluated and stays pending without a warning. Any
       // other row that names a report that is not on disk is worth a warning,
       // and the row stays in Pendientes rather than getting a dead link.
-      if (status === 'skipped' && /\b(verdict-skip|below-min-jev)\b/.test(error || '')) continue;
+      if (status === 'skipped' && /\b(verdict-skip|below-min-jev)\b/.test(error || '')) {
+        const segment = batchJevSegment(error);
+        if (segment) batchJevVerdicts.set(rowKey(url.trim()), segment);
+        continue;
+      }
       skippedNoReport.push({ url: url.trim(), reportNum: (reportNum || '').trim() || '?' });
       continue;
     }
@@ -390,6 +405,35 @@ for (const s of skippedNoReport) {
   console.warn(`⚠️  ${s.url} — batch reports report #${s.reportNum} but no reports/${s.reportNum}-*.md found; left in Pendientes.`);
 }
 console.log(`Sources: ${entries.filter(e => e.source === 'batch-state').length} batch-state, ${entries.filter(e => e.source === 'reports').length} reports, ${entries.filter(e => e.source === 'tracker').length} tracker, ${entries.filter(e => e.source === 'company-role').length} same company and role (${entries.length} distinct postings)`);
+
+if (batchJevVerdicts.size && existsSync(PIPELINE_FILE)) {
+  const retag = (text) => {
+    let changed = 0;
+    const next = text.split(/(\r?\n)/).map((line) => {
+      if (!PENDING_ITEM_RE.test(line)) return line;
+      const segment = batchJevVerdicts.get(rowKey(pendingRowFields(line).url));
+      if (!segment) return line;
+      const updated = withJevSegment(line, segment);
+      if (updated !== line) changed += 1;
+      return updated;
+    }).join('');
+    return { next, changed };
+  };
+  try {
+    const changed = DRY_RUN
+      ? retag(readFileSync(PIPELINE_FILE, 'utf-8')).changed
+      : await withPipelineLock(PIPELINE_FILE, () => {
+        const { next, changed: count } = retag(readFileSync(PIPELINE_FILE, 'utf-8'));
+        if (count) writeFileSync(PIPELINE_FILE, next, 'utf-8');
+        return count;
+      });
+    if (changed) console.log(`🏷️  ${changed} pending row${changed === 1 ? '' : 's'} take${changed === 1 ? 's' : ''} the Jev verdict the batch reached when it skipped ${changed === 1 ? 'it' : 'them'}.`);
+  } catch (err) {
+    if (!(err instanceof LockTimeoutError)) throw err;
+    console.error(`❌ ${err.message} — another process is writing pipeline.md; nothing was changed. Re-run once it finishes.`);
+    process.exit(1);
+  }
+}
 
 let result;
 try {
