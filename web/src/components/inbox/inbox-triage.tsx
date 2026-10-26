@@ -355,8 +355,19 @@ export function InboxTriage({ inbox }: { inbox: InboxJob[] }) {
         </ul>
       ) : (
         <div className="mt-3 rounded-2xl border border-dashed border-border bg-surface/30 px-6 py-10 text-center">
-          <p className="font-display text-lg">No matches</p>
-          <p className="mx-auto mt-1 max-w-sm text-sm text-muted">Loosen the filters to see more of your inbox.</p>
+          {anyFacet ? (
+            <>
+              <p className="font-display text-lg">No matches</p>
+              <p className="mx-auto mt-1 max-w-sm text-sm text-muted">Loosen the filters to see more of your inbox.</p>
+            </>
+          ) : (
+            // Nothing passed only because Jev skips are hidden by default: there
+            // is nothing to do, so say that instead of asking for a filter change.
+            <>
+              <p className="font-display text-lg">Nothing waiting on you</p>
+              <p className="mx-auto mt-1 max-w-sm text-sm text-muted">The roles left here are ones Jev marked skip; they are never evaluated. Press the skip chip to see them.</p>
+            </>
+          )}
         </div>
       )}
 
