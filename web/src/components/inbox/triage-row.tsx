@@ -104,9 +104,13 @@ export function TriageRow({
               Jev {job.jev.fit ?? "n/a"} · {job.jev.verdict}
             </span>
           )}
-          {/* Evaluation runs on its own after the Jev pass (lib/auto-evaluate.mjs);
-              Jev skips are never evaluated. Honest state, no fabricated match%. */}
-          {!evaluated && job.jev?.verdict !== "skip" && <span className="italic text-muted">{job.jev ? "evaluating automatically" : "pre-screening"}</span>}
+          {/* Only rows the background batch could not finish are listed
+              (inbox-batch.mjs); say why it stopped. */}
+          {!evaluated && job.batch?.stage === "needs-you" && job.batch.detail && (
+            <span className="text-amber-700 dark:text-amber-300" title={job.batch.detail}>
+              {job.batch.detail.length > 140 ? `${job.batch.detail.slice(0, 140)}…` : job.batch.detail}
+            </span>
+          )}
         </p>
       </div>
 

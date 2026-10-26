@@ -314,7 +314,7 @@ export function InboxTriage({ inbox }: { inbox: InboxJob[] }) {
       {/* batch header: fresh slice by default, or the full filtered set */}
       <div className="mt-4 flex items-baseline justify-between gap-3">
         <p className="text-sm font-medium text-foreground">
-          {capped ? "Fresh — worth a look" : anyFacet ? `${filtered.length} match${filtered.length === 1 ? "" : "es"}` : "All roles"}
+          {capped ? "Needs you" : anyFacet ? `${filtered.length} match${filtered.length === 1 ? "" : "es"}` : "All roles"}
         </p>
         {hiddenCount > 0 && (
           <button type="button" onClick={() => void restoreHidden()} disabled={restoring} aria-busy={restoring} className="text-xs text-faint transition-colors hover:text-foreground disabled:opacity-50 max-sm:min-h-[44px]">
@@ -384,7 +384,7 @@ export function InboxTriage({ inbox }: { inbox: InboxJob[] }) {
 
       {/* empty-shortlist guidance (only once there's nothing saved) */}
       {shortlist.length === 0 && (
-        <p className="mt-4 text-center text-xs text-faint">New roles are pre-screened and evaluated automatically; they leave the inbox once their report is saved. Score runs one now.</p>
+        <p className="mt-4 text-center text-xs text-faint">New roles are pre-screened and evaluated in the background. Only the ones that need you are listed here.</p>
       )}
       </div>
 

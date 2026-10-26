@@ -5,7 +5,8 @@
  *
  * Runs the batch the daily script always ran: sync-batch-input.mjs (pending
  * rows into batch/batch-input.tsv), then batch/batch-runner.sh with
- * --skip-jev-verdict skip --skip-pdf --parallel 2. The batch runner skips rows
+ * --skip-jev-verdict skip --skip-pdf --parallel 2, then the same runner with
+ * --resume-paused for rows a rate limit paused. The batch runner skips rows
  * it already finished, evaluates the rest through the Claude subscription,
  * writes reports and tracker rows, and ends with reconcile-pipeline.mjs, which
  * moves the evaluated rows out of the inbox.
@@ -99,9 +100,13 @@ export async function main(args, deps = {}) {
     return 0;
   }
 
+  const runner = join(codeRoot, 'batch', 'batch-runner.sh');
   const steps = [
     [process.execPath, [join(codeRoot, 'sync-batch-input.mjs')]],
-    ['bash', [join(codeRoot, 'batch', 'batch-runner.sh'), ...BATCH_ARGS]],
+    ['bash', [runner, ...BATCH_ARGS]],
+    // Rows a rate limit paused are skipped by a plain run and only resume
+    // with --resume-paused; without this step they would wait forever.
+    ['bash', [runner, '--resume-paused', ...BATCH_ARGS]],
   ];
   if (dryRun) {
     for (const [command, stepArgs] of steps) out(`[dry-run] ${command} ${stepArgs.join(' ')}`);

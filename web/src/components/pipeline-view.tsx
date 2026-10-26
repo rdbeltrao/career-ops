@@ -3,7 +3,7 @@
 import { startTransition, useCallback, useDeferredValue, useEffect, useMemo, useOptimistic, useRef, useState, useTransition } from "react";
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { Search, ChevronsUpDown, ChevronRight, X, Compass, ArrowRight, ExternalLink, Download } from "lucide-react";
+import { Search, ChevronsUpDown, ChevronRight, X, Compass, ArrowRight, ExternalLink, Download, Loader2 } from "lucide-react";
 import type { Application, InboxJob } from "@/lib/career-ops";
 import { Badge } from "@/components/ui/badge";
 import { jevTone, jevLabel } from "@/lib/jev-presentation";
@@ -33,10 +33,13 @@ export function PipelineView({
   applications,
   inbox,
   inboxCount,
+  background = { evaluating: 0, queued: 0 },
 }: {
   applications: Application[];
   inbox: InboxJob[] | null;
+  /** Rows that need the user; rows the background batch handles are in `background`. */
   inboxCount: number;
+  background?: { evaluating: number; queued: number };
 }) {
   const params = useSearchParams();
   const router = useRouter();
@@ -329,8 +332,16 @@ export function PipelineView({
             </div>
           ) : (
             <>
+              {background.evaluating + background.queued > 0 && (
+                <p role="status" className="mt-4 rounded-xl border border-border bg-surface/40 px-4 py-3 text-sm text-muted">
+                  <Loader2 aria-hidden="true" className="mr-2 inline size-3.5 animate-spin text-brand" />
+                  In the background:{" "}
+                  {[background.evaluating && `${background.evaluating} being evaluated`, background.queued && `${background.queued} queued`].filter(Boolean).join(" · ")}.
+                  {" "}They move to Evaluated when their reports are saved; nothing to do here.
+                </p>
+              )}
               <InboxTriage inbox={inbox} />
-              {inbox.length === 0 && <InboxEmpty tracked={visibleApplications.length} />}
+              {inbox.length === 0 && background.evaluating + background.queued === 0 && <InboxEmpty tracked={visibleApplications.length} />}
             </>
           )}
         </>

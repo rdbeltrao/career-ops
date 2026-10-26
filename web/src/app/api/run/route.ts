@@ -9,7 +9,8 @@ import { cliSubstitutionNotice, cliUnavailableError, resolveCliOrFallback } from
 import { localISODate } from "@/lib/followups";
 import { accumulateTokens, createAgentTextJoiner, isFatalGenericStderr, killMsForKind, timeoutMessage } from "@/lib/run-cli-support.mjs";
 import { spawnHeadlessCli } from "@/lib/spawn-cli.mjs";
-import { careerOpsRoot, readMemory, findReportFile, readInbox, readScanDates, readLanguageConfig, careerOpsCodeRoot } from "@/lib/career-ops";
+import { careerOpsRoot, readMemory, findReportFile, readInbox, readScanDates, readLanguageConfig, careerOpsCodeRoot, readBatchStateText, batchRunnerActive } from "@/lib/career-ops";
+import { batchStageOf, parseBatchState } from "@/lib/inbox-batch.mjs";
 import { resolveCodeRoot } from "@/lib/core/code-root.mjs";
 import { resolvePdfPaths, type PdfPaths } from "@/lib/pdf-paths.mjs";
 import { renderAndMarkPdf, writeCvHtml, pdfRunOutcome } from "@/lib/pdf-render.mjs";
@@ -139,6 +140,15 @@ export async function POST(req: Request) {
       status: 400,
       headers: { "Content-Type": "application/json" },
     });
+  }
+
+  // The background batch (lib/auto-evaluate.mjs) may be evaluating this very
+  // posting. A second evaluation would spend tokens on the same report twice.
+  if (kind === "evaluate" && batchStageOf({ url: input }, parseBatchState(readBatchStateText()), { batchRunning: batchRunnerActive() }).stage === "evaluating") {
+    return new Response(
+      JSON.stringify({ error: "The background batch is evaluating this posting right now; its report will appear under Evaluated when it finishes." }),
+      { status: 409, headers: { "Content-Type": "application/json" } },
+    );
   }
 
   // Resolve the posting date HERE rather than asking the agent for it. The

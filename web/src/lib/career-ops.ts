@@ -109,7 +109,9 @@ function read(rel: string): string | null {
 }
 
 export type InboxJev = { fit: number | null; verdict: "apply" | "maybe" | "skip"; reasons: string };
-export type InboxJob = { url: string; company: string; role: string; location?: string; compensation?: string; done: boolean; postedAt?: string; jev?: InboxJev };
+/** Where the background batch has this row (inbox-batch.mjs); set on the Pipeline page only. */
+export type InboxBatch = { stage: "evaluating" | "queued" | "needs-you" | "skip"; detail?: string };
+export type InboxJob = { url: string; company: string; role: string; location?: string; compensation?: string; done: boolean; postedAt?: string; jev?: InboxJev; batch?: InboxBatch };
 
 /** Parse data/pipeline.md. The row grammar and its labeled-segment handling
  *  live in pipeline-table.mjs — see there for the column rules (#1015, #1017). */
@@ -382,6 +384,28 @@ export function doctorState(snapshot?: Pick<PipelineSummary, "applications" | "i
   const onboardingNeeded = missing.length > 0;
   const phase: LifecyclePhase = !hasCv && !hasData ? "first-run" : onboardingNeeded ? "in-between" : "established";
   return { phase, onboardingNeeded, missing, hasCv, hasData };
+}
+
+/** The batch runner's state file (batch/batch-state.tsv in the checkout, where
+ *  batch-runner.sh keeps it), or "" when there is none. */
+export function readBatchStateText(): string {
+  try {
+    return fs.readFileSync(path.join(/* turbopackIgnore: true */ careerOpsCodeRoot(), "batch", "batch-state.tsv"), "utf8");
+  } catch {
+    return "";
+  }
+}
+
+/** Whether batch-runner.sh is running now: its PID file names a live process. */
+export function batchRunnerActive(): boolean {
+  try {
+    const pid = Number.parseInt(fs.readFileSync(path.join(/* turbopackIgnore: true */ careerOpsCodeRoot(), "batch", "batch-runner.pid"), "utf8").trim(), 10);
+    if (!Number.isInteger(pid) || pid <= 0) return false;
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException)?.code === "EPERM";
+  }
 }
 
 export type PipelineSummary = {

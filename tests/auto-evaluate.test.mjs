@@ -65,9 +65,10 @@ test('a run syncs the pipeline into the batch, then runs the batch the daily job
   try {
     const r = recorder();
     assert.equal(await main([], { dataRoot: root, codeRoot: '/checkout', batchRunning: () => false, ...r }), 0);
-    assert.deepEqual(scripts(r.runs), ['sync-batch-input.mjs', 'batch-runner.sh']);
+    assert.deepEqual(scripts(r.runs), ['sync-batch-input.mjs', 'batch-runner.sh', 'batch-runner.sh']);
     assert.equal(r.runs[1].command, 'bash');
     assert.deepEqual(r.runs[1].args.slice(1), BATCH_ARGS);
+    assert.deepEqual(r.runs[2].args.slice(1), ['--resume-paused', ...BATCH_ARGS], 'rows a rate limit paused are resumed');
     assert.deepEqual(BATCH_ARGS, ['--skip-jev-verdict', 'skip', '--skip-pdf', '--parallel', '2']);
     assert.equal(r.runs[0].options.env.CAREER_OPS_ROOT, root);
     assert.equal(existsSync(evaluateLockDir(root)), false, 'the lock is released');
@@ -95,7 +96,7 @@ test('rows that arrive during a batch get a second batch in the same run', async
   try {
     const r = recorder((n) => { if (n === 2) writeFileSync(evaluateRerunMarker(root), ''); });
     await main(['--background'], { dataRoot: root, batchRunning: () => false, ...r });
-    assert.deepEqual(scripts(r.runs), ['sync-batch-input.mjs', 'batch-runner.sh', 'sync-batch-input.mjs', 'batch-runner.sh']);
+    assert.deepEqual(scripts(r.runs), ['sync-batch-input.mjs', 'batch-runner.sh', 'batch-runner.sh', 'sync-batch-input.mjs', 'batch-runner.sh', 'batch-runner.sh']);
     assert.equal(existsSync(evaluateRerunMarker(root)), false);
   } finally {
     rmSync(root, { recursive: true, force: true });
@@ -110,7 +111,7 @@ test('a batch runner started some other way is waited for, not run twice', async
     const r = recorder();
     await main([], { dataRoot: root, batchRunning: () => busy-- > 0, sleep: async (ms) => { sleeps.push(ms); }, ...r });
     assert.equal(sleeps.length, 2);
-    assert.deepEqual(scripts(r.runs), ['sync-batch-input.mjs', 'batch-runner.sh']);
+    assert.deepEqual(scripts(r.runs), ['sync-batch-input.mjs', 'batch-runner.sh', 'batch-runner.sh']);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
