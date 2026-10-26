@@ -43,6 +43,7 @@ import { getCareerOpsRoot, getProfilePath } from './path-resolver.mjs';
 import { withPipelineLock } from './pipeline-lock.mjs';
 import { acquireDirLock, releaseOrWarn, tryAcquireDirLockSync } from './lib/dir-lock.mjs';
 import { jevLockDir, jevRerunMarker } from './lib/jev-auto.mjs';
+import { startEvaluatePass } from './lib/auto-evaluate.mjs';
 import { resolveOpenRouterKey } from './lib/openrouter-key.mjs';
 import { loadCriteria } from './lib/jev-criteria.mjs';
 import { readJdForUrl } from './lib/jd-store.mjs';
@@ -322,6 +323,12 @@ export async function main(args, deps = {}) {
       code = await runPass(passArgs, { ...deps, log, out, dataRoot });
       if (code !== 0 || !existsSync(marker)) break;
     }
+    // The rows are pre-screened: hand them to the full evaluation, which skips
+    // the ones Jev marked skip (lib/auto-evaluate.mjs). It runs even when this
+    // pass had no key or scored nothing, so unscored rows are still evaluated.
+    const startEvaluate = deps.startEvaluate ?? startEvaluatePass;
+    const evaluation = startEvaluate({ dataRoot });
+    if (evaluation?.started) out('jev-rank --auto: started automatic evaluation (output/logs/auto-evaluate.log).');
     return code;
   } finally {
     releaseOrWarn(lock);

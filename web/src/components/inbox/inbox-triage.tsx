@@ -373,7 +373,7 @@ export function InboxTriage({ inbox }: { inbox: InboxJob[] }) {
 
       {/* empty-shortlist guidance (only once there's nothing saved) */}
       {shortlist.length === 0 && (
-        <p className="mt-4 text-center text-xs text-faint">Save roles worth a look, then score them together — one token spend.</p>
+        <p className="mt-4 text-center text-xs text-faint">New roles are pre-screened and evaluated automatically; they leave the inbox once their report is saved. Score runs one now.</p>
       )}
       </div>
 

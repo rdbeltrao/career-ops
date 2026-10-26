@@ -18,6 +18,7 @@ import { getCareerOpsRoot } from "../../path-resolver.mjs";
 import { getProfilePath } from "../src/lib/core/profile-path.mjs";
 import { scanFailureMessage } from "../src/lib/scheduled-scan-error.mjs";
 import { jevAutoLogPath, startJevPass } from "../../lib/jev-auto.mjs";
+import { evaluateLogPath, startEvaluatePass } from "../../lib/auto-evaluate.mjs";
 import { parsePendingJev } from "../../jev-rank.mjs";
 
 const CODE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
@@ -325,28 +326,39 @@ export function executeJob(root, job, options = {}) {
 }
 
 /*
- * Rows normally get their Jev pre-screen the moment they are written:
- * appendToPipeline() starts a background pass (lib/jev-auto.mjs). A writer that
- * edits data/pipeline.md directly (the LinkedIn feeder, a hand edit) skips that,
- * so every runner tick also checks for pending rows without a jev: segment and
- * starts a pass when the last one is older than HEAL_COOLDOWN_MS. The cooldown
- * keeps a row whose JD cannot be fetched from being retried every 15 minutes.
+ * Rows are normally pre-screened and evaluated the moment they are written:
+ * appendToPipeline() starts a Jev pass (lib/jev-auto.mjs), and the Jev pass
+ * starts the full evaluation (lib/auto-evaluate.mjs). A writer that edits
+ * data/pipeline.md directly (the LinkedIn feeder, a hand edit) skips both, and
+ * a run can stop early (no Claude usage left, the Mac went to sleep). So every
+ * runner tick checks the pending rows: rows without a jev: segment start a Jev
+ * pass (which then starts the evaluation), and rows Jev did not mark skip start
+ * an evaluation directly. Each restarts at most once per HEAL_COOLDOWN_MS,
+ * measured from its last log write, so a row that keeps failing is not retried
+ * every 15 minutes.
  */
 export const HEAL_COOLDOWN_MS = 60 * 60 * 1_000;
 
+function recentlyRan(logPath, nowMs) {
+  return fs.existsSync(logPath) && nowMs - fs.statSync(logPath).mtimeMs < HEAL_COOLDOWN_MS;
+}
+
 export function healUnscoredRows(root, options = {}) {
   const startJev = options.startJev || startJevPass;
+  const startEvaluate = options.startEvaluate || startEvaluatePass;
   const nowMs = options.nowMs ?? Date.now();
   try {
     const pipelinePath = path.join(root, "data", "pipeline.md");
     if (!fs.existsSync(pipelinePath)) return { started: false, reason: "no pipeline" };
-    const unscored = parsePendingJev(fs.readFileSync(pipelinePath, "utf8")).length;
-    if (!unscored) return { started: false, reason: "nothing to score" };
-    const logPath = jevAutoLogPath(root);
-    if (fs.existsSync(logPath) && nowMs - fs.statSync(logPath).mtimeMs < HEAL_COOLDOWN_MS) {
-      return { started: false, reason: "recent pass" };
+    const text = fs.readFileSync(pipelinePath, "utf8");
+    if (parsePendingJev(text).length) {
+      if (recentlyRan(jevAutoLogPath(root), nowMs)) return { started: false, reason: "recent pass" };
+      return startJev({ dataRoot: root });
     }
-    return startJev({ dataRoot: root });
+    const awaiting = text.split(/\r?\n/).filter((line) => /^- \[ \]\s/.test(line) && !/\|\s*jev:\s*\d+\s+skip\b/.test(line)).length;
+    if (!awaiting) return { started: false, reason: "nothing to score" };
+    if (recentlyRan(evaluateLogPath(root), nowMs)) return { started: false, reason: "recent pass" };
+    return { ...startEvaluate({ dataRoot: root }), evaluate: true };
   } catch (error) {
     return { started: false, reason: error instanceof Error ? error.message : String(error) };
   }

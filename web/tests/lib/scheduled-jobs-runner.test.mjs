@@ -827,30 +827,39 @@ test("a non-object scheduled-job patch is rejected by input validation", () => {
   }
 });
 
-test("each runner tick starts a Jev pass for pending rows a direct writer left unscored", () => {
+test("each runner tick pre-screens and evaluates pending rows a direct writer or a stopped run left behind", () => {
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), "career-ops-scheduled-heal-"));
   try {
     fs.mkdirSync(path.join(temp, "data"), { recursive: true });
     const pipeline = path.join(temp, "data", "pipeline.md");
-    const started = [];
-    const startJev = (opts) => { started.push(opts); return { started: true }; };
+    const jev = [];
+    const evaluate = [];
+    const opts = (extra = {}) => ({
+      startJev: (o) => { jev.push(o); return { started: true }; },
+      startEvaluate: (o) => { evaluate.push(o); return { started: true }; },
+      ...extra,
+    });
 
-    assert.equal(healUnscoredRows(temp, { startJev }).reason, "no pipeline");
+    assert.equal(healUnscoredRows(temp, opts()).reason, "no pipeline");
 
-    fs.writeFileSync(pipeline, "## Pending\n\n- [ ] https://x.test/1 | Acme | EM | jev: 50 maybe — a\n\n## Processed\n");
-    assert.equal(healUnscoredRows(temp, { startJev }).reason, "nothing to score");
+    fs.writeFileSync(pipeline, "## Pending\n\n- [ ] https://x.test/1 | Acme | EM | jev: 5 skip — a\n\n## Processed\n");
+    assert.equal(healUnscoredRows(temp, opts()).reason, "nothing to score", "a Jev skip is never evaluated");
 
     fs.writeFileSync(pipeline, "## Pending\n\n- [ ] https://x.test/2 | Beta | EM\n\n## Processed\n");
-    assert.deepEqual(healUnscoredRows(temp, { startJev }), { started: true });
-    assert.deepEqual(started, [{ dataRoot: temp }]);
+    assert.deepEqual(healUnscoredRows(temp, opts()), { started: true });
+    assert.deepEqual(jev, [{ dataRoot: temp }], "unscored rows get Jev first; Jev starts the evaluation");
+    assert.equal(evaluate.length, 0);
 
-    // A pass that ran recently (its log was just written) is not repeated.
-    const log = path.join(temp, "output", "logs", "jev-auto.log");
+    fs.writeFileSync(pipeline, "## Pending\n\n- [ ] https://x.test/3 | Gamma | EM | jev: 50 maybe — a\n\n## Processed\n");
+    assert.deepEqual(healUnscoredRows(temp, opts()), { started: true, evaluate: true });
+    assert.deepEqual(evaluate, [{ dataRoot: temp }]);
+
+    // A run that wrote its log recently is not restarted until the cooldown passes.
+    const log = path.join(temp, "output", "logs", "auto-evaluate.log");
     fs.mkdirSync(path.dirname(log), { recursive: true });
-    fs.writeFileSync(log, "pass\n");
-    assert.equal(healUnscoredRows(temp, { startJev }).reason, "recent pass");
-    assert.deepEqual(healUnscoredRows(temp, { startJev, nowMs: Date.now() + HEAL_COOLDOWN_MS + 1 }), { started: true });
-    assert.equal(started.length, 2);
+    fs.writeFileSync(log, "batch\n");
+    assert.equal(healUnscoredRows(temp, opts()).reason, "recent pass");
+    assert.deepEqual(healUnscoredRows(temp, opts({ nowMs: Date.now() + HEAL_COOLDOWN_MS + 1 })), { started: true, evaluate: true });
   } finally {
     fs.rmSync(temp, { recursive: true, force: true });
   }

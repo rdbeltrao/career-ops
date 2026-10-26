@@ -2,6 +2,8 @@
 # Daily career-ops run for this fork. Zero paid API use beyond the Jev pre-screen:
 # scan the boards and the LinkedIn searches, Jev-rank the new rows, evaluate the
 # apply and maybe rows through the Claude subscription, commit the data root.
+# Scans also do the last two steps on their own as rows arrive (lib/jev-auto.mjs,
+# lib/auto-evaluate.mjs); this run catches anything those missed.
 # Scheduled by ~/Library/LaunchAgents/com.rdbeltrao.career-ops-daily.plist.
 set -u
 export PATH="$HOME/.nvm/versions/node/v22.21.1/bin:$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
@@ -20,8 +22,9 @@ cd "$CHECKOUT" || exit 1
   echo "--- jev-rank"
   node jev-rank.mjs
   echo "--- batch through the Claude subscription (skip rows Jev marked skip)"
-  node sync-batch-input.mjs
-  bash batch/batch-runner.sh --skip-jev-verdict skip --skip-pdf --parallel 2
+  # The same batch ingestion starts in the background; auto-evaluate.mjs waits
+  # for a run in progress instead of starting a second batch runner.
+  node auto-evaluate.mjs
   echo "--- tracker index"
   node tracker.mjs sync
   echo "--- commit data root"

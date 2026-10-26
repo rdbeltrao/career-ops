@@ -104,8 +104,9 @@ export function TriageRow({
               Jev {job.jev.fit ?? "n/a"} · {job.jev.verdict}
             </span>
           )}
-          {/* 🔴 CRUDA: honest "not scored" — no fabricated match%. */}
-          {!evaluated && !job.jev && <span className="italic text-muted">not scored</span>}
+          {/* Evaluation runs on its own after the Jev pass (lib/auto-evaluate.mjs);
+              Jev skips are never evaluated. Honest state, no fabricated match%. */}
+          {!evaluated && job.jev?.verdict !== "skip" && <span className="italic text-muted">{job.jev ? "evaluating automatically" : "pre-screening"}</span>}
         </p>
       </div>
 
