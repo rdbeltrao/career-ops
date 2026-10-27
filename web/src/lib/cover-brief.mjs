@@ -1,20 +1,18 @@
 /**
  * cover-brief.mjs — the cover letter request a web user sends from the report page.
  *
- * modes/cover.md Step 6 refuses to draft until the candidate has answered four
- * prompts. A headless run cannot ask them, so the report page collects them up
- * front and this module checks the request at the route boundary.
+ * Context and the job description supply the drafting inputs. The candidate
+ * may add direction, but an empty brief must not prevent a draft.
  */
 import path from "node:path";
 import { COVER_TONES } from "./cover-tones.mjs";
 
 export { COVER_TONES };
 
-const MAX_ANSWER = 1000;
-const ANSWER_FIELDS = ["why", "problem", "approach"];
+const MAX_INSTRUCTIONS = 3000;
 
 /**
- * @typedef {{why: string, problem: string, approach: string, tone: keyof typeof COVER_TONES}} CoverBrief
+ * @typedef {{instructions: string}} CoverBrief
  */
 
 /**
@@ -27,21 +25,23 @@ export function parseCoverRequest({ input, brief, root, findReportFile }) {
   }
   if (!/^\d+$/.test(input)) return { ok: false, error: `Invalid report selector: "${input}"` };
 
-  const incomplete = { ok: false, error: "Answer all four cover letter questions first." };
-  if (brief === null || typeof brief !== "object") return incomplete;
-  const answers = ANSWER_FIELDS.map((field) => (typeof brief[field] === "string" ? brief[field].trim() : ""));
-  if (answers.some((a) => !a) || typeof brief.tone !== "string" || !Object.hasOwn(COVER_TONES, brief.tone)) {
-    return incomplete;
+  if (brief != null && (typeof brief !== "object" || Array.isArray(brief))) {
+    return { ok: false, error: "Invalid cover letter brief: expected an object." };
   }
-  if (answers.some((a) => a.length > MAX_ANSWER)) return { ok: false, error: `Keep each answer to ${MAX_ANSWER} characters or fewer.` };
+  const rawInstructions = brief?.instructions;
+  if (rawInstructions !== undefined && typeof rawInstructions !== "string") {
+    return { ok: false, error: "Additional instructions must be text." };
+  }
+  const instructions = (rawInstructions ?? "").trim();
+  // JUDGMENT: one prompt keeps the former three answers' combined space.
+  if (instructions.length > MAX_INSTRUCTIONS) return { ok: false, error: `Keep additional instructions to ${MAX_INSTRUCTIONS} characters or fewer.` };
 
   const reportFile = findReportFile(input);
   if (!reportFile) return { ok: false, error: `No report #${input} found. Evaluate this posting first.` };
 
-  const [why, problem, approach] = answers;
   return {
     ok: true,
     reportFile: path.relative(root, reportFile).split(path.sep).join("/"),
-    brief: { why, problem, approach, tone: brief.tone },
+    brief: { instructions },
   };
 }

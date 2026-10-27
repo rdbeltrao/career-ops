@@ -3556,8 +3556,8 @@ if (shared.includes('_profile.md')) {
   const coverSrc = readFile('modes/cover.md');
   const emailSrc = readFile('modes/email.md');
   const contractsIntact =
-    /350-420 words/.test(coverSrc) &&
-    /Bullet format/.test(coverSrc) &&
+    /200–300 words/.test(coverSrc) &&
+    /Paragraph format/.test(coverSrc) &&
     /Self-check/.test(coverSrc) &&
     /Tone consistency/.test(coverSrc) &&
     /Attachment checklist/i.test(emailSrc) &&
@@ -3565,7 +3565,7 @@ if (shared.includes('_profile.md')) {
   if (contractsIntact) {
     pass('cover/email output contracts survived the _writing.md delegation (#2006)');
   } else {
-    fail('a cover/email output contract (word count, bullet format, self-check, tone, attachments, draft-only) went missing (#2006)');
+    fail('a cover/email output contract (word count, paragraph format, self-check, tone, attachments, draft-only) went missing (#2006)');
   }
 }
 

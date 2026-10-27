@@ -279,7 +279,9 @@ test('the context file is a source for candidate-facing text: the draft modes an
   assert.match(writing, /held for confirmation, approximate, conflicting or "not a claim" stays out of candidate-facing text/);
   assert.ok(!/never supplies a fact, a number or a claim/.test(writing), '_writing.md still bars the drafts from the context file');
   const cover = read('modes/cover.md');
-  assert.match(cover, /experience facts and figures in `_context\.md` are evidence the letter may use/);
+  assert.match(cover, /Only when no Context library exists, read `modes\/_context\.md` first/);
+  assert.match(cover, /current facts pages as the authoritative candidate evidence/);
+  assert.match(cover, /include them only when approved evidence substantiates the exact\s+figure and scope/);
   assert.ok(!/no fact, number or claim in the letter comes from `_context\.md`/.test(cover), 'cover.md still bars the letter from the context file');
   for (const rel of ['modes/email.md', 'modes/followup.md', 'modes/apply.md', 'modes/engage.md', 'modes/contacto.md', 'modes/interview-prep.md']) {
     const text = read(rel);

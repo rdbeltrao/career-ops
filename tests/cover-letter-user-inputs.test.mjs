@@ -241,13 +241,14 @@ test('the letter body is not a source for itself', () => {
   assert.notEqual(blocked.status, 0);
 });
 
-test('cover mode tells the agent to pass those answers through as sources', () => {
+test('cover mode preserves optional direction verbatim without fabricating career evidence', () => {
   const english = readFileSync(join(ROOT, 'modes/cover.md'), 'utf-8');
   const turkish = readFileSync(join(ROOT, 'modes/tr/cover.md'), 'utf-8');
   assert.match(english, /user_inputs/);
   assert.match(turkish, /user_inputs/);
   assert.match(english, /verbatim/);
-  assert.match(english, /do not\s+add\s+(?:a\s+|that\s+)?plan\s+to\s+cv\.md/i);
-  assert.match(english, /Step 6 answer D, verbatim/);
+  assert.match(english, /Do not rewrite candidate wording[\s\S]*or add an inferred plan to a career source/);
+  assert.match(english, /optional candidate direction, verbatim; omit this entry when absent/);
+  assert.match(english, /Leave the list empty when no extra input was supplied/);
   assert.match(turkish, /Adım 6 D yanıtı, olduğu gibi/);
 });

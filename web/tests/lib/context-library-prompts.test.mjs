@@ -35,7 +35,7 @@ function fixture(t) {
   return { root, factsFile };
 }
 
-const runArgs = { input: "https://example.com/jobs/1", memory: "STALE_PROFILE_ONLY", today: "2026-10-25", coverBrief: { why: "Role fits", problem: "Delivery", approach: "Learn first", tone: "professional" } };
+const runArgs = { input: "https://example.com/jobs/1", memory: "STALE_PROFILE_ONLY", today: "2026-10-25" };
 
 test("saved Context page edits reach matching, CV and cover prompts without stale summaries", async (t) => {
   const { root, factsFile } = fixture(t);
