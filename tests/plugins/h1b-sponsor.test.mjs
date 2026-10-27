@@ -2027,7 +2027,7 @@ if (!existsSync(INSTALL_PATH)) {
 
 // ---------- Live-API integration (guarded) ----------
 if (process.env.H1B_API_TEST !== '1') {
-  warn('live-api tests skipped (set H1B_API_TEST=1 to enable)');
+  console.log('  ℹ️  SKIPPED optional live-api tests (set H1B_API_TEST=1 to enable; live service behavior remains unverified)');
 } else if (!existsSync(API_PATH) || !existsSync(TIER_PATH)) {
   fail('lib/api.mjs or lib/tier.mjs missing: the plugin ships them');
 } else {
@@ -2248,7 +2248,7 @@ if (!existsSync(TOKEN_PATH)) {
   // one of the 2 keys per address per day, and a burned budget locks out the
   // real user for ~12h. Opt in only when the mint path itself is what changed.
   if (process.env.H1B_MINT_TEST !== '1') {
-    warn('token.mjs mint test skipped (set H1B_MINT_TEST=1 to enable; each run burns one of the 2 keys per address per day)');
+    console.log('  ℹ️  SKIPPED optional token.mjs mint test (set H1B_MINT_TEST=1 to enable; mint remains unverified; each run burns one of the 2 keys per address per day)');
   } else {
     await new Promise((resolve) => {
       execFile(process.execPath, [TOKEN_PATH, 'request'], { timeout: 30_000 }, (err, stdout, stderr) => {

@@ -30,7 +30,7 @@
 import { readFileSync } from 'fs';
 import { join } from 'path';
 import * as yaml from 'js-yaml';
-import { pass, fail, warn, ROOT } from '../helpers.mjs';
+import { pass, fail, ROOT } from '../helpers.mjs';
 import { loadProviders } from '../../providers/_registry.mjs';
 import { findUnclaimedEntries } from '../../audit-portals.mjs';
 
@@ -114,8 +114,8 @@ if (unknownProvider.length === 0) {
 // number stays visible — it is the line between "unclaimed" and "unscanned",
 // and the first version of this test confused the two.
 if (handoff.length > 0) {
-  warn(
-    `${handoff.length} enabled entries have no provider but carry a scan_method, so scan.mjs hands them `
+  console.log(
+    `  ℹ️  ${handoff.length} enabled entries have no provider but carry a scan_method, so scan.mjs hands them `
     + `to the agent instead of fetching them (intentional — mechanism 3 in the template header)`,
   );
 }

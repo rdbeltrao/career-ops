@@ -514,6 +514,10 @@ for (const staged of [false, true]) {
   const { dir, g, gitAt } = repoWithWithheldUpdate();
   g('config', '--unset', 'user.email');
   g('config', '--unset', 'user.name');
+  // EVIDENCE: https://git-scm.com/docs/git-config#Documentation/git-config.txt-useruseConfigOnly
+  // Git otherwise guesses an OS identity on some machines, defeating this
+  // negative control even when global config and identity variables are empty.
+  g('config', 'user.useConfigOnly', 'true');
 
   // Isolate both config and inherited identity variables for the negative control.
   const noConfig = join(dir, 'no-such-gitconfig');   // absent file reads as empty, on every platform
@@ -552,8 +556,7 @@ for (const staged of [false, true]) {
     }
 
     if (!bareCommitTreeFailed) {
-      // Report an unreachable negative control rather than silently passing.
-      warn('no-identity case not reachable on this git; snapshot recording untested here');
+      fail('no-identity negative control unexpectedly created a commit without a configured identity');
     } else if (recorded && !atRiskIn(dir, gitAt).includes('sys.mjs')) {
       pass('the snapshot is recorded even with no git identity configured');
     } else {

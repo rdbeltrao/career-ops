@@ -77,6 +77,7 @@ import { FROZEN_EVALUATION_MODES, KNOWN_EVALUATION_MODES, discoverEvaluationMode
 import { childFailureExcerpt } from './lib/failure-excerpt.mjs';
 import { SCRATCH_PREFIX, markScratchOwner, sweepScratchDirs } from './lib/scratch-dirs.mjs';
 import { MARKER_FILE } from './tests/data-root-guard.mjs';
+import { approvedUpstreamReference } from './tests/helpers/public-upstream-references.mjs';
 import { getCareerOpsRoot } from './path-resolver.mjs';
 
 /**
@@ -2659,7 +2660,7 @@ for (const pattern of leakPatterns) {
   try {
     result = execFileSync(
       'git',
-      ['grep', '--name-only', '-z', pattern, '--', ...grepPathspecs],
+      ['grep', '-G', '--name-only', '-z', pattern, '--', ...grepPathspecs],
       { cwd: ROOT, encoding: 'utf-8', timeout: 30000, stdio: ['pipe', 'pipe', 'ignore'] },
     );
   } catch (error) {
@@ -2676,6 +2677,7 @@ for (const pattern of leakPatterns) {
       if (allowedFiles.some(a => file.includes(a))) continue;
       if (exactAllowedFiles.has(file)) continue;
       if (file.includes('dashboard/go.mod')) continue;
+      if (approvedUpstreamReference(file, pattern, readFileSync(join(ROOT, file), 'utf8'))) continue;
       warn(`Possible personal data in ${file}: "${pattern}"`);
       leakFound = true;
     }
