@@ -36,11 +36,10 @@ import { readWorkerAiSettings } from "./ai-settings-store.mjs";
  * through untouched, and fencingReport() grades the run so the UI can say so
  * rather than pretending.
  *
- * The one thing that legitimately spawns a CLI without coming through here is
- * cli-fencing-probe.mjs, which runs `--help` to ask whether the binary supports
- * the flags it would be fenced with. That executes no prompt, no model and no
- * tools, so there is nothing to fence — and it cannot import this module anyway
- * without making the two a cycle.
+ * Metadata probes do not come through here: cli-fencing-probe.mjs runs --help;
+ * codex-model-catalog.mjs initializes app-server and calls only model/list.
+ * Neither starts inference or exposes model tools, so neither needs a worker
+ * fence. The fencing probe cannot import this module without making a cycle.
  *
  * @param {string} binPath
  * @param {string[]} args

@@ -77,3 +77,7 @@ test("catalog differentiates provider support and offers default/custom model pa
   assert.equal(aiOptionsFor("codex").supportsProvider, true);
   assert.equal(aiOptionsFor("pi").supportsModel, false);
 });
+
+test("Codex does not advertise model IDs without consulting the installed CLI", () => {
+  assert.deepEqual(aiOptionsFor("codex").models.map((model) => model.id), [""]);
+});

@@ -39,3 +39,11 @@ test("a running job links to its log", () => {
 test("no job and no tracker CV is the plain Generate button", () => {
   assert.deepEqual(pdfButtonState(undefined, false), { kind: "idle", failure: null });
 });
+
+test("saved Codex model errors display a readable recovery message instead of JSON", () => {
+  const message = "The 'gpt-6.1-sol' model is not supported when using Codex with a ChatGPT account.";
+  const label = JSON.stringify({ type: "error", status: 400, error: { type: "invalid_request_error", message, code: "model_not_found" } });
+  const state = pdfButtonState({ id: "old-job", status: "error", steps: [{ kind: "status", label }] }, false);
+  assert.equal(state.failure.reason, `${message} Open Config and choose an available model, then retry.`);
+  assert.equal(state.kind, "idle", "an account-access error never marks the CV ready");
+});

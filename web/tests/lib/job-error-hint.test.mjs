@@ -31,6 +31,20 @@ test("raw CLI stderr mentioning auth -> auth hint", () => {
   assert.equal(hint?.kind, "auth");
 });
 
+test("Codex model-access JSON points to Config instead of authentication", () => {
+  const label = JSON.stringify({ type: "error", status: 400, error: { type: "invalid_request_error", message: "The 'gpt-6.1-sol' model is not supported when using Codex with a ChatGPT account.", code: "model_not_found" } });
+  const hint = jobErrorHint(errorJob(label));
+  assert.equal(hint?.kind, "model");
+  assert.equal(hint?.text, "Choose an available model in Config, then re-run.");
+  assert.equal(jobErrorHint(errorJob('Model unavailable for this account. Check authentication and model access.'))?.kind, "model");
+});
+
+test("plain model failures get recovery guidance but model prose in successful output does not", () => {
+  assert.equal(jobErrorHint(errorJob("The model does not exist or you do not have access to it."))?.kind, "model");
+  assert.equal(jobErrorHint(errorJob("No report was written", "The model is not supported by the target architecture.")), null);
+  assert.equal(jobErrorHint({ status: "done", steps: [{ label: "model unavailable" }] }), null);
+});
+
 test("'is it installed and authenticated?' canned message -> auth hint", () => {
   const hint = jobErrorHint(errorJob("The CLI exited with an error — is it installed and authenticated?"));
   assert.equal(hint?.kind, "auth");

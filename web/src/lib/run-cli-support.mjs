@@ -6,6 +6,7 @@
 // specified.
 import { isReservedReportFile } from "./report-files.mjs";
 import { claudeUsageTokens } from "./claude-usage.mjs";
+import { workerErrorMessage } from "./worker-error.mjs";
 
 /**
  * Dashboard-friendly shape both `parseCodexEvent` and `parseClaudeEvent` return.
@@ -225,7 +226,7 @@ export function parseCodexEvent(line) {
   }
 
   if (event.type === "turn.failed" || event.type === "error") {
-    const message = String(event.error?.message || event.message || "Codex failed before finishing");
+    const message = workerErrorMessage(event, "Codex failed before finishing");
     // `turn.failed` is terminal by definition, but a bare `error` event also
     // carries transient conditions Codex recovers from — a "Reconnecting..."
     // notice mid-run would otherwise flag the whole run as failed even though

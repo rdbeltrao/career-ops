@@ -17,7 +17,10 @@ export function aiOptionsFor(cliId) {
     supportsModel: MODEL_CLIS.has(cliId),
     supportsProvider: PROVIDER_CLIS.has(cliId),
     providers: [defaultProvider, ...options(cliId === "codex" ? ["openai", "ollama", "lmstudio"] : cliId === "opencode" ? ["anthropic", "openai", "google", "openrouter", "opencode", "ollama"] : [])],
-    models: [defaultModel, ...options(cliId === "claude" ? ["sonnet", "opus", "haiku", "fable"] : cliId === "codex" ? ["gpt-6.1-sol", "gpt-6-astra"] : [])],
+    // EVIDENCE: Codex model/list depends on the installed client and account.
+    // Its picker is populated by /api/ai-models, never a generic model catalog.
+    // https://learn.chatgpt.com/docs/app-server#list-models-model-list
+    models: [defaultModel, ...options(cliId === "claude" ? ["sonnet", "opus", "haiku", "fable"] : [])],
   };
 }
 

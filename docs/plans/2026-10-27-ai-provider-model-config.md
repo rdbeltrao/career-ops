@@ -70,3 +70,32 @@ only this feature's files when preparing the feature commit.
   real-data-root guard detecting writes to the running UI's log. The full web
   subprocess was rerun independently from the repository root and passed as
   recorded above. Root failures were not hidden or fixed as unrelated changes.
+
+## Follow-up: account and client model compatibility
+
+The installed Codex CLI 0.144.3 rejects `gpt-6.1-sol` for its ChatGPT session.
+Its actual `model/list` response contains only `gpt-5.6-sol`, `gpt-5.6-terra`,
+and `gpt-5.6-luna`; the desktop's shared model cache describes another client
+version and must not populate this picker.
+
+Replace Codex's generic presets with metadata-only discovery through the exact
+executable used by workers. Initialize an app-server connection, list visible
+models with bounded pagination, then close it without starting a thread or turn.
+Refresh queries again; discovery failure shows a warning and offers inherited
+defaults/custom IDs instead of inventing a catalog. A saved model absent from
+the returned catalog stays visible with a warning rather than being silently
+rewritten. Changing provider clears the prior provider's model choice.
+
+Unwrap structured provider errors before shortening the message. Model-access
+failures receive Config recovery guidance; existing saved CV error labels are
+also rendered through the safe formatter. No tracker rows are removed, and no
+model inference is used for catalog discovery or regression verification.
+
+Evidence: [OpenAI app-server model discovery](https://learn.chatgpt.com/docs/app-server#list-models-model-list)
+requires selectors to use models returned for the actual client and account.
+
+Follow-up verification: 2,329 web tests passed with 37 skipped; production build
+and TypeScript checks passed. The browser regression passed for unsupported saved
+IDs, discovered model save/reload, discovery failure/refresh, and provider changes.
+The live endpoint returned the installed CLI's three GPT-5.6 models. Independent
+specification and correctness review passed. No inference was run or billed.

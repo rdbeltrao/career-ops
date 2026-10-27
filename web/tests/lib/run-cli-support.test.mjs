@@ -211,7 +211,16 @@ test("Codex item.started falls back to Working for an unnamed mcp_tool_call", ()
 
 test("Codex turn.failed extracts the error.message", () => {
   const event = parseCodexEvent(JSON.stringify({ type: "turn.failed", error: { message: "model unavailable" } }));
-  assert.deepEqual(event, { error: "model unavailable" });
+  assert.deepEqual(event, { error: "model unavailable Open Config and choose an available model, then retry." });
+});
+
+test("Codex nested model-access payloads become readable terminal errors", () => {
+  const message = "The 'gpt-6.1-sol' model is not supported when using Codex with a ChatGPT account.";
+  const payload = { type: "error", status: 400, error: { type: "invalid_request_error", message, code: "model_not_found" } };
+  const expected = { error: `${message} Open Config and choose an available model, then retry.` };
+  assert.deepEqual(parseCodexEvent(JSON.stringify(payload)), expected);
+  assert.deepEqual(parseCodexEvent(JSON.stringify({ type: "error", message: JSON.stringify(payload) })), expected);
+  assert.deepEqual(parseCodexEvent(JSON.stringify({ type: "turn.failed", error: { message: JSON.stringify(payload) } })), expected);
 });
 
 test("Codex error event falls back to a top-level message", () => {

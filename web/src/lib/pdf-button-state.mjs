@@ -1,3 +1,5 @@
+import { workerErrorMessage } from "./worker-error.mjs";
+
 /**
  * @typedef {{ id: string, status: "running" | "done" | "error", steps: { kind: string, label: string }[] }} PdfJob
  * @typedef {{ jobId: string, reason: string } | null} PdfFailure
@@ -18,5 +20,5 @@ export function pdfButtonState(job, pdfReady) {
 /** @param {PdfJob} job */
 function failureReason(job) {
   const last = job.steps.findLast((s) => s.kind === "status");
-  return last?.label || "The run stopped before it finished.";
+  return workerErrorMessage(last?.label, "The run stopped before it finished.");
 }

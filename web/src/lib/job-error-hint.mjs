@@ -18,6 +18,7 @@
 //     "Interrupted (page reloaded)"                                       (job-store.tsx restore effect)
 //   Everything else (bad input, missing CV, no report written, etc.) -> null;
 //   the error text itself is the explanation.
+import { isModelAccessError } from "./worker-error.mjs";
 
 // "auth" as a bare substring matched inside unrelated words like "author" —
 // career-ops evaluates AI/tech job postings, so a terminal label can
@@ -28,6 +29,7 @@ const AUTH_PATTERN =
   /authenticat\w*|login|sign[ -]?in|credential|api[ -]?key|unauthorized|no cli configured/i;
 
 const HINTS = {
+  model: { kind: "model", text: "Choose an available model in Config, then re-run." },
   auth: { kind: "auth", text: "Sign your CLI in from Config, then re-run." },
   connection: { kind: "connection", text: "Lost connection to the local server — re-run." },
   interrupted: { kind: "interrupted", text: "The run was interrupted — re-run it." },
@@ -46,6 +48,7 @@ export function jobErrorHint(job) {
   if (!label) return null;
   if (label === "Connection error") return HINTS.connection;
   if (label === "Interrupted (page reloaded)") return HINTS.interrupted;
+  if (isModelAccessError(label)) return HINTS.model;
   if (AUTH_PATTERN.test(label)) return HINTS.auth;
   return null;
 }
