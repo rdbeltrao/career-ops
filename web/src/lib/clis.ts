@@ -5,6 +5,7 @@ import { codexStreamArgs, isFatalClaudeStderr, isFatalCodexStderr, parseClaudeEv
 import { installedCliIds, pickUsableCli } from "./cli-pick.mjs";
 import { careerOpsRoot } from "./career-ops";
 import { readRememberedCli } from "./remembered-cli.mjs";
+import { readAiSettings } from "./ai-settings-store.mjs";
 
 // Server-only (node imports). The agnostic runtimes career-ops can delegate to
 // in headless mode (AGENTS.md). Install URLs from career-ops-docs.
@@ -168,6 +169,9 @@ export type CliResolution = { spec: CliSpec; binPath: string; substitutedFrom: s
  * id, and running one CLI under another's fencing is the mismatch #2507 is about.
  */
 export function resolveCliOrFallback(id: string): CliResolution | null {
+  // JUDGMENT: the durable Config selection wins over an older browser's request.
+  // Bind argv, parsing and permission checks to the resolved tool as before.
+  id = readAiSettings(careerOpsRoot()).cliId || id;
   const direct = resolveCli(id);
   if (direct) return { ...direct, substitutedFrom: null };
   const pick = pickUsableCli(id, detectClis(), readRememberedCli(careerOpsRoot()));

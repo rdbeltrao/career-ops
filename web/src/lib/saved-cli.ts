@@ -63,14 +63,16 @@ export async function resolveCliId(
   const saved = readSavedCliId();
   let clis: { id: string; installed?: boolean }[] | undefined;
   let remembered: string | null = null;
+  let configured: string | null = null;
   try {
     // Bounded: every job start awaits this, so a stalled request would leave
     // the job at "Starting…" instead of reaching the saved-id fallback below.
     const r = await fetch("/api/clis", { signal: AbortSignal.timeout(CLIS_TIMEOUT_MS) });
     if (r.ok) {
-      const d = (await r.json()) as { clis?: { id: string; installed?: boolean }[]; remembered?: unknown };
+      const d = (await r.json()) as { clis?: { id: string; installed?: boolean }[]; remembered?: unknown; configured?: unknown };
       clis = d.clis;
       if (typeof d.remembered === "string") remembered = d.remembered;
+      if (typeof d.configured === "string") configured = d.configured;
     }
   } catch {
     // network error or timeout — fall through to the not-an-array guard below
@@ -79,6 +81,10 @@ export async function resolveCliId(
     // /api/clis unreachable, errored, or malformed — can't check. Trust the
     // saved id rather than stranding a working setup on a transient failure.
     return saved;
+  }
+  if (keepIfInstalled(configured, clis)) {
+    if (configured !== saved) persistCliId(configured!);
+    return configured;
   }
   if (keepIfInstalled(saved, clis)) return saved;
   const fallback = keepIfInstalled(remembered, clis) || pickSoleInstalled(clis);

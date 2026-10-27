@@ -2,6 +2,8 @@ import { spawn } from "node:child_process";
 import { fenceArgs } from "./cli-fencing.mjs";
 import { prepareCliLaunch } from "./cli-launch.mjs";
 import { preparePromptInput } from "./cli-prompt-input.mjs";
+import { applyAiModelArgs } from "./ai-settings.mjs";
+import { readWorkerAiSettings } from "./ai-settings-store.mjs";
 
 // Plain .mjs (same pattern as tracker-table.mjs/clean-chips.mjs) so
 // tests/lib/spawn-cli.test.mjs can import it directly under Node. Import it with the
@@ -59,7 +61,13 @@ export function spawnHeadlessCli(binPath, args, options, fencing, input = {}) {
         "Declare what the worker needs (worker-capabilities.mjs) so its permissions can be applied.",
     );
   }
-  const transport = preparePromptInput(fencing.cliId, args, input.prompt);
+  // EVIDENCE: each runtime accepts per-invocation model flags. Apply them here
+  // so CVs, evaluations, chat, rewrites and apply planners share Config's choice.
+  // https://code.claude.com/docs/en/model-config
+  // Keep this before fencing: model selection never changes worker permissions.
+  const settings = readWorkerAiSettings({ env: options.env ?? process.env });
+  const modelArgs = applyAiModelArgs(fencing.cliId, args, settings.models[fencing.cliId]);
+  const transport = preparePromptInput(fencing.cliId, modelArgs, input.prompt);
   const { args: fencedArgs } = fenceArgs({ ...fencing, args: transport.args });
   // On Windows an npm-installed CLI is a script shim spawn() cannot run without a
   // shell, so launch the .js/.exe it wraps (a no-op elsewhere; cli-launch.mjs).

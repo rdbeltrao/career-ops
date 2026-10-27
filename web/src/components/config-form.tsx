@@ -15,6 +15,8 @@ import { CadenceSettings } from "@/components/followups/cadence-settings";
 import { persistCliId, readSavedCliId } from "@/lib/saved-cli";
 import { keepIfInstalled, pickDefaultInstalled } from "@/lib/cli-pick.mjs";
 import { ConfigFiles } from "@/components/config-files";
+import { AiModelFields, type AiModelSelection } from "@/components/ai-model-fields";
+import { normalizeAiSettings } from "@/lib/ai-settings.mjs";
 
 type Cli = {
   id: string;
@@ -27,21 +29,16 @@ type Cli = {
 
 type Mode = "cli" | "key" | "manual";
 
-const PROVIDERS = [
-  { id: "anthropic", label: "Anthropic (Claude)" },
-  { id: "openai", label: "OpenAI" },
-  { id: "google", label: "Google (Gemini)" },
-  { id: "openrouter", label: "OpenRouter" },
-] as const;
-
 const STORAGE_KEY = "career-ops:config";
 
 export function ConfigForm() {
   const [mode, setMode] = useState<Mode>("cli");
   const [clis, setClis] = useState<Cli[] | null>(null);
   const [cliId, setCliId] = useState<string>("");
-  const [provider, setProvider] = useState("anthropic");
-  const [apiKey, setApiKey] = useState("");
+  const [models, setModels] = useState<Record<string, AiModelSelection>>({});
+  const [settingsReady, setSettingsReady] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
   const [logos, setLogos] = useState(true);
   const [saved, setSaved] = useState(false);
 
@@ -55,7 +52,6 @@ export function ConfigForm() {
         // those dead panels; only the Installed-CLI path is functional.
         if (v.mode === "cli") setMode("cli");
         if (v.cliId) setCliId(v.cliId);
-        if (v.provider) setProvider(v.provider);
         if (typeof v.logos === "boolean") setLogos(v.logos);
       }
     } catch {
@@ -63,13 +59,27 @@ export function ConfigForm() {
     }
   }, []);
 
-  // Detect installed CLIs
+  // EVIDENCE: server files are the shared source of truth; browser storage only
+  // supplies the legacy initial tool choice until AI settings have been saved.
   useEffect(() => {
-    fetch("/api/clis")
-      .then((r) => r.json())
-      .then((d) => {
+    let active = true;
+    Promise.all([
+      fetch("/api/clis").then(async (response) => {
+        if (!response.ok) throw new Error("Could not detect installed AI tools. Reload Config to retry.");
+        return response.json();
+      }),
+      fetch("/api/ai-settings", { cache: "no-store" }).then(async (response) => {
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || "Could not load AI settings. Reload Config to retry.");
+        if (!data.settings || typeof data.settings !== "object") throw new Error("The AI settings response was invalid. Reload Config to retry.");
+        return normalizeAiSettings(data.settings);
+      }),
+    ])
+      .then(([d, settings]) => {
+        if (!active) return;
         const list: Cli[] = d.clis ?? [];
         setClis(list);
+        setModels(settings.models);
         // Highlight + persist the default installed CLI when Config was never
         // saved. Highlight-only looks configured while jobs still read empty
         // localStorage -- so whatever is rendered as selected must be written.
@@ -77,6 +87,7 @@ export function ConfigForm() {
         // left every multi-CLI machine (claude + codex, say) in exactly the
         // broken state the highlight was meant to avoid.
         setCliId((prev) => {
+          if (keepIfInstalled(settings.cliId, list)) return settings.cliId;
           // A restored id whose CLI is no longer installed must not stick: it
           // would stay selected and save() would write it straight back, so
           // "open Config and click Save config" could never clear it (#4012).
@@ -86,17 +97,46 @@ export function ConfigForm() {
           if (!readSavedCliId()) persistCliId(auto);
           return auto;
         });
+        setSettingsReady(true);
       })
-      .catch(() => setClis([]));
+      .catch((cause) => {
+        if (active) {
+          setError(cause instanceof Error ? cause.message : "Could not load AI settings. Reload Config to retry.");
+          setClis([]);
+        }
+      });
+    return () => { active = false; };
   }, []);
 
-  function save() {
-    // The API key is deliberately NOT persisted: nothing reads it yet (the
-    // key/manual panel is unwired) and a secret must never sit in clear-text
-    // localStorage. Keys belong in the user's own CLI/provider config.
-    localStorage.setItem(STORAGE_KEY, JSON.stringify({ mode, cliId, provider, logos }));
-    setSaved(true);
-    setTimeout(() => setSaved(false), 2000);
+  function changed() {
+    setSaved(false);
+    if (settingsReady) setError("");
+  }
+
+  async function save() {
+    if (!settingsReady || saving) return;
+    setSaving(true);
+    setSaved(false);
+    setError("");
+    try {
+      const settings = normalizeAiSettings({ version: 1, cliId, models });
+      const response = await fetch("/api/ai-settings", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(settings),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || "AI settings could not be saved. Try again.");
+      if (!data.settings || typeof data.settings !== "object") throw new Error("The saved AI settings response was invalid. Reload Config to check the saved values.");
+      setModels(normalizeAiSettings(data.settings).models);
+      if (cliId) persistCliId(cliId);
+      localStorage.setItem(STORAGE_KEY, JSON.stringify({ mode, cliId, logos }));
+      setSaved(true);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "AI settings could not be saved. Try again.");
+    } finally {
+      setSaving(false);
+    }
   }
 
   const installed = clis?.filter((c) => c.installed) ?? [];
@@ -105,7 +145,7 @@ export function ConfigForm() {
     <div className="mx-auto max-w-2xl px-6 py-10">
       <h1 className="font-display text-2xl tracking-tight text-landing">Config</h1>
       <p className="mt-1 text-sm text-muted">
-        Run career-ops on your own AI, right on your computer. Your CV and data never leave your machine.
+        Your files stay on your computer. AI prompts are sent through your chosen tool to its selected provider.
       </p>
       <a href="#yaml-files" className="mt-3 inline-block text-sm text-brand hover:underline">View and edit YAML configuration files</a>
 
@@ -150,7 +190,7 @@ export function ConfigForm() {
               <div className="flex items-center gap-2 text-sm text-muted">
                 <Loader2 className="size-4 animate-spin" /> Checking what&apos;s on your computer…
               </div>
-            ) : installed.length === 0 ? (
+            ) : !settingsReady && error ? null : installed.length === 0 ? (
               <div className="rounded-xl border border-dashed border-border bg-surface/30 p-4 text-sm text-muted">
                 No AI tool yet? Free options like <span className="text-foreground">OpenCode</span> with Qwen or GLM work great.{" "}
                 <a href="https://career-ops.org/docs/free-ai-engine" target="_blank" rel="noreferrer" className="inline-flex items-center gap-0.5 text-brand hover:underline">
@@ -175,7 +215,8 @@ export function ConfigForm() {
                       <button
                         key={c.id}
                         type="button"
-                        onClick={() => setCliId(c.id)}
+                        onClick={() => { changed(); setCliId(c.id); }}
+                        disabled={!settingsReady || saving}
                         aria-pressed={selected}
                         className={cn(rowClassName, "w-full cursor-pointer text-left")}
                       >
@@ -234,53 +275,23 @@ export function ConfigForm() {
           </div>
         )}
 
-        {mode === "key" && (
-          <div className="space-y-5">
-            <div>
-              <label className="mb-2 block text-xs font-semibold uppercase tracking-[0.18em] text-muted">
-                Provider
-              </label>
-              <div className="grid gap-2 sm:grid-cols-2">
-                {PROVIDERS.map((p) => (
-                  <button
-                    key={p.id}
-                    type="button"
-                    onClick={() => setProvider(p.id)}
-                    className={cn(
-                      "rounded-xl border px-4 py-2.5 text-left text-sm transition-colors",
-                      provider === p.id
-                        ? "border-brand/50 bg-brand-soft text-foreground"
-                        : "border-border bg-surface/50 text-muted hover:bg-surface-hover hover:text-foreground",
-                    )}
-                  >
-                    {p.label}
-                  </button>
-                ))}
-              </div>
-            </div>
-            <div>
-              <label className="mb-1 block text-xs font-semibold uppercase tracking-[0.18em] text-muted">
-                Paste an AI key
-              </label>
-              <p className="mb-2 text-xs text-faint">Bring a key from OpenAI, Anthropic, and others.</p>
-              <input
-                type="password"
-                value={apiKey}
-                onChange={(e) => setApiKey(e.target.value)}
-                placeholder="sk-…"
-                autoComplete="off"
-                className="w-full rounded-xl border border-border bg-surface/60 px-4 py-2.5 font-mono text-sm outline-none transition-colors placeholder:text-faint focus:border-brand/50"
-              />
-              <p className="mt-2 text-xs text-faint">
-                Stored only in this browser — never sent anywhere but your chosen provider.
-              </p>
-            </div>
-          </div>
+        {cliId && settingsReady && (
+          <AiModelFields
+            key={cliId}
+            cliId={cliId}
+            selection={models[cliId] ?? { provider: "", model: "" }}
+            disabled={saving}
+            onChange={(selection) => {
+              changed();
+              setModels((previous) => ({ ...previous, [cliId]: selection }));
+            }}
+          />
         )}
-
-        {mode === "manual" && (
-          <div className="rounded-xl border border-dashed border-border bg-surface/30 p-4 text-sm text-muted">
-            The easiest way in — no keys, nothing to set up. On the roadmap.
+        <p className="mt-4 text-xs text-faint">Saved selections apply to new AI runs. Credentials remain in your selected AI tool.</p>
+        {error && (
+          <div role="alert" className="mt-4 rounded-xl border border-red-400/30 bg-red-400/10 p-3 text-sm text-red-300">
+            {error}
+            {!settingsReady && <button type="button" onClick={() => window.location.reload()} className="ml-2 underline">Reload Config</button>}
           </div>
         )}
       </div>
@@ -291,7 +302,8 @@ export function ConfigForm() {
       </label>
       <button
         type="button"
-        onClick={() => setLogos((v) => !v)}
+        onClick={() => { changed(); setLogos((v) => !v); }}
+        disabled={saving}
         className="flex w-full items-center justify-between gap-4 rounded-xl border border-border bg-surface/50 px-4 py-3 text-left transition-colors hover:bg-surface-hover"
       >
         <span className="min-w-0">
@@ -322,12 +334,14 @@ export function ConfigForm() {
         <button
           type="button"
           onClick={save}
-          className="inline-flex items-center justify-center gap-2 rounded-full bg-brand px-5 py-2 text-sm font-medium text-brand-foreground transition-colors hover:bg-brand-200 max-sm:min-h-[44px]"
+          disabled={!settingsReady || saving}
+          className="inline-flex items-center justify-center gap-2 rounded-full bg-brand px-5 py-2 text-sm font-medium text-brand-foreground transition-colors hover:bg-brand-200 disabled:cursor-not-allowed disabled:opacity-50 max-sm:min-h-[44px]"
         >
+          {saving ? <Loader2 className="size-4 animate-spin" /> : null}
           {saved ? <Check className="size-4" /> : null}
-          {saved ? "Saved" : "Save config"}
+          {saving ? "Saving…" : saved ? "Saved" : "Save config"}
         </button>
-        <span className="text-xs text-faint">Local-first · on our roadmap</span>
+        <span aria-live="polite" className="text-xs text-faint">{saved ? "AI settings saved for this career-ops workspace." : "Save to use these settings for new runs."}</span>
       </div>
       <ConfigFiles />
     </div>
