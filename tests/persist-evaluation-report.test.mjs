@@ -28,7 +28,22 @@ const ROW = {
 
 function payload(overrides = {}) {
   return {
-    markdown: "# Evaluation: Globex -- Manager\n\nA role.\n",
+    markdown: `# Evaluation: Globex -- Manager
+
+**Jev:** not run
+**Scoring note:** no Jev gate
+
+## Machine Summary
+\`\`\`yaml
+company: Globex
+role: Manager
+score: 4.2
+final_decision: Apply
+jev: null
+\`\`\`
+
+${['A', 'B', 'C', 'D', 'E', 'F', 'G'].map(letter => `## ${letter}) Evaluation\nEvidence.`).join('\n\n')}
+`,
     ...ROW,
     ...overrides,
   };

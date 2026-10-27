@@ -13,8 +13,9 @@ import { careerOpsRoot, readMemory, findReportFile, readInbox, readScanDates, re
 import { batchStageOf, parseBatchState } from "@/lib/inbox-batch.mjs";
 import { resolveCodeRoot } from "@/lib/core/code-root.mjs";
 import { resolvePdfPaths, type PdfPaths } from "@/lib/pdf-paths.mjs";
-import { renderAndMarkPdf, writeCvHtml, pdfRunOutcome } from "@/lib/pdf-render.mjs";
-import { createCvEnvelopeFilter, type CvEnvelope } from "@/lib/cv-envelope.mjs";
+import { renderAndMarkPdf, buildCvPayload, pdfRunOutcome } from "@/lib/pdf-render.mjs";
+import { createCvPayloadEnvelopeFilter, type CvPayloadEnvelope } from "@/lib/cv-payload-envelope.mjs";
+import { readPdfWorkerInputs } from "@/lib/pdf-worker-inputs.mjs";
 import { createReportEnvelopeFilter } from "@/lib/report-envelope.mjs";
 import { persistEvaluation, evaluateRunOutcome } from "@/lib/report-persist.mjs";
 import { buildPrompt, isShellSafeCompanyName } from "@/lib/run-prompts.mjs";
@@ -23,7 +24,7 @@ import { parseCoverRequest } from "@/lib/cover-brief.mjs";
 import { capabilitiesFor } from "@/lib/worker-capabilities.mjs";
 import { fencingReport, isCliAllowedForCapabilities } from "@/lib/cli-fencing.mjs";
 import { claudeCliArgs } from "@/lib/claude-invocation.mjs";
-import { resolveCvTemplate } from "@/lib/core/cv-template.mjs";
+import { resolveCvTemplateSelection, reportPostingUrl } from "@/lib/core/cv-template.mjs";
 import { profileRef } from "@/lib/core/profile-path.mjs";
 import { acquireTrackerWrite, releaseTrackerWrite } from "@/lib/core/run-registry";
 import { createRunFinalizer } from "@/lib/run-finalizer.mjs";
@@ -35,7 +36,7 @@ export const dynamic = "force-dynamic";
 export const maxDuration = 800; // a real oferta evaluation / pdf-mode CV tailoring + render is heavy and multi-step
 
 export async function POST(req: Request) {
-  const body = await readJsonObject<{ kind?: string; input?: string; cliId?: string; brief?: unknown }>(req);
+  const body = await readJsonObject<{ kind?: string; input?: string; cliId?: string; brief?: unknown; template?: string }>(req);
   if (!body) return new Response(JSON.stringify({ error: "bad json" }), { status: 400 });
   const { kind = "evaluate", input, cliId: requestedCliId, brief } = body;
   if (!input || !requestedCliId) {
@@ -167,7 +168,16 @@ export async function POST(req: Request) {
   // (#4034). Only pdf fills a template, so nothing else pays for the lookup.
   // The root is passed, not re-derived: a relative CAREER_OPS_PROFILE resolves
   // against it, and `process.cwd()` here is `<core>/web` (see cv-template.mjs).
-  const cvTemplate = kind === "pdf" ? await resolveCvTemplate(careerOpsCodeRoot()) : undefined;
+  let cvTemplate: string | undefined;
+  if (kind === "pdf" && pdfPaths) {
+    try {
+      const report = fs.readFileSync(path.resolve(dataRoot, pdfPaths.reportFile), "utf8");
+      const selected = await resolveCvTemplateSelection(codeRoot, { dataRoot, template: body.template, url: reportPostingUrl(report) });
+      cvTemplate = selected.template;
+    } catch (error) {
+      return Response.json({ error: error instanceof Error ? error.message : "Your CV template preferences could not be read." }, { status: 409 });
+    }
+  }
   // Read the posting from its ATS's public API HERE, before the worker starts.
   // The worker holds no Bash (#3629), so it cannot run fetch-jd.mjs itself, and
   // WebFetch on a JavaScript-rendered board (Ashby, Workday, LinkedIn) returns an
@@ -186,6 +196,14 @@ export async function POST(req: Request) {
     : null;
   const jdFile = jdPrefetch?.ok ? jdPrefetch.file : undefined;
   const jdSource = jdPrefetch?.ok ? jdPrefetch.source : undefined;
+  let pdfInputs = "";
+  if (pdfPaths) {
+    try {
+      pdfInputs = readPdfWorkerInputs({ codeRoot, dataRoot, reportFile: pdfPaths.reportFile, hasContext: Boolean(contextLibrary) });
+    } catch {
+      return Response.json({ error: "The CV inputs could not be read. Check the profile, mode and evaluation report before retrying." }, { status: 409 });
+    }
+  }
   const prompt = buildPrompt({
     kind,
     input,
@@ -201,6 +219,7 @@ export async function POST(req: Request) {
     contextLibrary,
     jdFile,
     jdSource,
+    pdfInputs,
   });
 
   const isClaude = cliId === "claude";
@@ -217,7 +236,7 @@ export async function POST(req: Request) {
   // A CLI with its own structured stream gets the argv that turns it on, so its
   // stdout matches spec.parseEvent below; spec.args stays the plain-text argv the
   // envelope-parsing routes rely on.
-  const args = isClaude ? claudeCliArgs({ kind, prompt }) : (spec.streamArgs ?? spec.args)(prompt);
+  const args = isClaude ? claudeCliArgs({ kind, prompt, inlineInputs: Boolean(pdfInputs) }) : (spec.streamArgs ?? spec.args)(prompt);
 
   // Tracker-mutating runs hold a write token so a row delete can't race their
   // merge (tracker.mjs delete doesn't yet share a lock with merge-tracker,
@@ -378,7 +397,16 @@ export async function POST(req: Request) {
       // It must be a timer, not a hook on incoming text: piggy-backing on agent
       // output cannot fire during exactly the silences it needs to cover.
       // Unknown event types are ignored by the client's switch, so old tabs are safe.
-      heartbeat = setInterval(() => send({ type: "keepalive" }), 10_000);
+      const draftStartedAt = Date.now();
+      let lastDraftProgress = draftStartedAt;
+      if (kind === "pdf") send({ type: "status", label: "Tailoring CV from career facts…" });
+      heartbeat = setInterval(() => {
+        send({ type: "keepalive" });
+        if (kind === "pdf" && !pdfRenderPromise && Date.now() - lastDraftProgress >= 30_000) {
+          lastDraftProgress = Date.now();
+          send({ type: "status", label: `Tailoring CV… (${Math.floor((Date.now() - draftStartedAt) / 1000)} seconds elapsed)` });
+        }
+      }, 10_000);
       const close = () => {
         // Resource cleanup is independent of whether the client can still read.
         finishRun();
@@ -389,19 +417,13 @@ export async function POST(req: Request) {
           try { controller.close(); } catch { /* */ }
         }
       };
-      // pdf's CV arrives inline in a <<cv-html>> envelope (#2185); evaluate's
+      // pdf's compact payload arrives in a <<cv-json>> envelope; evaluate's
       // report arrives in a <<report-md>> envelope. The filter keeps every byte
       // for the backend while holding the body out of the run log.
-      const cvFilter = kind === "pdf" ? createCvEnvelopeFilter() : null;
+      const cvFilter = kind === "pdf" ? createCvPayloadEnvelopeFilter() : null;
       const reportFilter = kind === "evaluate" ? createReportEnvelopeFilter() : null;
-      // While the agent emits the 15-25 KB <<cv-html>> envelope, cvFilter swallows
-      // every byte, so the response stream goes completely silent for as long as
-      // the model takes to write the CV — a minute or more. Nothing downstream can
-      // tell that from a hung request, and the browser/proxy drops the connection;
-      // the client then reports "Connection error" even though the agent is fine
-      // and the PDF renders correctly server-side. Emit a throttled keepalive so
-      // the stream never idles during the filtered phase. Unknown event types are
-      // ignored by the client's switch, so this is safe for older tabs too.
+      // Draft content and narration stay hidden until the backend validates
+      // and renders the artifact. Keepalives above cover silent reasoning too.
       // The evaluate gate reads the agent's own words for a needs_confirmation
       // line, so keep a bounded tail of them.
       let agentTextTail = "";
@@ -410,18 +432,15 @@ export async function POST(req: Request) {
         const filter = cvFilter ?? reportFilter;
         const visible = filter ? filter.push(text) : text;
         if (visible) send({ type: "text", text: visible });
+        if (kind === "pdf" && Date.now() - lastDraftProgress > 10_000) {
+          lastDraftProgress = Date.now();
+          send({ type: "status", label: "Drafting CV content…" });
+        }
       };
       /** Surface non-fatal issues in the run log rather than only a server log. */
       const sendWarnings = (warnings: string[]) => {
         for (const w of warnings) send({ type: "text", text: `⚠️ ${w}\n` });
       };
-      /** Persist the emitted CV; streams the reason and returns false on failure. */
-      const saveCv = (paths: PdfPaths, envelope: CvEnvelope) => {
-        const written = writeCvHtml({ pdfPaths: paths, html: envelope.html });
-        if (!written.ok) send({ type: "error", msg: written.error.slice(0, 200) });
-        return written.ok;
-      };
-
       // One dispatch for every structured CLI: the per-CLI knowledge (which event
       // means text/tool/status/usage) lives in run-cli-support.mjs behind
       // spec.parseEvent, so adding the next such CLI needs no change here.
@@ -437,7 +456,7 @@ export async function POST(req: Request) {
           emittedText = true;
           // sendAgentText, NEVER send: pdf's CV arrives inside the agent's text as a
           // <<cv-html>> envelope, so parsed text has to reach cvFilter too or the
-          // backend has nothing to save and the 25 KB body floods the run log (#2185).
+          // backend has no payload to build from.
           sendAgentText(text);
         }
         if (ev?.tool) send({ type: "tool", name: ev.tool });
@@ -521,30 +540,37 @@ export async function POST(req: Request) {
           close();
         }
       };
-      const renderPdf = async (paths: PdfPaths, format: "letter" | "a4") => {
-        send({ type: "status", label: "Rendering PDF…" });
+      const renderPdf = async (paths: PdfPaths, envelope: CvPayloadEnvelope) => {
         // renderAndMarkPdf is designed to resolve, never throw — but this is
         // the one place nothing else awaits or catches this promise (cancel()
         // only attaches a .finally for the write-token release), so an
         // unexpected exception here must still close the stream instead of
         // leaving it — and the write-token — open until process shutdown.
         try {
+          send({ type: "status", label: "Building CV template…" });
+          const built = await buildCvPayload({ spawnFn: spawn, execPath: process.execPath, root: dataRoot, codeRoot, pdfPaths: paths, payload: envelope.payload, template: cvTemplate });
+          if (!built.ok) {
+            send({ type: "error", msg: built.error });
+            return;
+          }
+          send({ type: "status", label: "Checking facts and rendering PDF…" });
           const result = await renderAndMarkPdf({
             spawnFn: spawn,
             execPath: process.execPath,
             root: careerOpsRoot(),
             pdfPaths: paths,
-            format,
+            format: envelope.format,
             reportNum: paths.reportNum,
           });
           if (result.kind === "render-failed") {
-            send({ type: "error", msg: result.error.slice(0, 200) });
+            send({ type: "error", msg: result.error });
             return;
           }
           // Non-fatal issues (a defaulted page format, a tracker row not marked) still
           // surface here rather than only in a server log nobody sees.
           sendWarnings(result.warnings);
-          send({ type: "done", tokens: lastTokens, costUsd: lastCostUsd });
+          send({ type: "text", text: "PDF generated successfully. Required fact checks passed.\n" });
+          send({ type: "done", tokens: lastTokens, costUsd: lastCostUsd, reportN: Number(paths.reportNum) });
         } catch (e) {
           send({ type: "error", msg: `PDF rendering crashed unexpectedly: ${e instanceof Error ? e.message : String(e)}`.slice(0, 200) });
         } finally {
@@ -597,8 +623,7 @@ export async function POST(req: Request) {
         };
 
         if (kind === "pdf") {
-          // Release any text the filter was still holding, so the log keeps the
-          // agent's closing narration and its VERDICT line.
+          // The JSON filter never exposes unverified narration or verdicts.
           const tail = cvFilter?.flush();
           if (tail) send({ type: "text", text: tail });
           // The artifact check moved from the filesystem to the stream (#2185):
@@ -622,13 +647,10 @@ export async function POST(req: Request) {
             send({ type: "error", msg: "Internal error: the pdf run passed its gate with no CV to save — please report this." });
           } else {
             sendWarnings(envelope.warnings);
-            if (saveCv(pdfPaths, envelope)) {
-              // Tracked so cancel() can defer releasing writeToken until this
-              // settles; close() happens once rendering finishes, not here.
-              pdfRenderPromise = renderPdf(pdfPaths, envelope.format);
-              return;
-            }
-            // saveCv already streamed the specific reason.
+            // Includes template building and rendering so cancellation keeps
+            // the tracker guard until every backend operation has settled.
+            pdfRenderPromise = renderPdf(pdfPaths, envelope);
+            return;
           }
           return close();
         }

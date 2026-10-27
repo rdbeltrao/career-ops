@@ -12,6 +12,7 @@ const { computeProgressMetrics } = hasWeb ? await import('../web/src/lib/analyti
 
 const states = load(readFileSync(new URL('../templates/states.yml', import.meta.url), 'utf8')).states;
 const expected = {
+  'NEEDS REVIEW': [1, 0, 0, 0, 0],
   EVALUATED: [1, 0, 0, 0, 0], APPLIED: [1, 1, 0, 0, 0],
   RESPONDED: [1, 1, 1, 0, 0], ASSESSMENT: [1, 1, 1, 0, 0],
   INTERVIEW: [1, 1, 1, 1, 0], OFFER: [1, 1, 1, 1, 1],
@@ -40,4 +41,12 @@ test('Analytics and stats.mjs count the same active applications', { skip: !hasW
   const web = computeProgressMetrics(labels.map(status => ({ status }))).activeApps;
   assert.equal(computeTrackerStats(tracker).activeApps, 5);
   assert.equal(web, 5);
+});
+
+test('Needs review retains history without presenting its unverified score as evaluated fit', { skip: !hasWeb }, () => {
+  const metrics = computeProgressMetrics([{ status: 'Needs review', score: '5/5' }, { status: 'Evaluated', score: '3/5' }]);
+  assert.equal(metrics.avgScore, 3);
+  assert.equal(metrics.topScore, 3);
+  const tracker = '| # | Date | Company | Role | Score | Status | PDF | Report | Notes |\n|---|---|---|---|---|---|---|---|---|\n| 1 | 2026-10-26 | A | Manager | 5/5 | Needs review | | | |\n| 2 | 2026-10-26 | B | Manager | 3/5 | Evaluated | | | |\n';
+  assert.equal(computeTrackerStats(tracker).avgScore, 3);
 });

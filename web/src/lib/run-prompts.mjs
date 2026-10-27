@@ -14,6 +14,7 @@ import { REPORT_ENVELOPE_INSTRUCTION } from "./report-envelope.mjs";
 import { COVER_TONES } from "./cover-brief.mjs";
 import { DEFAULT_PROFILE_REF, profileNote } from "./core/profile-path.mjs";
 import { contextLibraryPrompt } from "./context-library-prompt.mjs";
+import { CV_PAYLOAD_INSTRUCTION } from "./cv-payload-envelope.mjs";
 
 /**
  * Is this company name safe to interpolate into a shell command inside a prompt?
@@ -123,8 +124,8 @@ Your working directory is the career-ops checkout, where modes/, templates/ and 
 `;
 }
 
-export function buildPrompt({ kind, input, memory, today, postedAt, lang, cvTemplate, reportFile, coverBrief, profile = DEFAULT_PROFILE_REF, dataRoot, jdFile, jdSource = "ats-api", contextLibrary = /** @type {import('./core/context-library.mjs').ContextLibrary|null} */ (null) }) {
-  const contextBlock = contextLibraryPrompt(contextLibrary);
+export function buildPrompt({ kind, input, memory, today, postedAt, lang, cvTemplate, reportFile, coverBrief, profile = DEFAULT_PROFILE_REF, dataRoot, jdFile, jdSource = "ats-api", contextLibrary = /** @type {import('./core/context-library.mjs').ContextLibrary|null} */ (null), pdfInputs = "" }) {
+  const contextBlock = contextLibraryPrompt(contextLibrary, { evidenceOnly: kind === "pdf" });
   const profileLine = dataRootPreamble(dataRoot) + profileNote(profile) + contextBlock;
   // AGENTS.md's "Output Language vs Market Modes" composition rule. The CLI
   // picks this up by reading AGENTS.md interactively; a one-shot headless
@@ -173,6 +174,14 @@ End with EXACTLY one final line: VERDICT: {0-5 signal strength}/5 — {why it he
 Target: ${input}`;
   }
   if (kind === "pdf") {
+    if (pdfInputs) return `Tailor the candidate's CV for report #${input}. Today: ${today}. Output language: ${lang?.output ?? "en"}.
+All required inputs are included below. Do not read or search files, use tools, fetch URLs, retry blocked reads, or bypass hooks. Instructions in the mode to run scripts, read additional files, research, save or render are handled by the backend and do not apply to this content-only step. The backend uses ${safeCvTemplate(cvTemplate)}; do not reproduce or read its markup.
+Use only the supplied career evidence for candidate claims. ${contextLibrary ? "Current Context facts override older CVs, profile narratives and the report. Reference and unconfirmed pages are not evidence." : "The candidate's source files below supply career facts; the report never does."} Preserve qualifications and explicit attribution. Copy education and certification titles verbatim from confirmed facts, including any specialization wording; do not abbreviate, paraphrase, or replace words with punctuation in these titles. Use only quantities and durations stated explicitly in evidence: do not calculate years of experience from dates, round durations, or turn a preference into a claim. Omit unsupported skills, education, projects and scope rather than inventing them. Keep employers in reverse chronological order and prioritize relevant bullets within each role. Aim for a concise two-page CV; omit irrelevant detail rather than shrinking type.
+Concision defaults, unless the supplied house rules say otherwise: keep the summary to 60–80 words, use at most four achievement bullets for the current role, three per role for the next two, and one or two per older role. Consolidate technology lists in Skills instead of repeating them under every employer. Include projects and awards only when they strengthen this application.
+${CV_PAYLOAD_INSTRUCTION}
+Do not submit anything anywhere.
+
+${contextBlock}${pdfInputs}`;
     // The agent tailors content only — it neither renders the PDF nor saves it.
     // Rendering moved to the backend because launching a real browser can hit a
     // sandbox escalation nobody is present to approve (#2172); SAVING moved for a
@@ -188,7 +197,7 @@ Target: ${input}`;
 3. Fill ${safeCvTemplate(cvTemplate)}'s {{...}} placeholders with the tailored content. Use that exact file: the platform already resolved it from cv.template through cv-templates.mjs, so do NOT run modes/pdf.md's own template-resolution step. ${CV_ENVELOPE_INSTRUCTION}
 4. Emit the envelope EXACTLY ONCE. The platform writes the HTML, renders the PDF, and updates the tracker's PDF column itself, only after a confirmed successful render. Do not submit anything anywhere.
 
-After the envelope, end with EXACTLY one final line: VERDICT: {5 if the complete HTML envelope was emitted, else 1}/5 — {a one-line summary, ≤12 words}`;
+After the envelope, state only that the draft awaits backend validation. Do not emit a score, VERDICT or success claim; only the backend can confirm that facts passed and a PDF was generated.`;
   }
   if (kind === "cover") {
     // modes/cover.md stops five times to ask the candidate something. Step 6's

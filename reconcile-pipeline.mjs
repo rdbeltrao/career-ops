@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { evaluationReportState } from './lib/evaluation-report.mjs';
 /**
  * reconcile-pipeline.mjs — move evaluated postings out of pipeline.md Pending
  *
@@ -280,6 +281,7 @@ if (existsSync(STATE_FILE)) {
       skippedNoReport.push({ url: url.trim(), reportNum: (reportNum || '').trim() || '?' });
       continue;
     }
+    if (evaluationReportState(reportText(reportFile)) === 'needs-review') continue;
     addEntry({ url: url.trim(), reportLink: reportLinkFor(reportFile), score: resolveScore((score || '').trim(), reportFile), pdf: resolvePdf(reportFile) }, { source: 'batch-state' });
   }
 }
@@ -291,7 +293,7 @@ if (existsSync(STATE_FILE)) {
 // posting is still pending.
 function isEvaluationReport(file) {
   const txt = reportText(file);
-  return Boolean(txt) && (/^\*\*Score:\*\*/m.test(txt) || /^#\s+Evaluation:/m.test(txt) || /^##\s*Machine Summary/m.test(txt));
+  return Boolean(txt) && evaluationReportState(txt) !== 'needs-review' && (/^\*\*Score:\*\*/m.test(txt) || /^#\s+Evaluation:/m.test(txt) || /^##\s*Machine Summary/m.test(txt));
 }
 const reportsByNumber = new Map();
 for (const file of reportFiles) {
@@ -318,7 +320,7 @@ if (existsSync(TRACKER_FILE)) {
     const url = extractCellUrl(row.url ?? '');
     if (!url || !isPostingUrl(url)) continue;
     const reportFile = numbers.length ? findReportFile(numbers[0]) : null;
-    if (!reportFile) continue; // a row without a report is not an evaluation
+    if (!reportFile || !isEvaluationReport(reportFile)) continue; // gate notes are not evaluations
     addEntry({ url, reportLink: reportLinkFor(reportFile), score: resolveScore(null, reportFile), pdf: resolvePdf(reportFile) }, { source: 'tracker' });
   }
 }

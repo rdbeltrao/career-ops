@@ -49,3 +49,14 @@ test("attachJev joins the report header with the pipeline row's reasons", () => 
   // No report to read: the tracker's URL cell still finds the pipeline row.
   assert.deepEqual(rows[3].jev, { fit: 80, score: null, verdict: "apply", reasons: "stack match" });
 });
+
+test("attachJev never fills explicit not-run or another posting from old inbox evidence", () => {
+  const row = { n: '7', report: 'r.md', url: 'https://example.test/7' };
+  const inbox = [{ url: row.url, jev: { fit: 90, verdict: 'apply', reasons: 'old pass' } }];
+  const notRun = attachJev([row], inbox, () => `**URL:** ${row.url}\n**Jev:** not run`)[0];
+  assert.equal(notRun.jev, null);
+  assert.equal(notRun.jevStatus, 'not-run');
+  const wrong = attachJev([row], inbox, () => '**URL:** https://example.test/8\n**Jev:** 4/5 (fit 75, apply)')[0];
+  assert.equal(wrong.jev, null);
+  assert.equal(wrong.jevStatus, 'invalid');
+});

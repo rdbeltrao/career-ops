@@ -59,6 +59,7 @@ export function GeneratePdfButton({ n, company, pdfReady }: { n: string; company
         >
           <RotateCcw className="size-3" />
         </button>
+        <Link href="/cv/templates" className="px-2 py-1 text-xs text-muted hover:text-brand">Templates &amp; style</Link>
         <FailureNote failure={state.failure} />
       </span>
     );
@@ -76,6 +77,7 @@ export function GeneratePdfButton({ n, company, pdfReady }: { n: string; company
         <FileDown className="size-3.5" /> Generate tailored CV (PDF)
       </button>
       <CostBadge kind="spend" size="xs" />
+      <Link href="/cv/templates" className="px-2 py-1 text-xs text-muted hover:text-brand">Templates &amp; style</Link>
       <FailureNote failure={state.failure} />
     </span>
   );

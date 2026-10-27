@@ -482,7 +482,9 @@ export function PipelineView({
                         <span title={r.jev.reasons || undefined}>{jevLabel(r.jev)}</span>
                       </Badge>
                     ) : (
-                      <span className="text-faint">—</span>
+                      <span className="text-faint" title={r.jevStatus === "invalid" ? "JEV evidence is invalid or belongs to another posting." : r.jevStatus === "not-run" ? "Report explicitly records that JEV was not run." : "No saved JEV rating found."}>
+                        {r.jevStatus === "not-run" ? "Not run" : r.jevStatus === "invalid" ? "Check report" : "Missing"}
+                      </span>
                     )}
                   </td>
                   <td className="whitespace-nowrap px-4 py-3 text-muted">

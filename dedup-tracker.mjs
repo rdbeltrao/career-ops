@@ -49,6 +49,7 @@ const DRY_RUN = process.argv.includes('--dry-run');
 // needs no change in this file.
 // Applied > Rejected because an active application outranks a terminal state.
 const STATUS_RANK = {
+  'needs_review': 1,
   'skip': 0,
   'discarded': 0,
   'rejected': 1,

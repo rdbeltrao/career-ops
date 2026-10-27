@@ -18,6 +18,8 @@
 
 /** @type {Record<string, string>} */
 export const STATUS_ALIAS = {
+  needs_review: "NEEDS REVIEW",
+  needs_confirmation: "NEEDS REVIEW",
   // Evaluated — states.yml `evaluated`
   evaluada: "EVALUATED",
   condicional: "EVALUATED",

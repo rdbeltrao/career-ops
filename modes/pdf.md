@@ -178,12 +178,15 @@ Resolve which template to fill with the shared resolver (do not hardcode `cv-tem
 
 - If the user named a template this turn (e.g. "use the *modern* template"), run:
   `node cv-templates.mjs resolve cv "<name>"`
-- Otherwise run: `node cv-templates.mjs resolve cv`
-  (this returns the `cv.template` default from `config/profile.yml`, or the base `cv-template.html` when unset).
+- Otherwise, for a known posting URL run `node cv-templates.mjs resolve cv --url="<posting-url>"`.
+  This uses a saved `cv.ats_templates` override for the detected ATS, then optional `cv.ats_guidance`, then the `cv.template` default from `config/profile.yml` (or the base template when unset). Guidance is opt-in and currently recommends the simple `ats` layout only for Greenhouse; it is not a parsing guarantee. Unknown platforms keep the preferred template.
+- Without a posting URL, run `node cv-templates.mjs resolve cv` to use the preferred template.
 
 The command prints the absolute path of the template to fill; a non-zero exit means the named template is missing or invalid — surface that message to the user instead of silently falling back.
 
 To show the user their options (e.g. "what CV templates do I have?"), run `node cv-templates.mjs list cv` and present each `displayName`.
+
+The web app's **CV → Templates & style** gallery saves these same user-profile settings, plus the existing `style.accent_color`, `style.font_family` and `style.font_size` theme tokens. They affect new PDF generation; changing preferences does not restyle existing artifacts.
 
 `build-cv-html.mjs` fills that resolved template from the JSON payload you build — it owns every tag, CSS class, and the HTML escaping, so you **never emit full HTML markup** and do **not** escape `&`/`<`/`>`/quotes yourself. Pass the resolved path as the third argument (`node build-cv-html.mjs <input.json> <output.html> <template.html>`); omit it to fall back to the base `cv-template.html`. This is the HTML twin of `build-cv-latex.mjs` (see `modes/latex.md`) and cuts the PDF step's output tokens from full markup down to the compact payload below (#557).
 

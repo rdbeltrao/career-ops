@@ -37,7 +37,7 @@ const CLOSER_ALL = new RegExp(CLOSER_SRC, "gm");
  * about its own capabilities invites it to test the claim.
  */
 export const REPORT_ENVELOPE_INSTRUCTION =
-  `Do NOT save or edit any file, and do not run reserve-report-num.mjs or merge-tracker.mjs — the platform persists your output for you. Instead OUTPUT the finished report markdown inline, between two marker lines. The first line contains only \`${OPEN_MARK}\`, then the complete report (header, Machine Summary YAML fence, blocks A–G), then a final line containing only \`${CLOSE_MARK}\`. Each marker appears exactly once. Emit the WHOLE report — never abbreviate, summarize, or write "unchanged"; the platform writes exactly these bytes to reports/.`;
+  `Do NOT save or edit any file, and do not run reserve-report-num.mjs or merge-tracker.mjs — the platform persists your output for you. Instead OUTPUT the finished report markdown inline, between two marker lines. The first line contains only \`${OPEN_MARK}\`, then the complete report (header, Machine Summary YAML fence, blocks A–G), then a final line containing only \`${CLOSE_MARK}\`. Each marker appears exactly once. Emit the WHOLE report — never abbreviate, summarize, or write "unchanged"; the platform validates the report before saving. Include all blocks A–G and Machine Summary company, role, numeric score, final_decision and jev. Copy Jev fit, score and verdict exactly from the pre-screen into jev; the backend derives its display header. If the pre-screen did not run, use jev: null and state "not run: {reason}". A gate stop or confirmation request is never a completed report: emit needs_confirmation outside the envelope and do not emit a report envelope.`;
 
 /**
  * @typedef {Object} ReportEnvelope

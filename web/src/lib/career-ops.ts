@@ -171,31 +171,26 @@ export type Application = {
    *  report's `**Jev:**` header, reasons from the pipeline row. null when neither is readable;
    *  absent on rows straight from the tracker parser (attachJev joins it on). */
   jev?: ApplicationJev | null;
+  jevStatus?: "rated" | "not-run" | "missing" | "invalid";
 };
 
 export type ApplicationJev = { fit: number | null; score: number | null; verdict: "apply" | "maybe" | "skip" | null; reasons: string };
 
-/** The first lines of a tracker row's report, enough for its header; null when unreadable. */
-function reportHead(app: Application): string | null {
+/** Read all report evidence: Machine Summary and legacy Jev fields can follow a long JD. */
+function reportMarkdown(app: Application): string | null {
   const file = findReportFile(app.n);
   if (!file) return null;
   try {
-    const fd = fs.openSync(file, "r");
-    try {
-      const buf = Buffer.alloc(4096);
-      const n = fs.readSync(fd, buf, 0, buf.length, 0);
-      return buf.toString("utf8", 0, n);
-    } finally {
-      fs.closeSync(fd);
-    }
-  } catch {
+    return fs.readFileSync(/* turbopackIgnore: true */ file, "utf8");
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
     return null;
   }
 }
 
 /** Tracker rows with their Jev joined on (see report-jev.mjs). */
 export function applicationsWithJev(applications: Application[] = readApplications(), inbox: InboxJob[] = readInbox()): Application[] {
-  return attachJev(applications, inbox, reportHead, inboxKey) as unknown as Application[];
+  return attachJev(applications, inbox, reportMarkdown, inboxKey) as unknown as Application[];
 }
 
 /**

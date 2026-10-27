@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { evaluationReportState } from './lib/evaluation-report.mjs';
 /**
  * merge-tracker.mjs — Merge batch tracker additions into applications.md
  *
@@ -31,7 +32,7 @@ import { normalizeReportLink as normalizeLink } from './tracker-links.mjs';
 import { getCareerOpsRoot } from './path-resolver.mjs';
 import { roleFuzzyMatch } from './role-matcher.mjs';
 import { parsePdfIndex, livePdfIndex, normNum } from './find.mjs';
-import { LEGACY_COLMAP, TSV_REQUIRED_FIELDS, detectColumns, isHeaderRow, resolveScoreStatus, looksLikeTsvHeaderRow, resolveTsvColumns, looksLikeScoreCell, parseScore, normalizeVia, normalizeTextKey, SEPARATOR_ROW_RE, extractReqNumber, extractCellUrl, parseMarkdownLinks, firstLinkTarget, unwrapReportUrlToken } from './tracker-parse.mjs';
+import { LEGACY_COLMAP, TSV_REQUIRED_FIELDS, detectColumns, isHeaderRow, resolveScoreStatus, looksLikeTsvHeaderRow, resolveTsvColumns, looksLikeScoreCell, parseScore, normalizeVia, normalizeTextKey, SEPARATOR_ROW_RE, extractReqNumber, extractCellUrl, parseMarkdownLinks, firstLinkTarget, unwrapReportUrlToken, trackerRowIdentity, parseTrackerRow } from './tracker-parse.mjs';
 // The ATS vendor table shared with analyze-patterns.mjs and the scanners, so
 // the URL cell's label and the per-vendor analysis name a board identically.
 import { atsVendorOf } from './ats-vendor.mjs';
@@ -1772,6 +1773,7 @@ export async function mergeTracker(options = {}) {
     // Every addition that reaches the tracker also names a posting that is no
     // longer pending; collected here, applied to pipeline.md after the write.
     const pipelineRows = [];
+    const completedReviews = new Map();
     for (const file of tsvFiles) {
       // NOT trimmed here: a trailing tab is the row's final empty cell, and
       // parseTsvContent needs to see it. It trims internally for the legacy path.
@@ -1807,6 +1809,14 @@ export async function mergeTracker(options = {}) {
       // must run before the dedup below reads addition.url — deriving it afterwards
       // would populate the column while leaving Pass 0 nothing to match on, which is
       // the original bug with extra steps.
+      const evaluationPath = resolveReportPath(addition.report);
+      if (addition.status === 'Evaluated' && evaluationPath
+        && evaluationReportState(readFileSync(evaluationPath, 'utf-8')) === 'needs-review') {
+        console.warn(`⚠️  Skipping ${file}: the linked report stopped before evaluation or needs confirmation; it cannot be merged as Evaluated.`);
+        failedAdditions.push(file);
+        skipped++;
+        continue;
+      }
       if (!addition.url) addition.url = resolveReportUrl(addition.report).url;
       if (addition.url) pipelineRows.push({ file, url: addition.url, reportLink: addition.report, score: addition.score, pdf: addition.pdf });
 
@@ -2236,6 +2246,10 @@ export async function mergeTracker(options = {}) {
           if (refreshed) {
             Object.assign(duplicate, refreshed);
             reserveMergedNumbers(refreshed.notes);
+            if (duplicate.status === 'Needs review' && addition.status === 'Evaluated' && evaluationPath
+              && evaluationReportState(readFileSync(evaluationPath, 'utf-8')) === 'complete') {
+              completedReviews.set(duplicate.num, trackerRowIdentity(parseTrackerRow(updatedLine, COLMAP)));
+            }
           } else duplicate.raw = updatedLine;
           updated++;
         } else {
@@ -2365,6 +2379,21 @@ export async function mergeTracker(options = {}) {
     if (missingReports > 0) console.log(`⚠️  ${missingReports} row(s) link to a report that is not on disk (see warnings above)`);
     if (DRY_RUN) console.log('(dry-run — no changes written)');
     trackerLock.release();
+
+    // A completed re-evaluation resolves Needs review. Delegate the transition
+    // after releasing the lock so the canonical writer records its ledger too.
+    if (!DRY_RUN) {
+      for (const [num, identity] of completedReviews) {
+        try {
+          execFileSync(process.execPath, [join(CAREER_OPS_CODE_ROOT, 'set-status.mjs'), '--row', String(num), 'Evaluated',
+            '--expect-status', 'Needs review', '--expect-row', identity, '--note', 'Completed evaluation replaces the earlier incomplete review.', '--json'],
+          { encoding: 'utf8', env: { ...CHILD_ENV, CAREER_OPS_ROOT: DATA_ROOT, CAREER_OPS_TRACKER: APPS_FILE }, timeout: 30_000 });
+        } catch (error) {
+          console.error(`The evaluation was merged but #${num} could not leave Needs review: ${error.stderr || error.message}`);
+          return 1;
+        }
+      }
+    }
 
     // Move the merged postings' pipeline rows under Processed. Best effort: the
     // tracker is already written, so a pipeline problem is a warning, and

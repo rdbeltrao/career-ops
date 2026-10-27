@@ -1,7 +1,7 @@
 import { pathToFileURL } from "node:url";
 import { resolveRootScript } from "./code-root.mjs";
 
-/** @typedef {{text:string,evidenceText:string,notice:string,source:'library'}} ContextLibrary */
+/** @typedef {{text:string,evidenceText:string,notice:string,source:'library',pages?:Array<{breadcrumb:string[],relativePath:string,usage:string,content:string,evidenceText:string}>}} ContextLibrary */
 
 /**
  * Use the engine's reader at request time, following core/cv-template.mjs.

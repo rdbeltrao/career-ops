@@ -6,8 +6,8 @@
  * Stdin is one JSON object:
  * { markdown, num, today, company, role, score, via, url, notes, reportFile }
  *
- * The web app validates the report, reserves the number, and merges.
- * This script does neither. It writes under the process cwd, which the
+ * The web app reserves the number and merges. Both entry points validate
+ * completion, posting identity and Jev consistency before writing. It writes under the process cwd, which the
  * caller sets to the data root.
  *
  * After a successful write the CLI moves the posting's data/pipeline.md row
@@ -20,6 +20,8 @@
  * exits 1. A failed write removes only files this call created.
  */
 import fs from "node:fs";
+import { prepareEvaluationReport, machineSummary, readReportJev } from "./lib/evaluation-report.mjs";
+import { postingKey } from "./url-key.mjs";
 import path from "node:path";
 import { isMainModule } from "./lib/is-main-module.mjs";
 import { isPostingUrl, trackerTsvLine } from "./lib/tracker-addition.mjs";
@@ -97,12 +99,23 @@ export function writeEvaluationArtifacts(root, payload, fsImpl = fs) {
     return fail("refusing to persist outside reports/ or batch/tracker-additions/");
   }
 
+  const prepared = prepareEvaluationReport(markdown);
+  if (!prepared.ok) return fail(prepared.error);
+  const summary = machineSummary(prepared.markdown).data;
+  if (summary.company !== company || summary.role !== role || summary.score !== scoreN) {
+    return fail("Report identity or score disagrees with the tracker addition.");
+  }
+  const reportUrl = readReportJev(prepared.markdown).url;
+  if (url && reportUrl && postingKey(url) !== postingKey(reportUrl)) {
+    return fail("Report URL belongs to another posting; refusing to attach its evaluation.");
+  }
+
   const tsv = trackerTsvLine({ num, today, company, role, score, reportFile, notes, via, url });
   const attempted = [];
   try {
     fsImpl.mkdirSync(reportsDir, { recursive: true });
     fsImpl.mkdirSync(additionsDir, { recursive: true });
-    writeNew(fsImpl, reportPath, markdown, attempted);
+    writeNew(fsImpl, reportPath, prepared.markdown, attempted);
     writeNew(fsImpl, tsvPath, tsv, attempted);
   } catch (err) {
     const cleanupError = cleanupNew(fsImpl, attempted);

@@ -70,6 +70,20 @@ test('a -fold multiplier is the same claim as Nx', () => {
   assert.deepEqual(claims('A twofold approach and a threefold mission.'), []);
 });
 
+test('Unicode and ASCII multipliers are checked symmetrically, including unsupported claims', () => {
+  for (const source of ['Throughput increased 2.6×; deployments became 8× faster.', 'Throughput increased 2.6x; deployments became 8x faster.']) {
+    for (const spelling of ['2.6x', '2.6×', '2.6 ×']) {
+      assert.deepEqual(invented(`Throughput increased ${spelling}.`, source), [], spelling);
+      assert.deepEqual(claims(`Throughput increased ${spelling}.`), ['2.6x']);
+    }
+    for (const spelling of ['9x', '9×', '9 ×']) {
+      assert.deepEqual(invented(`Deployments became ${spelling} faster.`, source), ['9x'], spelling);
+    }
+  }
+  assert.deepEqual(claims('A 3×4 layout and 8×8 grid.'), [], 'dimensions are not standalone multipliers');
+  assert.deepEqual(claims('An increase of 2.6\n×.'), [], 'never join across paragraphs');
+});
+
 test('people a candidate mentored or hired are counted', () => {
   assert.deepEqual(claims('Mentored 12 interns and 3 mentees; made 9 hires; trained 2 apprentices.'),
     ['12 interns', '2 apprentices', '3 mentees', '9 hires']);

@@ -65,6 +65,7 @@
  */
 
 import { readFileSync } from 'fs';
+import { basename } from 'node:path';
 import { validateFlags } from './lib/cli-flags.mjs';
 import { isMainModule } from './lib/is-main-module.mjs';
 
@@ -486,6 +487,16 @@ export function lintPayload(payload) {
 export function transformPayload(payload) {
   const { payload: folded, transform } = foldCompetencies(payload);
   return { payload: folded, transform, findings: lintPayload(folded) };
+}
+
+/** Prepare the data as well as the layout when the simple ATS template is selected. */
+export function payloadForTemplate(payload, templatePath) {
+  if (basename(String(templatePath)) !== 'cv-template.ats.html') return payload;
+  const errors = validatePayloadShape(payload);
+  if (errors.length) throw new Error(`Invalid ATS CV payload: ${errors.join(' ')}`);
+  // EVIDENCE: the canonical fold above preserves facts and supplies real text
+  // delimiters. A template swap alone leaves competencies separated only by CSS.
+  return transformPayload(payload).payload;
 }
 
 // ── Human summary ───────────────────────────────────────────────────────────

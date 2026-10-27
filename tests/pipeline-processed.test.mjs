@@ -63,7 +63,7 @@ test('applyProcessed moves matching rows under Processed in the reconcile shape 
   assert.equal(r.pendingBefore, 3);
   assert.equal(r.pendingAfter, 0);
   const lines = r.text.split('\n');
-  assert.ok(lines.includes('- [x] [42](../reports/042-acme-2026-10-02.md) | https://jobs.example.test/1/ | Acme | Engineer | 4.2/5 | PDF ✅'));
+  assert.ok(lines.includes('- [x] [42](../reports/042-acme-2026-10-02.md) | https://jobs.example.test/1/ | Acme | Engineer | 4.2/5 | PDF ✅ | jev: 70 apply'));
   assert.ok(lines.includes('- [x] [43](../reports/043-beta-2026-10-02.md) | http://jobs.example.test/2?utm_source=linkedin&gh_jid=9 | Beta | Manager | 3.9/5 | PDF ❌'));
   assert.ok(lines.includes('- [!] https://jobs.example.test/err | Delta | Broken'), 'an error row is never touched');
   assert.equal(lines.filter((l) => l.includes('jobs.example.test/3')).length, 1, 'the processed row is not duplicated');
@@ -88,6 +88,14 @@ test('applyProcessed writes a SKIP row for a dealbreaker, creates the Processed 
   assert.equal(empty.text, PIPELINE);
 });
 
+test('dropping a stale pending twin preserves its Jev on the processed survivor', () => {
+  const text = '# Pipeline\n\n## Pending\n\n- [ ] https://a.test/1 | Acme | Manager | jev: 78 apply\n\n## Processed\n\n- [x] [42](../reports/042.md) | https://a.test/1 | Acme | Manager | 4/5 | PDF ❌\n';
+  const result = applyProcessed(text, [{ url: 'https://a.test/1' }]);
+  assert.equal(result.dropped.length, 1);
+  assert.match(result.text, /PDF ❌ \| jev: 78 apply/);
+  assert.equal(applyProcessed(result.text, [{ url: 'https://a.test/1' }]).changed, false);
+});
+
 test('markPipelineProcessed writes atomically under the lock, backs up on request, and tolerates a missing file', async (t) => {
   const root = mkdtempSync(join(tmpdir(), 'pipeline-processed-'));
   t.after(() => rmSync(root, { recursive: true, force: true, maxRetries: 10 }));
@@ -106,7 +114,7 @@ test('markPipelineProcessed writes atomically under the lock, backs up on reques
   const live = await markPipelineProcessed(missing, [{ url: 'https://jobs.example.test/1', reportLink: '[42](../reports/042.md)', score: '4.2/5' }], { backup: true });
   assert.equal(live.written, true);
   assert.equal(readFileSync(`${missing}.pre-reconcile.bak`, 'utf8'), PIPELINE);
-  assert.match(readFileSync(missing, 'utf8'), /^- \[x\] \[42\]\(\.\.\/reports\/042\.md\) \| https:\/\/jobs\.example\.test\/1\/ \| Acme \| Engineer \| 4\.2\/5 \| PDF ❌$/m);
+  assert.match(readFileSync(missing, 'utf8'), /^- \[x\] \[42\]\(\.\.\/reports\/042\.md\) \| https:\/\/jobs\.example\.test\/1\/ \| Acme \| Engineer \| 4\.2\/5 \| PDF ❌ \| jev: 70 apply$/m);
   const again = await markPipelineProcessed(missing, [{ url: 'https://jobs.example.test/1' }]);
   assert.equal(again.written, false);
   assert.equal(existsSync(join(root, 'data', '.pipeline.lock')) || true, true);

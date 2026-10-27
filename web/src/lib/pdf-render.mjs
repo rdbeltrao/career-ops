@@ -15,11 +15,19 @@
  */
 import fs from "node:fs";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { resolveCodeRoot } from "./core/code-root.mjs";
+import { getProfilePath } from "./core/profile-path.mjs";
+
+function pdfWorkspaceEnv(root) {
+  // EVIDENCE: settings resolve relative profile overrides against the data root;
+  // child processes run in the code root and must receive that same absolute path.
+  return { ...process.env, CAREER_OPS_ROOT: root, CAREER_OPS_PROFILE: getProfilePath(root) };
+}
 
 /**
  * @typedef {Object} PdfRunSignals
- * @property {object|undefined} envelope - parseCvEnvelope's result for this run.
+ * @property {object|undefined} envelope - The parsed CV artifact for this run.
  * @property {string|null} noOutputMessage - The route's verdict on "did the CLI
  *   produce any output at all", or null when it did. That question is about the
  *   transport, not this module, so the route owns the wording and passes it in
@@ -89,6 +97,29 @@ export function writeCvHtml({ pdfPaths, html }) {
   }
 }
 
+/** Build through the CLI's validated JSON renderer, preserving template parity. */
+export async function buildCvPayload({ spawnFn, execPath, root, codeRoot, pdfPaths, payload, template }) {
+  const payloadFile = pdfPaths.html.replace(/\.html$/, ".json");
+  try {
+    const ats = await import(/* webpackIgnore: true */ pathToFileURL(path.join(codeRoot, "ats-payload.mjs")).href);
+    fs.writeFileSync(payloadFile, JSON.stringify(ats.payloadForTemplate(payload, template)), "utf8");
+    return await new Promise((resolve) => {
+      const child = spawnFn(execPath, [path.join(codeRoot, "build-cv-html.mjs"), payloadFile, pdfPaths.html, path.join(codeRoot, template)], {
+        cwd: codeRoot, env: pdfWorkspaceEnv(root),
+      });
+      let stderr = "";
+      child.stdout?.resume?.();
+      child.stderr.on("data", chunk => { stderr += chunk.toString(); });
+      child.on("error", error => resolve({ ok: false, error: `CV build failed to start: ${error.message}` }));
+      child.on("close", code => resolve(code === 0 ? { ok: true } : { ok: false, error: stderr.trim() || "CV JSON build failed." }));
+    });
+  } catch (error) {
+    return { ok: false, error: `CV JSON build failed: ${error.message}` };
+  } finally {
+    fs.rmSync(payloadFile, { force: true });
+  }
+}
+
 /**
  * Spawn generate-pdf.mjs as a plain child process and resolve once it exits.
  * @param {{spawnFn: Function, execPath: string, root: string, html: string, finalPdf: string, format: "letter"|"a4", reportNum: string}} args
@@ -103,7 +134,7 @@ export function spawnGeneratePdf({ spawnFn, execPath, root, html, finalPdf, form
       // hard-fail every web-triggered render — same bypass a human already
       // applies manually via the CLI when this diverges.
       [path.join(codeRoot, "generate-pdf.mjs"), html, finalPdf, `--format=${format}`, `--report=${reportNum}`, "--allow-reorder"],
-      { cwd: codeRoot },
+      { cwd: codeRoot, env: pdfWorkspaceEnv(root) },
     );
     let stderr = "";
     child.stderr.on("data", (d) => { stderr += d.toString(); });
@@ -123,7 +154,7 @@ export function spawnGeneratePdf({ spawnFn, execPath, root, html, finalPdf, form
  */
 export function markTrackerReady({ spawnFn, execPath, root, reportNum, codeRoot = resolveCodeRoot(process.cwd()) }) {
   return new Promise((resolve) => {
-    const child = spawnFn(execPath, [path.join(codeRoot, "mark-pdf-ready.mjs"), reportNum, "--json"], { cwd: codeRoot });
+    const child = spawnFn(execPath, [path.join(codeRoot, "mark-pdf-ready.mjs"), reportNum, "--json"], { cwd: codeRoot, env: pdfWorkspaceEnv(root) });
     let stdout = "";
     let stderr = "";
     child.stdout.on("data", (d) => { stdout += d.toString(); });

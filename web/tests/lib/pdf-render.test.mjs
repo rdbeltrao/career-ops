@@ -74,6 +74,20 @@ test("spawnGeneratePdf: clean exit -> ok:true, invokes generate-pdf.mjs with --a
   assert.equal(calls[0].opts.cwd, "/root", "the script runs from the checkout, not the data root");
 });
 
+test("render and tracker children use the profile resolved from a separate data root", async t => {
+  const prior = process.env.CAREER_OPS_PROFILE;
+  process.env.CAREER_OPS_PROFILE = "custom/profile.yml";
+  t.after(() => { if (prior === undefined) delete process.env.CAREER_OPS_PROFILE; else process.env.CAREER_OPS_PROFILE = prior; });
+  const calls = [];
+  const spawnFn = (_exec, _args, opts) => { calls.push(opts); return fakeChild(); };
+  await spawnGeneratePdf({ spawnFn, execPath: "node", root: "/separate/data", codeRoot: "/code", html: "a.html", finalPdf: "a.pdf", format: "a4", reportNum: "1" });
+  await markTrackerReady({ spawnFn, execPath: "node", root: "/separate/data", codeRoot: "/code", reportNum: "1" });
+  for (const options of calls) {
+    assert.equal(options.env.CAREER_OPS_ROOT, "/separate/data");
+    assert.equal(options.env.CAREER_OPS_PROFILE, "/separate/data/custom/profile.yml");
+  }
+});
+
 test("spawnGeneratePdf: non-zero exit -> ok:false, stderr surfaced", async () => {
   // Given generate-pdf.mjs will exit non-zero with a stderr message
   const spawnFn = () => fakeChild({ exitCode: 1, stderr: "section order guard failed" });

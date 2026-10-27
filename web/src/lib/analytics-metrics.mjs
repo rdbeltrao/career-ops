@@ -50,7 +50,7 @@ export function computeProgressMetrics(applications = [], achievements) {
   for (const app of apps) {
     const status = normalizedStatus(app?.status);
     statusCounts.set(status, (statusCounts.get(status) ?? 0) + 1);
-    const score = scoreValue(app?.score);
+    const score = status === "NEEDS REVIEW" ? NaN : scoreValue(app?.score);
     if (Number.isFinite(score) && score > 0) {
       scores.push(score);
       totalScore += score;
@@ -247,7 +247,7 @@ export function computeStatsMetrics(applications = []) {
   let scoredCount = 0;
 
   for (const app of apps) {
-    const score = scoreValue(app?.score);
+    const score = normalizedStatus(app?.status) === "NEEDS REVIEW" ? NaN : scoreValue(app?.score);
     const rawArchetype = String(app?.archetype ?? "").trim();
     if (rawArchetype) {
       const archetype = canonicalizeArchetype(rawArchetype);

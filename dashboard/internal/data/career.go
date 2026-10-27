@@ -653,7 +653,7 @@ func ComputeMetrics(apps []model.CareerApplication) model.PipelineMetrics {
 		status := NormalizeStatus(app.Status)
 		m.ByStatus[status]++
 
-		if app.Score > 0 {
+		if NormalizeStatus(app.Status) != "needs_review" && app.Score > 0 {
 			totalScore += app.Score
 			scored++
 			if app.Score > m.TopScore {
@@ -690,6 +690,8 @@ func NormalizeStatus(raw string) string {
 	}
 
 	switch {
+	case s == "needs review" || s == "needs_review" || s == "needs_confirmation":
+		return "needs_review"
 	// Most restrictive first — accepts English, Spanish, and Turkish
 	case s == "hired" || s == "contratado" || s == "contratada" || s == "accepted" || s == "accept" || s == "kabul edildi" || s == "kabul_edildi" || s == "işe alındı" || s == "ise alindi" || s == "işe alindi":
 		return "hired"
@@ -1027,7 +1029,7 @@ func UpdateApplicationStatusAndNotes(careerOpsPath string, app model.CareerAppli
 // Reject malformed UI input cheaply; the writer validates against states.yml.
 func isCanonicalStatusName(status string) bool {
 	switch strings.ToLower(status) {
-	case "evaluated", "applied", "responded", "assessment", "interview", "offer", "hired", "rejected", "discarded", "skip":
+	case "needs_review", "needs review", "evaluated", "applied", "responded", "assessment", "interview", "offer", "hired", "rejected", "discarded", "skip":
 		return true
 	}
 	return false
@@ -1079,7 +1081,7 @@ func ComputeProgressMetrics(apps []model.CareerApplication, history ...map[int]i
 		norm := NormalizeStatus(app.Status)
 		statusCounts[norm]++
 
-		if app.Score > 0 {
+		if norm != "needs_review" && app.Score > 0 {
 			totalScore += app.Score
 			scored++
 			if app.Score > pm.TopScore {

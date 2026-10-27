@@ -12,6 +12,7 @@ import { readReport } from "./report-header.mjs";
 export { canonStatus };
 
 export const CANONICAL_STATES = [
+  "Needs review",
   "Evaluated",
   "Applied",
   "Responded",

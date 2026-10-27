@@ -1,6 +1,29 @@
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { BASE_CV_TEMPLATE } from "../run-prompts.mjs";
+import { getProfilePath } from "./profile-path.mjs";
+
+/** Only the report's URL header identifies the target ATS, never body links. */
+export function reportPostingUrl(report) {
+  const header = String(report).match(/^\*\*URL:\*\*\s*(.+)$/m)?.[1];
+  return header?.match(/https?:\/\/[^\s)>]+/)?.[0];
+}
+
+/**
+ * Strict selection for new runs: bad preferences must not silently change layout.
+ * @param {string} root
+ * @param {{dataRoot?: string, template?: string, url?: string}} [options]
+ */
+export async function resolveCvTemplateSelection(root, { dataRoot = root, template, url } = {}) {
+  const core = await import(/* webpackIgnore: true */ pathToFileURL(path.join(root, "lib/cv-template-preferences.mjs")).href);
+  const selected = core.chooseCvTemplate({
+    profilePath: getProfilePath(dataRoot),
+    dir: path.join(root, "templates"),
+    template,
+    url,
+  });
+  return { ...selected, template: path.relative(root, selected.path).split(path.sep).join("/") };
+}
 
 /**
  * ACL for the core's CV-template resolver (cv-templates.mjs), so a dashboard pdf

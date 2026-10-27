@@ -98,6 +98,15 @@ const CALL_SITES = [
     probe: 'run',
   },
   {
+    source: 'web/src/app/api/tracker/merge/route.ts',
+    script: 'merge-listings.mjs',
+    // The route adds --dry-run for a preview. Exercise its exact merge argv
+    // against two compatible rows without changing the shared fixture.
+    args: ['--keep', '1', '--nums', '1,2', '--dry-run'],
+    expectJson: true,
+    probe: 'run',
+  },
+  {
     source: 'web/src/lib/core/scan.ts',
     script: 'scan-ats-full.mjs',
     // The values are the route's own defaults; only the flag names matter here.
@@ -265,8 +274,8 @@ export function verifyWebStaticSources({ root = ROOT, reportPass = pass, reportF
 export function runWebCoreArgvContract() {
   const sandbox = mkdtempSync(join(tmpdir(), 'co-web-argv-'));
   try {
-    // A minimal data root: one Applied row, enough for every script here to have
-    // something to report on. Fictional company and role.
+    // A minimal data root: two compatible Applied rows, enough for the merge
+    // preview and for every other script to report on. Fictional company and role.
     const tracker = join(sandbox, 'data', 'applications.md');
     mkdirSync(join(sandbox, 'data'), { recursive: true });
     writeFileSync(
@@ -274,7 +283,8 @@ export function runWebCoreArgvContract() {
       '# Applications Tracker\n\n' +
         '| # | Date | Company | Role | Score | Status | PDF | Report | Notes |\n' +
         '|---|------|---------|------|-------|--------|-----|--------|-------|\n' +
-        '| 1 | 2026-01-05 | Northwind Robotics | Backend Engineer | 4.2/5 | Applied | ✅ | [1](reports/001-northwind-robotics-2026-01-05.md) | fixture |\n',
+        '| 1 | 2026-01-05 | Northwind Robotics | Backend Engineer | 4.2/5 | Applied | ✅ | [1](reports/001-northwind-robotics-2026-01-05.md) | fixture |\n' +
+        '| 2 | 2026-01-05 | Northwind Robotics | Backend Engineer | 4.2/5 | Applied | ❌ | — | second fixture |\n',
       'utf-8',
     );
 

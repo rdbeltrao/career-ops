@@ -63,7 +63,7 @@ test('pending rows match an evaluated report by company and role, not only by UR
   const r = run();
   assert.equal(r.status, 0, describeSpawn(r, ''));
   const text = readFileSync(pipeline, 'utf8');
-  assert.match(text, /^- \[x\] \[200\]\(\.\.\/reports\/200-statista-2026-10-24\.md\) \| https:\/\/jobs\.ashbyhq\.com\/statista\/d13572c5 \| statista \| Engineering Manager - Data Platform \(m\/f\/d\) \| 2\.0\/5 \| PDF ❌$/m, text);
+  assert.match(text, /^- \[x\] \[200\]\(\.\.\/reports\/200-statista-2026-10-24\.md\) \| https:\/\/jobs\.ashbyhq\.com\/statista\/d13572c5 \| statista \| Engineering Manager - Data Platform \(m\/f\/d\) \| 2\.0\/5 \| PDF ❌ \| jev: 21 maybe — x$/m, text);
   assert.match(text, /^- \[ \] https:\/\/jobs\.ashbyhq\.com\/pragmatike\/023fa634 /m, 'a gate stop is not an evaluation, so its role stays pending');
   assert.match(text, /^- \[ \] https:\/\/jobs\.example\.test\/gamma \| Gamma \| Lead$/m);
   assert.match(r.stdout, /#200 statista — Engineering Manager - Data Platform \(m\/f\/d\) \(2\.0\/5\)/);

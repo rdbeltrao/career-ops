@@ -16,7 +16,23 @@ const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const SCRIPT = join(ROOT, 'persist-evaluation-report.mjs');
 
 const payload = (url) => JSON.stringify({
-  markdown: '# Evaluation: Acme — Engineer\n\n**Score:** 4.2/5\n',
+  markdown: `# Evaluation: Acme — Engineer
+
+**Score:** 4.2/5
+**Jev:** not run
+**Scoring note:** no Jev gate
+
+## Machine Summary
+\`\`\`yaml
+company: Acme
+role: Engineer
+score: 4.2
+final_decision: Apply
+jev: null
+\`\`\`
+
+${['A', 'B', 'C', 'D', 'E', 'F', 'G'].map(letter => `## ${letter}) Evaluation\nEvidence.`).join('\n\n')}
+`,
   num: '042', today: '2026-10-02', company: 'Acme', role: 'Engineer', score: '4.2/5',
   via: null, url, notes: '', reportFile: '042-acme-2026-10-02.md',
 });

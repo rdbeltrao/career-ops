@@ -81,9 +81,9 @@ test("buildPrompt: the pdf prompt still pins tailoring to the real mode", () => 
   assert.match(prompt, /reports\/018-\*\.md/);
 });
 
-test("buildPrompt: every kind ends with exactly one VERDICT instruction", () => {
+test("buildPrompt: scored workers request one verdict; PDF drafts defer to backend validation", () => {
   // Given each kind — job-store.tsx parses that final line client-side
-  for (const kind of ["pdf", "research", "evaluate", "fix-portal", "cover"]) {
+  for (const kind of ["research", "evaluate", "fix-portal", "cover"]) {
     const prompt = buildPrompt({ kind, ...ARGS, ...(kind === "cover" ? COVER_ARGS : {}) });
 
     // Then the contract is present exactly once, so the parse cannot pick a
@@ -91,6 +91,9 @@ test("buildPrompt: every kind ends with exactly one VERDICT instruction", () => 
     const mentions = prompt.match(/VERDICT:/g) ?? [];
     assert.equal(mentions.length, 1, `${kind} must state VERDICT once, got ${mentions.length}`);
   }
+  const pdf = buildPrompt({ kind: "pdf", ...ARGS });
+  assert.doesNotMatch(pdf, /VERDICT:/);
+  assert.match(pdf, /awaits backend validation/);
 });
 
 test("buildPrompt: an unknown kind falls through to the evaluate prompt", () => {

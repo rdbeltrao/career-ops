@@ -304,7 +304,7 @@ const SIMPLE_CLAIM_PATTERNS = [
   new RegExp(String.raw`(?<![\w$€£])[$€£]\s?\d[\d,.]*(?:\s?(?:thousand|million|billion)\b|\s?[kKmMbB])?`, 'gu'),
   new RegExp(String.raw`(?:\b(?:USD|EUR|GBP)|\bUS\$)\s?\d[\d,.]*${MAGNITUDE_ALT}?`, 'gu'),
   new RegExp(String.raw`\b\d[\d,.]*${MAGNITUDE_ALT}?\s?-?\s?(?:(?:USD|EUR|GBP)\b|(?:[Dd]ollars?|[Ee]uros?)\b)`, 'gu'),
-  /\b\d+(?:\.\d+)?\s?x\b/gi,
+  /\b\d+(?:\.\d+)?[^\S\n]?(?:x\b|×(?=$|[^\p{L}\p{N}_]))/giu,
   /\b\d+(?:\.\d+)?\s?-?\s?fold\b/gi,
 ];
 
@@ -328,7 +328,7 @@ function canonicalMetric(raw) {
   const claim = normalizeClaim(raw);
   const percent = /^(\d+(?:\.\d+)?) ?(?:%|percent|per ?cent|pct)$/.exec(claim);
   if (percent) return `${percent[1]}%`;
-  const multiplier = /^(\d+(?:\.\d+)?) ?(?:x|-? ?fold)$/.exec(claim);
+  const multiplier = /^(\d+(?:\.\d+)?) ?(?:x|×|-? ?fold)$/.exec(claim);
   if (multiplier) return `${multiplier[1]}x`;
   const amount = String.raw`(\d[\d.]*)(?: ?(thousand|million|billion|[kmb]))?`;
   const lead = new RegExp(String.raw`^(\$|€|£|us\$|usd|eur|gbp) ?${amount}$`).exec(claim);
@@ -2029,6 +2029,13 @@ function sourceContainsFact(sourceText, value) {
   return new RegExp(`(?:^|[^\\p{L}\\p{N}+#/-])${escaped}(?=$|[^\\p{L}\\p{N}+#/-])`, 'iu').test(sourceText);
 }
 
+// Degree and subject words stay exact. Only list punctuation and the two
+// equivalent ways to introduce a focus are folded, never the qualification.
+function educationWording(text) {
+  return text.replace(/\bwith (?:a )?focus on\b/g, 'focus on')
+    .replace(/[(),]/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
 /**
  * @param {string} targetText generated candidate-facing HTML/Markdown/text
  * @param {{ dataRoot?: string, sourcePaths?: string[], planTexts?: string[], configPath?: string, cwd?: string }} options
@@ -2066,8 +2073,11 @@ export function verifyFacts(targetText, {
   const planned = plannedClaims(targetText, planTexts);
   const invented = [...targetClaims].filter(claim => !allowed.has(claim) && !planned.has(claim));
   const sourceNormalized = normalizeFact(stripMarkup(sourceText));
+  const educationSource = educationWording(sourceNormalized);
   const allowedFacts = new Set((library ? [] : config.allow_facts).map(normalizeFact));
-  const unsourced = ({ value }) => !sourceContainsFact(sourceNormalized, value) && !allowedFacts.has(value);
+  const unsourced = ({ kind, value }) => !sourceContainsFact(sourceNormalized, value)
+    && !(kind === 'education' && sourceContainsFact(educationSource, educationWording(value)))
+    && !allowedFacts.has(value);
   const fieldClaims = structuredFieldClaims(targetText).filter(unsourced);
   const namedFacts = [
     ...factClaims(targetText, sourceNormalized),

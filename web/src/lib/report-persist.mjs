@@ -12,10 +12,10 @@
  * process and never touch the real allocator or tracker.
  */
 import path from "node:path";
+import { prepareEvaluationReport, machineSummary } from "./core/evaluation-report.mjs";
 import { slugify } from "./pdf-paths.mjs";
 
 const ISO_DATE_RE = /^20\d{2}-\d{2}-\d{2}$/;
-const YAML_FENCE = /##\s*Machine Summary\s*\n+```(?:yaml|yml)?\s*\n([\s\S]*?)\n```/i;
 const TITLE_RE = /^#\s+Evaluation:\s+(.+?)\s+(?:—|--|–|-)\s+(.+)$/m;
 
 /**
@@ -34,7 +34,7 @@ export function evaluateRunOutcome({ envelope, noOutputMessage, sawError, cleanE
   // `needs_confirmation: {reason} {target} - {what to do}` line (modes/oferta.md).
   // That is a question for the user, not a broken run, so say so. Only for a
   // clean run: a crash that happened to print the line is still a failure.
-  const gate = cleanExit && !sawError && envelope?.ok !== true ? confirmationGate(agentText) : null;
+  const gate = cleanExit && !sawError ? confirmationGate(agentText) : null;
   if (gate) {
     return {
       ok: false,
@@ -111,12 +111,13 @@ function tsvUnsafe(value) {
 }
 
 export function parseReportMeta(markdown) {
-  const fence = String(markdown ?? "").match(YAML_FENCE)?.[1] ?? "";
+  const summary = machineSummary(markdown).data;
+  const scalar = key => summary && typeof summary[key] !== "object" && summary[key] != null ? String(summary[key]).trim() || null : null;
   const title = String(markdown ?? "").match(TITLE_RE);
-  const company = yamlScalar(fence, "company") || title?.[1]?.trim() || null;
-  const role = yamlScalar(fence, "role") || title?.[2]?.trim() || null;
-  const score = formatScore(yamlScalar(fence, "score"));
-  const via = yamlScalar(fence, "via");
+  const company = scalar("company") || title?.[1]?.trim() || null;
+  const role = scalar("role") || title?.[2]?.trim() || null;
+  const score = formatScore(scalar("score"));
+  const via = scalar("via");
   if (!company || !role) {
     return { ok: false, error: "The report's Machine Summary is missing company or role, so the tracker row cannot be built." };
   }
@@ -223,6 +224,9 @@ export async function persistEvaluation({ spawnFn, execPath, root, codeRoot = ro
   }
   const meta = parseReportMeta(markdown);
   if (!meta.ok) return meta;
+  const prepared = prepareEvaluationReport(markdown);
+  if (!prepared.ok) return prepared;
+  markdown = prepared.markdown;
 
   const reserved = await spawnScript({
     spawnFn, execPath, root, codeRoot, script: "reserve-report-num.mjs",

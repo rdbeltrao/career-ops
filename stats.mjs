@@ -41,7 +41,7 @@ const SCAN_RUNS_FILE = join(DATA_ROOT, 'data', 'scan-runs.tsv');
 const PORTALS_FILE = join(DATA_ROOT, 'portals.yml');
 const PORTAL_HEALTH_FILE = join(DATA_ROOT, 'data', 'portal-health.tsv');
 
-const CANONICAL_STATUSES = ['Evaluated', 'Applied', 'Responded', 'Assessment', 'Interview', 'Offer', 'Hired', 'Rejected', 'Discarded', 'SKIP'];
+const CANONICAL_STATUSES = ['Needs review', 'Evaluated', 'Applied', 'Responded', 'Assessment', 'Interview', 'Offer', 'Hired', 'Rejected', 'Discarded', 'SKIP'];
 
 // In-flight applications, shared with the web Analytics and Go dashboard
 // ActiveApps: an evaluated-but-never-sent row is a candidate, not an
@@ -60,6 +60,7 @@ const pct = (part, total) => (total > 0 ? round1((part / total) * 100) : 0);
 /** Canonical display form ("aplicado" → "Applied", "skip" → "SKIP"); unknown → "Unknown" (counted, never dropped). */
 function canonicalStatus(raw) {
   const norm = normalizeStatus(String(raw ?? ''));
+  if (norm === 'needs_review') return 'Needs review';
   if (norm === 'skip') return 'SKIP';
   const cased = norm.charAt(0).toUpperCase() + norm.slice(1);
   return CANONICAL_STATUSES.includes(cased) ? cased : 'Unknown';
@@ -88,7 +89,7 @@ export function computeTrackerStats(content) {
     byStatus[status] = (byStatus[status] || 0) + 1;
     if (ACTIVE_STATUSES.has(status)) activeApps++;
     const score = parseFloat(String(row.score || '').replace(/\*/g, ''));
-    if (!Number.isNaN(score) && score > 0) {
+    if (status !== 'Needs review' && !Number.isNaN(score) && score > 0) {
       scoreSum += score;
       scoreCount++;
       if (score > topScore) topScore = score;

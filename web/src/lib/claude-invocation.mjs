@@ -150,10 +150,10 @@ export function grantsWriteCapability(scope) {
  * Assembled here, not in the route, so a guard can assert on the command line
  * that actually ships instead of on source text that can be rewritten around it.
  *
- * @param {{kind: string, prompt: string}} args
+ * @param {{kind: string, prompt: string, inlineInputs?:boolean}} args
  * @returns {string[]}
  */
-export function claudeCliArgs({ kind, prompt }) {
+export function claudeCliArgs({ kind, prompt, inlineInputs = false }) {
   const scope = toolScopeFor(kind);
   return [
     "-p", prompt,
@@ -161,6 +161,9 @@ export function claudeCliArgs({ kind, prompt }) {
     "--verbose",
     "--include-partial-messages",
     "--permission-mode", "acceptEdits",
+    // The platform supplies the PDF worker's complete inputs. No read tools
+    // means no repeated reads, blocked-read retries or alternate-tool bypasses.
+    ...(kind === "pdf" && inlineInputs ? ["--tools", ""] : []),
     // Every non-writing kind. --strict-mcp-config with no --mcp-config loads
     // zero MCP servers, so the tool lists below describe everything the agent
     // can reach. Without it, a server from the user's own config could supply

@@ -669,7 +669,7 @@ export function resolveTemplate(kind, name, opts = {}) {
 
 // ---- CLI ----
 const isMain = isMainModule(import.meta.url);
-if (isMain) {
+async function runCli() {
   const argv = process.argv.slice(2);
   const cmd = argv[0];
   const kind = argv[1];
@@ -687,7 +687,17 @@ if (isMain) {
       process.stdout.write(JSON.stringify(items, null, 2) + '\n');
     } else if (cmd === 'resolve') {
       const name = positionals[0];
-      process.stdout.write(resolveTemplate(kind, name, { format, fallback: Boolean(flags.fallback) }) + '\n');
+      if (flags.url !== undefined) {
+        if (kind !== 'cv' || format !== 'html' || typeof flags.url !== 'string') {
+          throw new Error('--url requires an HTML CV and a posting URL: resolve cv [name] --url=https://…');
+        }
+        // EVIDENCE: the same preference selector serves CLI and web generation;
+        // importing only here avoids a registry/preference initialization cycle.
+        const { chooseCvTemplate } = await import('./lib/cv-template-preferences.mjs');
+        process.stdout.write(chooseCvTemplate({ template: name, url: flags.url }).path + '\n');
+      } else {
+        process.stdout.write(resolveTemplate(kind, name, { format, fallback: Boolean(flags.fallback) }) + '\n');
+      }
     } else if (cmd === 'lint') {
       // Advisory by construction: exit 0 whatever it finds. resolveTemplate is
       // deliberately left alone — a lint finding must never block a render.
@@ -701,7 +711,7 @@ if (isMain) {
       const name = positionals[0];
       process.stdout.write(JSON.stringify(atsLint(resolveTemplate(kind, name, { format, fallback: Boolean(flags.fallback) }), kind), null, 2) + '\n');
     } else {
-      process.stderr.write('Usage: node cv-templates.mjs <list|resolve|lint> <cv|cover> [name] [--format=html|tex] [--fallback]\n');
+      process.stderr.write('Usage: node cv-templates.mjs <list|resolve|lint> <cv|cover> [name] [--format=html|tex] [--fallback] [--url=https://…]\n');
       process.exit(2);
     }
   } catch (err) {
@@ -709,3 +719,5 @@ if (isMain) {
     process.exit(1);
   }
 }
+
+if (isMain) void runCli();

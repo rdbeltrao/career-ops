@@ -171,7 +171,7 @@ test('a runner-shaped report (a "(pasted)" URL line first, a comma title, Machin
   assert.match(r.stdout, /1 report\(s\) have no tracker row/);
   assert.doesNotMatch(r.stderr + r.stdout, /062-jobgether/, 'a pause is not a report: no move, no tracker row, no warning');
   const text = readFileSync(pipeline, 'utf8');
-  assert.match(text, /^- \[x\] \[25\]\(\.\.\/reports\/025-company-2026-10-24\.md\) \| https:\/\/www\.linkedin\.com\/jobs\/view\/4436712394\/ \| Deluxe \| Director \| 2\.6\/5 \| PDF ❌$/m);
+  assert.match(text, /^- \[x\] \[25\]\(\.\.\/reports\/025-company-2026-10-24\.md\) \| https:\/\/www\.linkedin\.com\/jobs\/view\/4436712394\/ \| Deluxe \| Director \| 2\.6\/5 \| PDF ❌ \| jev: 20 maybe$/m);
   assert.match(text, /^- \[ \] https:\/\/www\.linkedin\.com\/jobs\/view\/4480292808\/ \| Jobgether \| EM$/m);
   const tracker = readFileSync(join(root, 'data', 'applications.md'), 'utf8');
   assert.match(tracker, /\| 25 \| 2026-10-24 \| Deluxe \| Director, AI Engineering & Platform \| 2\.6\/5 \| Evaluated \| ❌ \| \[025\]\(\.\.\/reports\/025-company-2026-10-24\.md\) \|/);

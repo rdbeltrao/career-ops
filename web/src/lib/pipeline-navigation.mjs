@@ -26,6 +26,7 @@ export function pipelineQuery(params, search) {
 export const PIPELINE_TABS = /** @type {const} */ ([
   "INBOX",
   "ALL",
+  "NEEDS REVIEW",
   "EVALUATED",
   "APPLIED",
   "RESPONDED",

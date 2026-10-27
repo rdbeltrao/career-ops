@@ -98,16 +98,20 @@ function writerSpec(fsImpl) {
 
 const REPORT = `# Evaluation: Acme AI — Senior Engineer
 
+**Jev:** not run
+**Scoring note:** no Jev gate
+
 ## Machine Summary
 \`\`\`yaml
 company: "Acme AI"
 role: "Senior Engineer"
 score: 4.2
 via: null
+final_decision: Apply
+jev: null
 \`\`\`
 
-## A) Role Summary
-A role.`;
+${['A', 'B', 'C', 'D', 'E', 'F', 'G'].map(letter => `## ${letter}) Evaluation\nEvidence.`).join('\n\n')}`;
 
 test("evaluateRunOutcome: missing envelope fails closed", () => {
   const outcome = evaluateRunOutcome({
@@ -149,6 +153,22 @@ test("evaluateRunOutcome: a confirmation line does not hide a crashed run", () =
   assert.equal(outcome.ok, false);
   assert.equal(outcome.needsConfirmation, undefined);
   assert.match(outcome.message, /didn't produce a report/);
+});
+
+test("evaluateRunOutcome: a gate stop wins even when the worker wraps a report", () => {
+  const outcome = evaluateRunOutcome({ envelope: { ok: true, markdown: REPORT }, noOutputMessage: null,
+    sawError: false, cleanExit: true, agentText: 'needs_confirmation: jev mismatch - rerun with evaluate anyway' });
+  assert.equal(outcome.ok, false);
+  assert.equal(outcome.needsConfirmation, 'jev');
+});
+
+test("persistEvaluation: incomplete or unrecorded Jev writes nothing and reserves no number", async () => {
+  for (const markdown of [REPORT.replace(/## [A-G]\) Evaluation\nEvidence\./g, ''), REPORT.replace('jev: null', '')]) {
+    const result = await persistEvaluation({ spawnFn: () => { throw new Error('must not spawn'); }, execPath: 'node', root: '/unused',
+      markdown, url: 'https://example.test/job/1', today: '2026-10-26' });
+    assert.equal(result.ok, false);
+    assert.match(result.error, /incomplete|must record jev/);
+  }
 });
 
 test("evaluateRunOutcome: clean envelope is ok", () => {
