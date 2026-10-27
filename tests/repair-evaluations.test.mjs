@@ -34,6 +34,20 @@ test('explicit not-run does not borrow a saved rating', () => {
   assert.doesNotMatch(plan.reports[0].after, /99|source:.*old/);
 });
 
+test('repair help exits before reading or writing candidate data', t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'repair-help-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const script = new URL('../repair-evaluations.mjs', import.meta.url);
+  for (const args of [['--help'], ['-h'], ['--apply', '--help']]) {
+    const result = spawnSync(process.execPath, [script.pathname, ...args], {
+      cwd: root, encoding: 'utf8', env: { ...process.env, CAREER_OPS_ROOT: root, CAREER_OPS_TRACKER: '' },
+    });
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /^Usage: node repair-evaluations\.mjs/m);
+    assert.deepEqual(fs.readdirSync(root), []);
+  }
+});
+
 test('live repair backs up evidence, uses canonical status ledger and is idempotent', t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'repair-evaluations-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));

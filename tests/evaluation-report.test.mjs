@@ -21,8 +21,12 @@ jev:${jev === 'null' ? ' null' : `\n${jev}`}
 ${'ABCDEFG'.split('').map(l => `## ${l}) Evaluation\nEvidence.`).join('\n\n')}
 `;
 
-test('web report evidence mirror stays byte-identical to core', () => {
-  assert.equal(readFileSync(new URL('../lib/evaluation-report.mjs', import.meta.url), 'utf8'), readFileSync(new URL('../web/src/lib/core/evaluation-report.mjs', import.meta.url), 'utf8'));
+test('web report evidence mirror differs only by its YAML adapter import', () => {
+  // The web bundle cannot statically import the core helper outside its root.
+  // Empty YAML remains invalid report evidence with either parser adapter.
+  const core = readFileSync(new URL('../lib/evaluation-report.mjs', import.meta.url), 'utf8');
+  const web = readFileSync(new URL('../web/src/lib/core/evaluation-report.mjs', import.meta.url), 'utf8');
+  assert.equal(core.replace("import { loadYaml } from './yaml-document.mjs';", "import { load as loadYaml } from 'js-yaml';"), web);
 });
 
 test('structured Jev after a long JD is recovered without confusing global score', () => {

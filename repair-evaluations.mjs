@@ -94,8 +94,13 @@ export function auditEvaluations(root, tracker) {
 
 async function main() {
   const args = process.argv.slice(2);
+  const usage = 'Usage: node repair-evaluations.mjs [--dry-run | --apply] [--help | -h]';
+  if (args.includes('--help') || args.includes('-h')) {
+    console.log(usage);
+    return;
+  }
   if (args.some(arg => !['--apply', '--dry-run'].includes(arg)) || (args.includes('--apply') && args.includes('--dry-run'))) {
-    throw new Error('Usage: node repair-evaluations.mjs [--dry-run | --apply]');
+    throw new Error(usage);
   }
   const root = getCareerOpsRoot();
   const tracker = resolveTrackerPath(root);

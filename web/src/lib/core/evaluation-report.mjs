@@ -1,5 +1,6 @@
 /** Report evidence shared with the web mirror (guarded by a parity test). */
 import * as yaml from 'js-yaml';
+import { load as loadYaml } from 'js-yaml';
 
 const VERDICTS = new Set(['apply', 'maybe', 'skip']);
 const SUMMARY = /^##[ \t]+Machine Summary[ \t]*\r?\n+```(?:yaml|yml)?[ \t]*\r?\n([\s\S]*?)\r?\n```[ \t]*$/gim;
@@ -22,7 +23,7 @@ export function machineSummary(markdown) {
   const matches = [...text.matchAll(SUMMARY)];
   if (matches.length !== 1) return { data: null, error: 'Expected exactly one Machine Summary YAML fence.' };
   try {
-    const data = yaml.load(matches[0][1], { schema: yaml.JSON_SCHEMA });
+    const data = loadYaml(matches[0][1], { schema: yaml.JSON_SCHEMA });
     if (!data || typeof data !== 'object' || Array.isArray(data)) throw new Error('Expected a mapping.');
     return { data, error: null };
   } catch {
