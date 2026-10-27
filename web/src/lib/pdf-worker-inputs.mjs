@@ -62,7 +62,10 @@ export function readPdfWorkerInputs({ codeRoot, dataRoot, reportFile, hasContext
   ];
   if (!hasContext) {
     for (const file of ["modes/_context.md", "cv.md", "article-digest.md", "modes/_profile.md", "voice-dna.md"]) {
-      inputs.push([file, optionalText(path.join(dataRoot, file))]);
+      // EVIDENCE: fallback candidate files belong to the runtime data root,
+      // never the deployment bundle. Keep the fixed code-root procedures traced.
+      // https://github.com/vercel/next.js/pull/95144
+      inputs.push([file, optionalText(path.join(/* turbopackIgnore: true */ dataRoot, file))]);
     }
     inputs.push(["Profile — targeting preferences only", JSON.stringify({ preferences: profile.preferences, interests: profile.interests })]);
   }

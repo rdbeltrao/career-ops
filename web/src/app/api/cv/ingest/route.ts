@@ -97,7 +97,10 @@ export async function POST(req: Request) {
       }
       const ext = (file.name.match(/\.[a-z0-9]+$/i)?.[0] || ".pdf").toLowerCase();
       const dir = fs.mkdtempSync(path.join(os.tmpdir(), "career-ops-cv-"));
-      tempFile = path.join(dir, `cv${ext}`); // outside the repo, basename-only
+      // EVIDENCE: uploaded CVs are runtime-only temporary files. Turbopack must
+      // not infer deployment dependencies from their dynamic cv-prefixed paths.
+      // https://github.com/vercel/next.js/pull/95144
+      tempFile = path.join(/* turbopackIgnore: true */ dir, `cv${ext}`); // outside the repo, basename-only
       fs.writeFileSync(tempFile, Buffer.from(await file.arrayBuffer()), { mode: 0o600 }); // PII → owner-only
       promptSource = FILE_SRC(tempFile);
     } else {

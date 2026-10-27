@@ -33,7 +33,10 @@ export function workspaceFilePath(root, relative) {
   }
   let current = canonicalWorkspaceRoot(root);
   for (let i = 0; i < parts.length; i++) {
-    current = path.join(current, parts[i]);
+    // EVIDENCE: user data is resolved at runtime, potentially outside the app.
+    // Annotations exclude data from build traces, not these containment checks.
+    // https://github.com/vercel/next.js/pull/95144
+    current = path.join(/* turbopackIgnore: true */ current, parts[i]);
     let stat;
     try { stat = fs.lstatSync(current); }
     catch (e) { if (e?.code === 'ENOENT') continue; throw e; }
@@ -50,8 +53,8 @@ export function readWorkspaceFile(root, relative, maxBytes = MAX_DOCUMENT_BYTES)
   const file = workspaceFilePath(root, relative);
   let bytes;
   try {
-    if (fs.statSync(file).size > maxBytes) throw new WorkspaceError('Workspace file is too large.', 'too_large', 413);
-    bytes = fs.readFileSync(file);
+    if (fs.statSync(/* turbopackIgnore: true */ file).size > maxBytes) throw new WorkspaceError('Workspace file is too large.', 'too_large', 413);
+    bytes = fs.readFileSync(/* turbopackIgnore: true */ file);
   } catch (e) {
     if (e?.code === 'ENOENT') return { file, content: '', exists: false };
     throw e;

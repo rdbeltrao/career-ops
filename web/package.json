@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "node server.mjs dev",
     "build": "next build",
+    "postbuild": "node --test tests/lib/runtime-file-tracing.test.mjs",
     "start": "node server.mjs start",
     "typecheck": "tsc --noEmit",
     "test": "node --experimental-strip-types --test \"tests/**/*.test.mjs\""

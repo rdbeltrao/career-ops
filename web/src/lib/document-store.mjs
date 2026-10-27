@@ -59,7 +59,10 @@ function outputPath(root, id) {
   const filename = filenameFromId(id);
   const output = safeDirectory(root, ['output']);
   if (!output) throw new DocumentStoreError(404, 'Document not found.');
-  return { filename, file: path.join(output, filename) };
+  // EVIDENCE: these validated paths address runtime user data, not deployment
+  // assets. Keep them out of Turbopack's build-time filesystem tracing.
+  // https://github.com/vercel/next.js/pull/95144
+  return { filename, file: path.join(/* turbopackIgnore: true */ output, filename) };
 }
 
 function readRegular(file, missingMessage = 'Document not found.') {
@@ -141,10 +144,10 @@ function readIdentity(directory, key) {
 function historyFiles(root, id, child) {
   const dir = historyDirectory(root, id, child);
   if (!dir) return [];
-  return fs.readdirSync(dir).map((filename) => {
+  return fs.readdirSync(/* turbopackIgnore: true */ dir).map((filename) => {
     const token = filename.replace(/\.pdf$/, '');
     if (filename !== `${token}.pdf` || !TOKEN.test(token)) throw new DocumentStoreError(409, 'Document recovery history contains an invalid entry.');
-    const stat = fs.lstatSync(path.join(dir, filename));
+    const stat = fs.lstatSync(path.join(/* turbopackIgnore: true */ dir, filename));
     if (!stat.isFile() || stat.isSymbolicLink()) throw new DocumentStoreError(409, 'Document recovery history contains an unsafe entry.');
     return { id: token, createdAt: new Date(Number(token.slice(0, 13))).toISOString() };
   }).sort((a, b) => b.id.localeCompare(a.id));
@@ -154,7 +157,7 @@ export function listDocumentTrash(root) {
   const dir = safeDirectory(root, ['.career-ops-web', 'document-history']);
   if (!dir) return [];
   const documents = [];
-  for (const key of fs.readdirSync(dir)) {
+  for (const key of fs.readdirSync(/* turbopackIgnore: true */ dir)) {
     if (!/^[a-f0-9]{64}$/.test(key)) throw new DocumentStoreError(409, 'Document recovery history contains an invalid directory.');
     const directory = safeDirectory(root, ['.career-ops-web', 'document-history', key]);
     if (!safeDirectory(root, ['.career-ops-web', 'document-history', key, 'trash'])) continue;
@@ -169,7 +172,7 @@ export function listDocumentTrash(root) {
 async function withDocumentLock(root, id, action) {
   const directory = historyDirectory(root, id, null, true);
   for (const suffix of ['document.lock', 'document.lock.recover']) {
-    const existing = statOrNull(path.join(directory, suffix));
+    const existing = statOrNull(path.join(/* turbopackIgnore: true */ directory, suffix));
     if (existing?.isSymbolicLink()) throw new DocumentStoreError(409, 'Document storage contains an unsafe lock.');
   }
   const lock = await acquireDirLock(path.join(directory, 'document.lock'), {

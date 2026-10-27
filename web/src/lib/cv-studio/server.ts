@@ -82,7 +82,9 @@ export async function loadStudio(n: string): Promise<StudioLoad> {
   const file = await findTailoredHtml(n, id.slug);
   if (!file) return { ok: false, reason: "no-tailored-cv" };
 
-  const html = fs.readFileSync(file, "utf8");
+  // EVIDENCE: validated tailored output is runtime user data, not a build asset.
+  // https://github.com/vercel/next.js/pull/95144
+  const html = fs.readFileSync(/* turbopackIgnore: true */ file, "utf8");
   const tree = parseBlocks(html);
   if (!tree.sections.some((s) => s.items.some((i) => i.bullets.length))) return { ok: false, reason: "unreadable-layout" };
 

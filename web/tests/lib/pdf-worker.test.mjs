@@ -56,6 +56,19 @@ test("missing or malformed PDF inputs fail instead of sending an incomplete prom
   assert.throws(() => readPdfWorkerInputs({ codeRoot, dataRoot, reportFile: "reports/001-example.md", hasContext: true }));
 });
 
+test("legacy PDF inputs read each fallback source from the runtime data root", t => {
+  const dataRoot = fixture(t);
+  const files = ["modes/_context.md", "cv.md", "article-digest.md", "modes/_profile.md", "voice-dna.md"];
+  for (const [index, file] of files.entries()) {
+    fs.writeFileSync(path.join(dataRoot, file), `RUNTIME_SOURCE_${index}`);
+  }
+  const inputs = readPdfWorkerInputs({ codeRoot, dataRoot, reportFile: "reports/001-example.md", hasContext: false });
+  for (const index of files.keys()) assert.ok(inputs.includes(`RUNTIME_SOURCE_${index}`));
+  assert.match(inputs, /Use plain language\./);
+  assert.match(inputs, /UNTRUSTED_REPORT_DATA/);
+  assert.doesNotMatch(inputs, /OMIT_PRIVATE_CONNECTION/);
+});
+
 test("compact inputs preserve nested job requirements and mode rules while excluding unrelated workflows", () => {
   const report = "# Evaluation: Example\nRole header\n## Job Description\nBuild services\n### Requirements\nREQUIRED_SKILL\n## D) Compensation and Demand\nUNRELATED_RESEARCH\n## Extracted Keywords\nKEYWORD";
   const compact = pdfReportContext(report);
