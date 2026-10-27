@@ -34,8 +34,9 @@
  * person and is not configurable: a random 1.5 to 4 s pause between cards,
  * 5 to 10 s between result pages, searches in random order (scan.mjs starts
  * `sequential` providers last and shuffled), one search at a time on the one
- * profile, and a job id already in `{DATA_ROOT}/data/linkedin-seen.json` is
- * never reopened. A login, checkpoint or authwall redirect stops the whole
+ * profile. Captured jobs are cached before their ids are marked seen, then
+ * replayed through the core filters and dedup on later runs. A login,
+ * checkpoint or authwall redirect stops the whole
  * LinkedIn part of the run at once with a clear message; nothing is retried
  * in that process.
  *
@@ -46,7 +47,7 @@
  * fixed from the real HTML (set LINKEDIN_DUMP_DIR to keep what a run saw).
  */
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync, renameSync, rmSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { decodeEntities } from '../providers/_html-entities.mjs';
 import { getCareerOpsRoot } from '../path-resolver.mjs';
@@ -404,6 +405,7 @@ export function htmlToText(el) {
 
 /**
  * @typedef {object} Detail
+ * @property {string} jobId Identity from the primary job heading.
  * @property {string} title
  * @property {string} company
  * @property {string} location
@@ -588,30 +590,44 @@ function companyUrl(root) {
  */
 export function parseDetail(html, { now } = {}) {
   const root = parseHtml(html);
-  const title = textFirst(root, '.job-details-jobs-unified-top-card__job-title', 'h1.t-24', 'h1', 'h2.jobs-details-top-card__job-title');
-  const company = textFirst(root, '.job-details-jobs-unified-top-card__company-name', '.jobs-unified-top-card__company-name', '.jobs-details-top-card__company-url');
+  const primary = selectOne(root, 'section[aria-label="Primary content"]');
+  const scope = primary || root;
+  const heading = firstNode(scope, '.job-details-jobs-unified-top-card__job-title', 'h1.t-24', 'h1', 'h2.jobs-details-top-card__job-title');
+  const headingLink = heading && selectOne(heading, 'a[href*="/jobs/view/"]');
+  const banner = primary && selectOne(primary, '[id^="JobDetails_ManageJobBanner_"]');
+  const modernId = /^JobDetails_ManageJobBanner_(\d+)$/.exec(banner?.attrs.id ?? '')?.[1];
+  const headingId = JOB_ID_RE.exec(headingLink?.attrs.href ?? '')?.[1];
+  const jobId = headingId && modernId && headingId !== modernId ? '' : headingId ?? modernId ?? '';
+  let title = textFirst(scope, '.job-details-jobs-unified-top-card__job-title', 'h1.t-24', 'h1', 'h2.jobs-details-top-card__job-title');
+  let company = textFirst(scope, '.job-details-jobs-unified-top-card__company-name', '.jobs-unified-top-card__company-name', '.jobs-details-top-card__company-url');
+  const parts = textFirst(root, 'title').split(' | ');
+  if (modernId && parts.length >= 3 && parts.at(-1) === 'LinkedIn') {
+    title = parts.slice(0, -2).join(' | ');
+    company = parts.at(-2);
+  }
   const meta = textFirst(
-    root,
+    scope,
     '.job-details-jobs-unified-top-card__tertiary-description-container',
     '.job-details-jobs-unified-top-card__primary-description-container',
     '.jobs-unified-top-card__primary-description',
     '.jobs-unified-top-card__subtitle-primary-grouping',
   );
-  const descNode = firstNode(root, ...DESCRIPTION_SELECTORS);
+  const descNode = firstNode(scope, ...DESCRIPTION_SELECTORS, '[data-testid="expandable-text-box"]');
   const description = htmlToText(descNode).replace(/^About the job\s*/, '').trim();
-  const pills = pillTexts(root);
+  const pills = pillTexts(scope);
   /** @type {Detail} */
   const detail = {
+    jobId,
     title,
     company,
     location: locationFromMeta(meta),
     description,
-    postedDate: datetimeFirst(root) || postedDateFromText(meta, now),
+    postedDate: datetimeFirst(scope) || postedDateFromText(meta, now),
     workplace: '',
     seniority: '',
     employmentType: '',
     salary: '',
-    companyUrl: companyUrl(root),
+    companyUrl: companyUrl(scope),
     pills,
   };
   for (const pill of pills) {
@@ -624,7 +640,7 @@ export function parseDetail(html, { now } = {}) {
     else if (!detail.seniority && SENIORITY_WORDS.some((w) => low.includes(w))) detail.seniority = pill;
     else if (!detail.salary && SALARY_RE.test(pill)) detail.salary = pill;
   }
-  if (!detail.seniority) detail.seniority = seniorityFromCriteria(root);
+  if (!detail.seniority) detail.seniority = seniorityFromCriteria(scope);
   return detail;
 }
 
@@ -775,6 +791,7 @@ export function guessWorkplace(...texts) {
  * @returns {Job & Record<string, unknown>}
  */
 export function buildJob(card, detail, entry, apply = {}) {
+  if (detail) validateDetail(card, detail);
   const d = detail ?? null;
   const title = d?.title || card.title;
   const company = d?.company || card.company;
@@ -801,6 +818,7 @@ export function buildJob(card, detail, entry, apply = {}) {
     salaryText,
     companyUrl: d?.companyUrl ?? '',
   };
+  if (d) job.verifiedJobId = card.id;
   const postedAt = isoDateToEpochMs(postedDate);
   if (postedAt !== undefined) job.postedAt = postedAt;
   if (apply?.applyKind) job.applyKind = apply.applyKind;
@@ -823,6 +841,30 @@ export function buildJob(card, detail, entry, apply = {}) {
     if (job.applyUrl) job.jd.apply_url = job.applyUrl;
   }
   return job;
+}
+
+export class WrongPostingError extends Error {}
+
+/** A card URL is not proof that asynchronously rendered details belong to it. */
+export function validateDetail(card, detail) {
+  if (detail.jobId !== card.id) throw new WrongPostingError(`Expected job ${card.id}, primary heading is ${detail.jobId || 'unidentified'}`);
+  const key = (value) => String(value).normalize('NFC').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
+  for (const field of ['title', 'company']) {
+    if (!detail[field] || (card[field] && key(card[field]) !== key(detail[field]))) throw new WrongPostingError(`Job ${card.id}: ${field} does not match the search card`);
+  }
+  if (!detail.description) throw new WrongPostingError(`Job ${card.id}: no description for the verified posting`);
+}
+
+/** Recommendations outside the primary posting cannot supply its apply link. */
+export function postingApply(html) {
+  const root = parseHtml(html);
+  const scope = selectOne(root, 'section[aria-label="Primary content"]') || firstNode(root, ...DETAIL_PANE_SELECTORS);
+  if (!scope) return { applyUrl: null, applyKind: '' };
+  const escape = (value) => String(value).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
+  const controls = selectAll(scope, 'a, button').map((node) => `<${node.tag} ${Object.entries(node.attrs)
+    .filter(([name]) => ['href', 'aria-label', 'class', 'id'].includes(name))
+    .map(([name, value]) => `${name}="${escape(value)}"`).join(' ')}>`).join('');
+  return { applyUrl: offsiteApplyUrlFromHtml(controls), applyKind: applyKindFromHtml(controls) };
 }
 
 // ---------------------------------------------------------------- seen ids
@@ -859,6 +901,41 @@ export function saveSeen(ids, path) {
 /** The cards whose id is in neither set. */
 export function filterUnseen(cards, ...seenSets) {
   return cards.filter((c) => !seenSets.some((s) => s.has(c.id)));
+}
+
+const CRAWL_CACHE_AGE_MS = 7 * 86_400_000;
+
+function crawlCachePath(id, dataRoot) {
+  if (!/^\d+$/.test(String(id))) throw new Error('Invalid LinkedIn job id');
+  return join(dataRoot, 'data', 'linkedin-crawl-cache', `${id}.json`);
+}
+
+/** A seen marker is not proof that the scanner saved the job. Replay its payload. */
+export function loadCachedJob(id, dataRoot = getCareerOpsRoot(), nowMs = Date.now()) {
+  try {
+    const { cachedAt, job, identityVersion } = JSON.parse(readFileSync(crawlCachePath(id, dataRoot), 'utf8'));
+    if (identityVersion !== 1 || job?.verifiedJobId !== String(id)) return null;
+    const age = nowMs - Date.parse(cachedAt);
+    if (!Number.isFinite(age) || age < 0 || age >= CRAWL_CACHE_AGE_MS) return null;
+    if (job?.externalId !== String(id) || job.url !== canonicalJobUrl(id) || !job.description || !job.title || !job.company) return null;
+    return job;
+  } catch {
+    return null;
+  }
+}
+
+/** Persist before marking seen, so a killed scan can recover without another visit. */
+export function saveCachedJob(job, dataRoot = getCareerOpsRoot()) {
+  if (job.verifiedJobId !== job.externalId) throw new WrongPostingError('Cannot cache unverified LinkedIn details');
+  const file = crawlCachePath(job.externalId, dataRoot);
+  mkdirSync(dirname(file), { recursive: true });
+  const temp = `${file}.${process.pid}.tmp`;
+  try {
+    writeFileSync(temp, JSON.stringify({ identityVersion: 1, cachedAt: new Date().toISOString(), job }), 'utf8');
+    renameSync(temp, file);
+  } finally {
+    rmSync(temp, { force: true });
+  }
 }
 
 // ---------------------------------------------------------------- entry shape
@@ -1043,30 +1120,21 @@ async function firstInnerHtml(page, selectors) {
   return page.content();
 }
 
-async function openDetail(page, jobId) {
-  const card = page.locator(`li[data-occludable-job-id="${jobId}"], div.job-card-container[data-job-id="${jobId}"], a[href*="/jobs/view/${jobId}"]`).first();
+export async function openDetail(page, jobId) {
+  // A new document cannot retain the previous search selection's description.
+  const posting = await page.context().newPage();
   try {
-    await card.scrollIntoViewIfNeeded({ timeout: 5000 });
-    await card.click({ timeout: 5000 });
-  } catch {
-    // Occluded (virtualised) card: scroll it to the centre and retry once.
-    await card.evaluate((el) => el.scrollIntoView({ block: 'center' }));
-    await page.waitForTimeout(Math.round(randomBetween(600, 1200)));
-    await card.click({ timeout: 5000 });
+    await posting.goto(canonicalJobUrl(jobId), { waitUntil: 'domcontentloaded', timeout: 20_000 });
+    await assertLoggedIn(posting);
+    await posting.waitForSelector('#job-details, .jobs-description__content, .jobs-description-content__text, section[aria-label="Primary content"] [data-testid="expandable-text-box"]', { timeout: 8000 });
+    await posting.waitForTimeout(Math.round(randomBetween(400, 900)));
+    const html = await posting.content();
+    const detail = parseDetail(html);
+    if (detail.jobId !== jobId) throw new WrongPostingError(`Expected job ${jobId}, primary heading is ${detail.jobId || 'unidentified'}`);
+    return html;
+  } finally {
+    await posting.close().catch(() => {});
   }
-  // The pane re-renders asynchronously; wait for the URL to carry this id or
-  // the description block to show up, whichever comes first.
-  try {
-    await page.waitForURL(new RegExp(`currentJobId=${jobId}`), { timeout: 8000 });
-  } catch { /* the description wait below decides */ }
-  await assertLoggedIn(page);
-  try {
-    await page.waitForSelector('#job-details, .jobs-description__content, .jobs-description-content__text', { timeout: 8000 });
-  } catch {
-    log(`description did not appear for ${jobId}`);
-  }
-  await page.waitForTimeout(Math.round(randomBetween(400, 900)));
-  return firstInnerHtml(page, DETAIL_PANE_SELECTORS);
 }
 
 // The apply link of a signed-in posting page (lib/linkedin-apply.mjs has the
@@ -1098,11 +1166,13 @@ export async function readPostingApply(context, jobId) {
     await page.waitForSelector(POSTING_APPLY_SELECTOR, { timeout: 8000 }).catch(() => {});
     await page.waitForTimeout(Math.round(randomBetween(400, 900)));
     const html = await page.content();
-    dump(`posting-${jobId}.html`, html);
     // A signed-out session gets the public posting page at the same URL, so
     // the URL alone cannot tell; the page's own markup does.
     if (isLoginWall(page.url(), html)) throw halt(page.url());
-    return { applyUrl: offsiteApplyUrlFromHtml(html), applyKind: applyKindFromHtml(html) };
+    if (parseDetail(html).jobId !== String(jobId)) throw new WrongPostingError(`Apply page does not prove job ${jobId}`);
+    const result = postingApply(html);
+    dump(`posting-${jobId}.json`, JSON.stringify({ jobId, ...result }));
+    return result;
   } finally {
     await page.close().catch(() => {});
   }
@@ -1117,11 +1187,11 @@ function dump(name, html) {
 
 /**
  * Walk one saved search in the signed-in page and return its new jobs.
- * Cards whose id is in the seen store are not opened and not returned; an id
- * joins the store once its pane gave a description (not under dryRun, which
- * must not consume postings the pipeline never received).
+ * Cached jobs are returned to the core scanner, which owns filtering and
+ * durable dedup. Legacy seen ids without a payload are visited again: a
+ * previous scan may have died before saving them to the pipeline.
  */
-async function walkSearch(page, { entry, searchUrl, maxPages, seenPath, dryRun, applyRoot = getCareerOpsRoot() }) {
+export async function walkSearch(page, { entry, searchUrl, maxPages, seenPath, dryRun, applyRoot = getCareerOpsRoot(), titleWanted, pause = sleepRandom, readDetail = openDetail }) {
   const name = String(entry.name ?? '');
   // Posting-page visits that read an offsite employer URL, per search.
   let applyLookupsLeft = resolveApplyLookups(entry);
@@ -1131,7 +1201,7 @@ async function walkSearch(page, { entry, searchUrl, maxPages, seenPath, dryRun, 
   const jobs = [];
   for (let pageNo = 1; pageNo <= maxPages; pageNo++) {
     const url = pagedUrl(searchUrl, pageNo);
-    if (pageNo > 1) await sleepRandom(PAGE_WAIT_MS);
+    if (pageNo > 1) await pause(PAGE_WAIT_MS);
     let listHtml;
     try {
       await page.goto(url, { waitUntil: 'domcontentloaded' });
@@ -1149,19 +1219,35 @@ async function walkSearch(page, { entry, searchUrl, maxPages, seenPath, dryRun, 
     }
     dump(`${name}-page${pageNo}-list.html`, listHtml);
     const cards = parseCards(listHtml);
-    const fresh = filterUnseen(cards, seenThisRun, seen);
+    const fresh = filterUnseen(cards, seenThisRun);
     for (const c of cards) seenThisRun.add(c.id);
-    log(`${name} page ${pageNo}/${maxPages}: ${cards.length} cards, ${fresh.length} new`);
+    log(`${name} page ${pageNo}/${maxPages}: ${cards.length} cards, ${fresh.length} unique in this search`);
     if (cards.length === 0) break;
     for (const card of fresh) {
-      await sleepRandom(CARD_WAIT_MS);
+      // The core provides its exact title rule. Keep the rejected card in the
+      // result for filter accounting, but avoid opening its pane/apply page.
+      if (card.title && titleWanted && !titleWanted(card.title)) {
+        jobs.push(buildJob(card, null, entry));
+        continue;
+      }
+      const cached = loadCachedJob(card.id, applyRoot);
+      if (cached && ((card.title && cached.title !== card.title) || (card.company && cached.company !== card.company))) {
+        log(`cached identity differs from card ${card.id}; reading the posting again`);
+      }
+      if (cached && (!card.title || cached.title === card.title) && (!card.company || cached.company === card.company)) {
+        jobs.push({ ...cached, note: `${SOURCE} ${name}`.trim() });
+        continue;
+      }
+      await pause(CARD_WAIT_MS);
       let detail = null;
       let apply = { applyUrl: null, applyKind: '' };
       try {
-        const detailHtml = await openDetail(page, card.id);
-        dump(`${name}-${card.id}-detail.html`, detailHtml);
-        detail = parseDetail(detailHtml);
-        apply.applyKind = applyKindFromHtml(detailHtml);
+        const detailHtml = await readDetail(page, card.id);
+        const candidate = parseDetail(detailHtml);
+        validateDetail(card, candidate);
+        dump(`${name}-${card.id}-detail.json`, JSON.stringify(candidate));
+        detail = candidate;
+        apply.applyKind = postingApply(detailHtml).applyKind;
       } catch (err) {
         if (err instanceof LoginRequiredError) throw err;
         log(`detail for ${card.id} failed: ${err.message}`);
@@ -1170,7 +1256,7 @@ async function walkSearch(page, { entry, searchUrl, maxPages, seenPath, dryRun, 
       // does. One more page, paced like the cards, only for offsite postings.
       if (apply.applyKind === 'offsite' && applyLookupsLeft > 0) {
         applyLookupsLeft -= 1;
-        await sleepRandom(CARD_WAIT_MS);
+        await pause(CARD_WAIT_MS);
         try {
           const read = await readPostingApply(page.context(), card.id);
           // The pane's kind wins: it describes this posting alone, while the
@@ -1189,8 +1275,10 @@ async function walkSearch(page, { entry, searchUrl, maxPages, seenPath, dryRun, 
           log(`could not record the apply link for ${card.id}: ${err.message}`);
         }
       }
-      jobs.push(buildJob(card, detail, entry, apply));
+      const job = buildJob(card, detail, entry, apply);
+      jobs.push(job);
       if (detail?.description && !dryRun) {
+        saveCachedJob(job, applyRoot);
         seen.add(card.id);
         saveSeen(seen, seenPath);
       }
@@ -1210,7 +1298,7 @@ export default {
 
   /**
    * @param {{ name?: string, search_url?: string, max_pages?: number }} entry
-   * @param {{ dryRun?: boolean }} [ctx]
+   * @param {{ dryRun?: boolean, titleWanted?: (title: string) => boolean }} [ctx]
    * @returns {Promise<Job[]>}
    */
   async fetch(entry, ctx = {}) {
@@ -1231,6 +1319,7 @@ export default {
           maxPages,
           seenPath: seenStorePath(),
           dryRun: ctx?.dryRun === true,
+          titleWanted: ctx?.titleWanted,
         });
         noteCrawl(ctx, { result: 'ok', search: String(entry.name ?? ''), jobs: jobs.length });
         return jobs;

@@ -6,6 +6,7 @@ import { pipelineQuery } from "@/lib/pipeline-navigation.mjs";
 import { reportNumberFor } from "@/lib/apply-checklist.mjs";
 import { parseReport } from "@/lib/format";
 import { lookupLinkedInApply } from "@/lib/apply/linkedin-apply";
+import { resolvePostingUrl } from "@/lib/posting-url.mjs";
 
 export const dynamic = "force-dynamic";
 
@@ -26,7 +27,7 @@ export default async function ReportPage({ params, searchParams }: {
   const coverReady = (await resolveTailoredCover(app?.company, id)) !== null;
   // A LinkedIn posting's employer form, when the crawl or linkedin-apply.mjs read it.
   const reportUrl = report ? parseReport(report.content).fields.find((f) => f.label === "URL")?.value : undefined;
-  const li = await lookupLinkedInApply(reportUrl);
+  const li = await lookupLinkedInApply(resolvePostingUrl(app?.url, reportUrl));
   return (
     <ReportView
       id={id}

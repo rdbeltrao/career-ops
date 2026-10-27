@@ -7,7 +7,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { spawnSync } from 'node:child_process';
 import { dirname, join } from 'node:path';
@@ -24,6 +24,7 @@ import provider, {
   isLoginWall,
   isoDateToEpochMs,
   loadSeen,
+  loadCachedJob,
   pagedUrl,
   parseCards,
   parseDetail,
@@ -34,10 +35,15 @@ import provider, {
   resolveMaxPages,
   resolveApplyLookups,
   saveSeen,
+  saveCachedJob,
   seenStorePath,
   selectAll,
   selectOne,
   textOf,
+  walkSearch,
+  openDetail,
+  postingApply,
+  WrongPostingError,
 } from '../../providers.local/linkedin-browser.mjs';
 
 const FIXTURES = join(dirname(fileURLToPath(import.meta.url)), '..', 'fixtures', 'linkedin');
@@ -45,6 +51,79 @@ const fixture = (name) => readFileSync(join(FIXTURES, name), 'utf-8');
 
 // Real markup was saved on 2026-10-16 at 18:30 local time; relative ages anchor here.
 const NOW = new Date(2026, 9, 16, 18, 30);
+
+function detailForCard(id) {
+  const card = parseCards(fixture('list.html')).find((card) => card.id === id);
+  return `<h1><a href="/jobs/view/${id}/">${card.title}</a></h1><div class="job-details-jobs-unified-top-card__company-name">${card.company}</div><div id="job-details">Lead engineers.</div>`;
+}
+
+
+function searchPage(html) {
+  let url = 'https://www.linkedin.com/jobs/search/';
+  const locator = { count: async () => 1, innerHTML: async () => html, first() { return this; } };
+  return {
+    url: () => url,
+    goto: async (next) => { url = next; },
+    waitForTimeout: async () => {},
+    waitForSelector: async () => {},
+    evaluate: async () => 0,
+    locator: () => locator,
+  };
+}
+
+test('interrupted search replays captured jobs and revisits legacy seen ids without losing postings', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'linkedin-recover-'));
+  const ids = parseCards(fixture('list.html')).map((card) => card.id);
+  const seenPath = seenStorePath(root);
+  saveSeen(new Set(ids), seenPath); // The old provider may have consumed all three.
+  const options = { entry: { name: 'search', resolve_apply_url: false }, searchUrl: 'https://www.linkedin.com/jobs/search/', maxPages: 1, seenPath, dryRun: false, applyRoot: root };
+  const detail = (id) => detailForCard(id);
+  try {
+    let pauses = 0;
+    await assert.rejects(walkSearch(searchPage(fixture('list.html')), { ...options, readDetail: async (_page, id) => detail(id), pause: async () => { if (++pauses === 2) throw new Error('process interrupted'); } }), /process interrupted/);
+    assert.ok(loadCachedJob(ids[0], root)?.description);
+
+    const opened = [];
+    const recovered = await walkSearch(searchPage(fixture('list.html')), { ...options, pause: async () => {}, readDetail: async (_page, id) => { opened.push(id); return detail(id); } });
+    assert.deepEqual(recovered.map((job) => job.externalId), ids);
+    assert.deepEqual(opened, ids.slice(1), 'first capture survives; uncached seen ids are not suppressed');
+    assert.ok(recovered.every((job) => job.description));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('title gate skips expensive details while retaining rejected cards for core filter accounting', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'linkedin-title-gate-'));
+  try {
+    const opened = [];
+    const jobs = await walkSearch(searchPage(fixture('list.html')), {
+      entry: { name: 'search', resolve_apply_url: false }, searchUrl: 'https://www.linkedin.com/jobs/search/', maxPages: 1, seenPath: seenStorePath(root), dryRun: true, applyRoot: root,
+      titleWanted: (title) => title === 'Head of Engineering', pause: async () => {}, readDetail: async (_page, id) => { opened.push(id); return detailForCard(id); },
+    });
+    assert.equal(jobs.length, 3);
+    assert.deepEqual(opened, ['4479999999']);
+    assert.equal(jobs.filter((job) => job.description).length, 1);
+    assert.equal(existsSync(join(root, 'data')), false, 'dry run writes neither cache nor seen ids');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('invalid and stale crawl payloads are retried instead of trusted as seen', () => {
+  const root = mkdtempSync(join(tmpdir(), 'linkedin-cache-'));
+  try {
+    const job = buildJob(parseCards(fixture('list.html'))[1], parseDetail(fixture('detail.html')), { name: 'search' });
+    saveCachedJob(job, root);
+    assert.equal(loadCachedJob(job.externalId, root).description, job.description);
+    assert.equal(loadCachedJob(job.externalId, root, Date.now() + 8 * 86_400_000), null);
+    writeFileSync(join(root, 'data', 'linkedin-crawl-cache', `${job.externalId}.json`), '{bad json');
+    assert.equal(loadCachedJob(job.externalId, root), null);
+    assert.equal(loadCachedJob('../outside', root), null);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
 
 test('the four fixtures copied from job-hunt are present', () => {
   for (const name of ['list.html', 'list-real.html', 'detail.html', 'detail-real.html']) {
@@ -342,7 +421,7 @@ test('buildJob uses the detail posting date when the card has none, and the card
   const card = parseCards(fixture('list-real.html'))[1];
   const detail = parseDetail(fixture('detail-real.html'), { now: NOW });
   assert.equal(card.postedDate, '');
-  const job = buildJob(card, detail, { name: 'em-germany-24h' });
+  const job = buildJob({ ...card, id: detail.jobId, title: detail.title, company: detail.company }, detail, { name: 'em-germany-24h' });
   assert.equal(job.postedAt, Date.UTC(2026, 9, 15));
   assert.equal(job.jd.posted_date, '2026-10-15');
   assert.equal(job.seniority, '');
@@ -495,4 +574,67 @@ test('resolveApplyLookups: posting-page visits per search, capped by default and
   assert.equal(resolveApplyLookups({ max_apply_lookups: -1 }), 25);
   assert.equal(resolveApplyLookups({ max_apply_lookups: 'lots' }), 25);
   assert.equal(resolveApplyLookups({ resolve_apply_url: false, max_apply_lookups: 9 }), 0);
+});
+
+test('buildJob refuses wrong, absent or conflicting primary identity', () => {
+  const card = parseCards(fixture('list.html'))[1];
+  const detail = parseDetail(fixture('detail.html'));
+  for (const change of [{ jobId: '4380699028' }, { jobId: '' }, { company: 'TEN Thüringer Energienetze' }, { title: 'Another role' }, { description: '' }]) {
+    assert.throws(() => buildJob(card, { ...detail, ...change }, {}), WrongPostingError);
+  }
+  const recommendations = '<h1><a href="/jobs/view/111/">Wrong job</a></h1><aside><h2><a href="/jobs/view/222/">Wanted job</a></h2></aside>';
+  assert.equal(parseDetail(recommendations).jobId, '111');
+});
+
+test('modern primary banner proves identity; recommendations cannot supply it', () => {
+  const html = '<title>Engineering Manager | Doctolib | LinkedIn</title><main><section aria-label="Primary content"><div id="JobDetails_ManageJobBanner_222"></div><h2>About the job</h2><span data-testid="expandable-text-box">Lead engineers.</span></section><aside><div id="JobDetails_ManageJobBanner_111"></div></aside></main>';
+  const detail = parseDetail(html);
+  assert.equal(detail.jobId, '222');
+  assert.equal(detail.title, 'Engineering Manager');
+  assert.equal(detail.company, 'Doctolib');
+  assert.equal(detail.description, 'Lead engineers.');
+  assert.equal(parseDetail(html.replace('JobDetails_ManageJobBanner_222', 'unknown')).jobId, '');
+});
+
+test('wrong details are not cached or marked seen, and card identity survives', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'linkedin-wrong-identity-'));
+  try {
+    const jobs = await walkSearch(searchPage(fixture('list.html')), {
+      entry: { name: 'search', resolve_apply_url: false }, searchUrl: 'https://www.linkedin.com/jobs/search/', maxPages: 1,
+      seenPath: seenStorePath(root), dryRun: false, applyRoot: root, pause: async () => {},
+      readDetail: async () => detailForCard('4479999999'),
+    });
+    assert.equal(jobs[0].company, 'Deutsche Glasfaser Unternehmensgruppe');
+    assert.deepEqual(jobs.map((job) => Boolean(job.description)), [false, false, true]);
+    assert.equal(loadCachedJob('4477388263', root), null);
+    assert.deepEqual([...loadSeen(seenStorePath(root))], ['4479999999']);
+    const file = join(root, 'data', 'linkedin-crawl-cache', '4479999999.json');
+    const cached = JSON.parse(readFileSync(file, 'utf8'));
+    delete cached.identityVersion;
+    writeFileSync(file, JSON.stringify(cached));
+    assert.equal(loadCachedJob('4479999999', root), null, 'legacy caches have no identity proof');
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('openDetail navigates a fresh document and closes it after identity rejection', async () => {
+  const events = [];
+  const posting = {
+    goto: async (url) => events.push(['goto', url]), url: () => canonicalJobUrl('4477001122'),
+    locator: () => ({ first() { return this; }, count: async () => 1 }),
+    waitForSelector: async () => {}, waitForTimeout: async () => {},
+    content: async () => fixture('detail.html'), close: async () => events.push(['close']),
+  };
+  const page = { context: () => ({ newPage: async () => posting }) };
+  await openDetail(page, '4477001122');
+  assert.deepEqual(events, [['goto', canonicalJobUrl('4477001122')], ['close']]);
+  await assert.rejects(openDetail(page, '4380699028'), WrongPostingError);
+  assert.deepEqual(events.at(-1), ['close']);
+});
+
+
+test('recommendations cannot supply the primary posting apply URL or kind', () => {
+  const recommendation = '<aside><a aria-label="Apply on company website" href="https://www.linkedin.com/safety/go/?url=https%3A%2F%2Fwrong.example%2Fapply">Apply</a></aside>';
+  const html = '<section aria-label="Primary content"><h1>Wanted job</h1><button aria-label="Easy Apply">Apply</button></section>' + recommendation;
+  assert.deepEqual(postingApply(html), { applyUrl: null, applyKind: 'easy-apply' });
+  assert.deepEqual(postingApply(recommendation), { applyUrl: null, applyKind: '' });
 });

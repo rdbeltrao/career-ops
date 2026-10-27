@@ -145,6 +145,7 @@ export function ScheduledJobsView() {
   const totalRuns = store.runs.length;
   const successRuns = store.runs.filter((r) => r.state === "success").length;
   const failedRuns = store.runs.filter((r) => r.state === "failed").length;
+  const partialRuns = store.runs.filter((r) => r.state === "partial").length;
   const totalRolesFound = store.runs.reduce((acc, r) => acc + (r.rolesFound || 0), 0);
   const successRate = scanSuccessLabel(totalRuns, successRuns);
 
@@ -199,7 +200,7 @@ export function ScheduledJobsView() {
         <StatCard label="Active Scans" value={activeJobs.length} subtitle={`${jobsList.length} total jobs`} icon={<Zap className="size-4 text-emerald-500" />} />
         <StatCard label="Executed Runs" value={totalRuns} subtitle={`${successRuns} successful`} icon={<Layers className="size-4 text-brand" />} />
         <StatCard label="Roles Discovered" value={totalRolesFound} subtitle="Pushed to pipeline" icon={<Sparkles className="size-4 text-amber-500" />} />
-        <StatCard label="Success Rate" value={successRate} subtitle={`${failedRuns} failed runs`} icon={<CheckCircle2 className="size-4 text-emerald-500" />} />
+        <StatCard label="Success Rate" value={successRate} subtitle={`${failedRuns} failed runs${partialRuns ? `, ${partialRuns} partial` : ""}`} icon={<CheckCircle2 className="size-4 text-emerald-500" />} />
       </div>
 
       {/* OS Task Scheduler Banner */}

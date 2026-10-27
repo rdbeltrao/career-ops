@@ -17,6 +17,7 @@ import { scheduledRunnerResourcePath, scheduledStorePath } from "../src/lib/sche
 import { getCareerOpsRoot } from "../../path-resolver.mjs";
 import { getProfilePath } from "../src/lib/core/profile-path.mjs";
 import { scanFailureMessage } from "../src/lib/scheduled-scan-error.mjs";
+import { scheduledScanResult } from "../src/lib/scheduled-scan-result.mjs";
 import { jevAutoLogPath, startJevPass } from "../../lib/jev-auto.mjs";
 import { evaluateLogPath, startEvaluatePass } from "../../lib/auto-evaluate.mjs";
 import { parsePendingJev } from "../../jev-rank.mjs";
@@ -147,7 +148,16 @@ function linkedinOverlay(base, job) {
     if (!entry || typeof entry !== "object" || entry.provider !== LINKEDIN_PROVIDER) continue;
     const on = entry.enabled !== false && (chosen.length === 0 || chosen.includes(String(entry.name ?? "").trim()));
     if (!on) entry.enabled = false;
-    else running += 1;
+    else {
+      running += 1;
+      if (job.linkedin?.useSearchWindow === false) {
+        // Widen the source search too: --since alone cannot recover jobs
+        // LinkedIn omitted because its saved URL still asked for seven days.
+        const searchUrl = new URL(entry.search_url);
+        searchUrl.searchParams.set("f_TPR", `r${numericFilter(filters.sinceDays, 7, 1) * 86_400}`);
+        entry.search_url = searchUrl.href;
+      }
+    }
   }
   if (running === 0) {
     throw new Error(chosen.length
@@ -163,7 +173,7 @@ export function buildScanCommand(job) {
   if (job.engine === "portals") {
     return {
       script: "scan.mjs",
-      args: ["--since", String(sinceDays), "--quiet"],
+      args: ["--since", String(sinceDays), "--quiet", "--json"],
     };
   }
   // The LinkedIn searches alone (the linkedin-browser entries of portals.yml),
@@ -173,7 +183,7 @@ export function buildScanCommand(job) {
     const window = job.linkedin?.useSearchWindow === false ? ["--since", String(sinceDays)] : [];
     return {
       script: "scan.mjs",
-      args: [...window, "--quiet", "--provider", LINKEDIN_PROVIDER],
+      args: [...window, "--quiet", "--provider", LINKEDIN_PROVIDER, "--json"],
     };
   }
 
@@ -183,21 +193,19 @@ export function buildScanCommand(job) {
   const limit = numericFilter(filters.limitPerAts, 150, 50, 500);
   return {
     script: "scan-ats-full.mjs",
-    args: ["--since", String(sinceDays), "--ats", ats, "--limit", String(limit), "--json"],
+    // Revisit known employer boards as well as sampling the public directory.
+    // A capped random slice alone can miss new openings at those employers.
+    args: ["--since", String(sinceDays), "--ats", ats, "--limit", String(limit), "--shuffle", "--history-seeds", "--json"],
   };
 }
 
 export function extractRolesFound(engine, stdout) {
-  if (engine === "full") {
-    try {
-      const result = JSON.parse(stdout);
-      return Number.isFinite(Number(result.postingsKept)) ? Number(result.postingsKept) : 0;
-    } catch {
-      return 0;
-    }
+  // Keep the legacy human-summary reader for callers with old saved output.
+  if (engine !== "full" && !stdout.includes("{")) {
+    const match = stdout.match(/New offers added:\s*(\d+)/i);
+    if (match) return Number(match[1]);
   }
-  const match = stdout.match(/New offers added:\s*(\d+)/i);
-  return match ? Number(match[1]) : 0;
+  return scheduledScanResult(engine, stdout).rolesFound;
 }
 
 function writeJobPortals(root, job) {
@@ -288,15 +296,17 @@ export function executeJob(root, job, options = {}) {
         },
       );
 
-      if (result.status === 0) {
-        const rolesFound = extractRolesFound(job.engine || "full", result.stdout || "");
-        return {
-          state: "success",
-          attempt,
-          rolesFound,
-          durationMs: Date.now() - startedAt,
-          message: `Scan finished with ${rolesFound} matching role${rolesFound === 1 ? "" : "s"}.`,
-        };
+      // scan.mjs exits 2 with a valid receipt when some sources failed. It has
+      // already saved its matches, so rerunning would obscure the first count.
+      if (!result.error && (result.status === 0 || (result.status === 2 && command.script === "scan.mjs"))) {
+        try {
+          const outcome = scheduledScanResult(job.engine || "full", result.stdout || "");
+          return { ...outcome, attempt, durationMs: Date.now() - startedAt };
+        } catch (error) {
+          lastError = error.message;
+          finalAttempt = attempt;
+          break;
+        }
       }
       lastError = scanFailureMessage(result, { timeoutMs: SCAN_TIMEOUT_MS });
       if (result.error?.code === "ETIMEDOUT") {
@@ -377,7 +387,7 @@ export async function recordCompletion(storePath, claim, result, inMemoryStore =
       current.lastRunAt = at;
       current.rolesFoundCount = result.rolesFound;
       current.updatedAt = at;
-      if (result.state === "failed") current.lastError = result.message;
+      if (result.state === "failed" || result.state === "partial") current.lastError = result.message;
       else delete current.lastError;
     }
 

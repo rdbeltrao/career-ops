@@ -279,7 +279,7 @@ test("buildPrompt: modes counts in a multi-market declaration without a redundan
       evalModeFile: "modes/oferta.md",
     },
   });
-  assert.doesNotMatch(prompt, /read modes\/_shared\.md/i);
+  assert.equal((prompt.match(/read modes\/_shared\.md/gi) ?? []).length, 1);
   assert.match(prompt, /modes\/zh\/_shared\.md/);
   assert.match(prompt, /MARKET signals/);
   assert.match(prompt, /first\/primary market \(modes\)/);

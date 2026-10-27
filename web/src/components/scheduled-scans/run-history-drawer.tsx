@@ -1,6 +1,6 @@
 "use client";
 
-import { CheckCircle2, XCircle, Clock, X, TerminalSquare, Loader2, Ban } from "lucide-react";
+import { CheckCircle2, XCircle, Clock, X, TerminalSquare, Loader2, Ban, TriangleAlert } from "lucide-react";
 import { useRef } from "react";
 import type { JobRun } from "@/lib/scheduled-jobs";
 import { cn } from "@/lib/cn";
@@ -44,6 +44,7 @@ export function RunHistoryDrawer({
           ) : (
             runs.map((run, i) => {
               const isSuccess = run.state === "success";
+              const isPartial = run.state === "partial";
               const isRunning = run.state === "running";
               const isQueued = run.state === "queued";
               const isCancelled = run.state === "cancelled";
@@ -57,6 +58,8 @@ export function RunHistoryDrawer({
                     <div className="flex items-center gap-1.5 font-medium">
                       {isSuccess ? (
                         <CheckCircle2 className="size-4 text-emerald-500" />
+                      ) : isPartial ? (
+                        <TriangleAlert className="size-4 text-amber-500" />
                       ) : isRunning ? (
                         <Loader2 className="size-4 animate-spin text-brand" />
                       ) : isQueued ? (
@@ -66,8 +69,8 @@ export function RunHistoryDrawer({
                       ) : (
                         <XCircle className="size-4 text-rose-500" />
                       )}
-                      <span className={cn(tone === "success" ? "text-emerald-600 dark:text-emerald-400" : tone === "failed" ? "text-rose-500" : "text-muted")}>
-                        {isSuccess ? "Success" : isRunning ? "Running" : isQueued ? "Queued" : isCancelled ? "Cancelled" : "Failed"}
+                      <span className={cn(tone === "success" ? "text-emerald-600 dark:text-emerald-400" : tone === "warning" ? "text-amber-600 dark:text-amber-400" : tone === "failed" ? "text-rose-500" : "text-muted")}>
+                        {isSuccess ? "Success" : isPartial ? "Partial" : isRunning ? "Running" : isQueued ? "Queued" : isCancelled ? "Cancelled" : "Failed"}
                       </span>
                       {run.engine && (
                         <span className="rounded bg-surface-hover px-1.5 py-0.5 text-[10px] text-faint uppercase font-mono">

@@ -42,7 +42,7 @@ export type JobRun = {
   jobId: string;
   at: string;
   durationMs?: number;
-  state: "queued" | "running" | "success" | "failed" | "cancelled";
+  state: "queued" | "running" | "success" | "partial" | "failed" | "cancelled";
   attempt: number;
   message?: string;
   rolesFound?: number;

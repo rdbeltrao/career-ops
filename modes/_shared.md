@@ -100,6 +100,15 @@ The evaluation scores five dimensions, integrated into one global score of 1-5. 
 
 Decide the Global Score once from these dimensions, applying the user's own scoring rules from `modes/_profile.md` and `modes/_custom.md`. The report header, Machine Summary `score`, and application tracker must record that same value. A–H are report sections, not numeric inputs to average; Block B requirement importance and Block G posting legitimacy remain separate from the 1–5 score.
 
+### Evidence-bound scoring
+
+- A hard stop requires a quoted posting fact that breaks an explicit candidate hard rule, or an explicit mandatory role requirement with a confirmed candidate mismatch. Missing or inferred facts belong in `confidence_gaps`, not `hard_stops`. A soft preference remains a soft preference; never escalate a minus into a blocker.
+- A hiring partner, recruiter, or undisclosed end employer does not by itself establish poor culture, low compensation, outsourcing employment, or a mismatch. Keep unknown client details as verification questions. Distinguish recruitment on behalf of a direct employer from an explicitly stated consultancy/client-assignment contract; apply any candidate preference about the latter only when that arrangement is evidenced.
+- The language of a JD, posting location, or recruiter's message does not establish the team's everyday language, the interview language, or a required proficiency. A language penalty needs an explicit requirement or confirmed working-language evidence. Otherwise record the working language as unknown and ask; never invent a Spanish-only process from a Spanish JD.
+- Apply the candidate's stated missing-data scoring rule exactly. Market benchmarks and an agency's business model cannot override a rule such as "no salary range stated: Comp 3, evidence unknown" or turn an unstated salary into a pay-floor violation.
+- Score role archetype and management scope from stated responsibilities against current candidate targets. Unknown client identity or team size does not turn an otherwise matching Engineering Manager role into a non-target.
+- Uncertainty affects evidence confidence and verification priorities. It is not adverse evidence and must not be counted again as a red flag or a second score deduction. Any configured rule that deliberately penalizes missing information must be cited explicitly.
+
 **Score interpretation:**
 - 4.5+ → Strong match, recommend applying immediately
 - 4.0-4.4 → Good match, worth applying
@@ -124,7 +133,7 @@ Show a short evidence table in the report with each dimension's status, its sour
 2. **Medium** if no Low condition holds but any dimension is `partial` or `unknown`, or a material question remains unresolved.
 3. **High** only when all five dimensions are `supported` and no material question remains unresolved.
 
-Name up to three concrete checks that could change the decision; use an empty list only when none remain. Never convert this tier into a numeric probability or silently treat missing evidence as a neutral score. In the Machine Summary, mirror the five statuses under `score_evidence` and the checks under `confidence_gaps`; the human-readable explanation and `confidence` tier must agree.
+Name up to three concrete checks that could change the decision; use an empty list only when none remain. Never convert this tier into a numeric probability or hide missing evidence behind a numeric score. A candidate-configured default score for missing data still carries `unknown` evidence; it does not establish either a match or a mismatch. In the Machine Summary, mirror the five statuses under `score_evidence` and the checks under `confidence_gaps`; the human-readable explanation and `confidence` tier must agree.
 
 **How to score the "Cultural signals" dimension:**
 1. Read `culture_screen.require` from `config/profile.yml`. If `culture_screen` is missing or empty, skip the structural capping and score the dimension qualitatively based on company size, remote policy, and stability.

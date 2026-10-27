@@ -31,6 +31,7 @@ test("resolvePostingUrl prefers the tracker cell", () => {
     "https://jobs.example.com/tracker",
   );
   assert.equal(resolvePostingUrl("—", "https://jobs.example.com/report"), "https://jobs.example.com/report");
+  assert.equal(resolvePostingUrl("[posting](https://jobs.example.com/restored)", undefined), "https://jobs.example.com/restored");
   assert.equal(resolvePostingUrl("", ""), "");
 });
 

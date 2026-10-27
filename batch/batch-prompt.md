@@ -483,6 +483,8 @@ Apply the tiers in order: **Low** if the JD is inaccessible or too incomplete to
 
 Create a machine-readable summary from the completed A-G evaluation and global score. Keep field names exact, use YAML, and do not add prose inside the fence.
 
+For `hard_stops`, apply `modes/_shared.md` → **Evidence-bound scoring**: only evidenced hard-rule violations or confirmed mismatches against explicit mandatory role requirements belong here; otherwise use `[]`. Unknown client identity, a hiring partner, and JD language alone are not blockers.
+
 ```yaml
 company: "{company}"
 role: "{role}"

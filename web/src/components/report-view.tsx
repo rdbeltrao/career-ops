@@ -31,6 +31,7 @@ import { ReportMarkdown } from "@/components/report-markdown";
 import { KeywordCoverage } from "@/components/keyword-coverage";
 import { CompanyEvidence } from "@/components/company-evidence";
 import { companyPresentation } from "@/lib/company-presentation.mjs";
+import { resolvePostingUrl } from "@/lib/posting-url.mjs";
 import { PageFrame } from "@/components/page-frame";
 
 // Progressive disclosure of the report. Current oferta.md writes letter F as
@@ -41,11 +42,6 @@ import { PageFrame } from "@/components/page-frame";
 
 function isMachine(heading: string): boolean {
   return /machine summary|submitted|submit[-\s]?log/i.test(heading);
-}
-
-function httpUrl(url?: string | null): string | undefined {
-  if (!url) return undefined;
-  return /^https?:\/\//i.test(url) ? url : undefined;
 }
 
 export function ReportView({
@@ -83,7 +79,7 @@ export function ReportView({
   const score = app?.score || field("Score");
   const date = app?.date || field("Date");
   const archetype = field("Archetype");
-  const url = field("URL");
+  const url = resolvePostingUrl(app?.url, field("URL"));
   const decision = field("Decision");
   // Jev is the pre-screen every posting passed before an agent read it: the
   // tracker row carries it when the page resolved one, else the header line.
@@ -92,7 +88,7 @@ export function ReportView({
   const line = applyLineLabel(score ?? "", meta?.legitimacy);
   const recommended = line === "Recommended";
   const quietApply = applyCtaQuiet({ score, legitimacy: meta?.legitimacy });
-  const applyUrl = httpUrl(url);
+  const applyUrl = url || undefined;
   // A LinkedIn posting with a known employer form opens that form in the proxy;
   // Easy Apply and other login-gated boards open in the user's own browser.
   const target = applyTarget(applyUrl, linkedinApply);

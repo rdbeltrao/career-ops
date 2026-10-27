@@ -68,7 +68,7 @@ export function validateScheduledStore(store) {
   }
   for (const run of store.runs) {
     if (!isObject(run) || !isSafeScheduledId(run.id) || !isSafeScheduledId(run.jobId)) throw new Error("Invalid scheduled run identifier");
-    if (!["queued", "running", "success", "failed", "cancelled"].includes(run.state)) throw new Error(`Invalid state for scheduled run ${run.id}`);
+    if (!["queued", "running", "success", "partial", "failed", "cancelled"].includes(run.state)) throw new Error(`Invalid state for scheduled run ${run.id}`);
     assertIso(run.at, `scheduled run ${run.id}.at`);
   }
   for (const item of store.queue) {

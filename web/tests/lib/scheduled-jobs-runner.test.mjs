@@ -109,26 +109,26 @@ test("scan command honors the selected engine and bounded filters", () => {
   };
   assert.deepEqual(buildScanCommand({ engine: "portals", filters }), {
     script: "scan.mjs",
-    args: ["--since", "5", "--quiet"],
+    args: ["--since", "5", "--quiet", "--json"],
   });
   assert.deepEqual(buildScanCommand({ engine: "full", filters }), {
     script: "scan-ats-full.mjs",
-    args: ["--since", "5", "--ats", "lever,ashby", "--limit", "500", "--json"],
+    args: ["--since", "5", "--ats", "lever,ashby", "--limit", "500", "--shuffle", "--history-seeds", "--json"],
   });
   // LinkedIn searches alone: the same scanner as portals, limited to the
   // signed-in LinkedIn provider (scan.mjs --provider). By default each search
   // keeps its own LinkedIn date window, so no --since narrows it.
   assert.deepEqual(buildScanCommand({ engine: "linkedin", filters }), {
     script: "scan.mjs",
-    args: ["--quiet", "--provider", "linkedin-browser"],
+    args: ["--quiet", "--provider", "linkedin-browser", "--json"],
   });
   assert.deepEqual(buildScanCommand({ engine: "linkedin", filters, linkedin: { searches: [], useSearchWindow: true } }), {
     script: "scan.mjs",
-    args: ["--quiet", "--provider", "linkedin-browser"],
+    args: ["--quiet", "--provider", "linkedin-browser", "--json"],
   });
   assert.deepEqual(buildScanCommand({ engine: "linkedin", filters, linkedin: { searches: [], useSearchWindow: false } }), {
     script: "scan.mjs",
-    args: ["--since", "5", "--quiet", "--provider", "linkedin-browser"],
+    args: ["--since", "5", "--quiet", "--provider", "linkedin-browser", "--json"],
   });
 });
 
@@ -144,10 +144,10 @@ tracked_companies:
     careers_url: https://job-boards.greenhouse.io/acme
   - name: LinkedIn em-de
     provider: linkedin-browser
-    search_url: https://www.linkedin.com/jobs/search/?keywords=EM
+    search_url: https://www.linkedin.com/jobs/search/?keywords=EM&f_TPR=r604800
   - name: LinkedIn em-es
     provider: linkedin-browser
-    search_url: https://www.linkedin.com/jobs/search/?keywords=EM&geoId=1
+    search_url: https://www.linkedin.com/jobs/search/?keywords=EM&geoId=1&f_TPR=r2592000
   - name: LinkedIn off
     provider: linkedin-browser
     search_url: https://www.linkedin.com/jobs/search/?keywords=x
@@ -162,7 +162,7 @@ function linkedinOverlay(job) {
     const result = executeJob(temp, { id: "22222222-2222-4222-8222-222222222222", engine: "linkedin", ...job }, {
       spawnFn: (_node, _args, options) => {
         overlay = yaml.load(fs.readFileSync(options.env.CAREER_OPS_PORTALS, "utf8"));
-        return { status: 0, stdout: "New offers added: 0", stderr: "" };
+        return { status: 0, stdout: JSON.stringify({ version: "careerops.scan.receipt@1", added: 0 }), stderr: "" };
       },
     });
     return { result, overlay };
@@ -204,6 +204,19 @@ test("LinkedIn schedule: a choice that matches no search that is on fails with a
   const { result } = linkedinOverlay({ filters: {}, linkedin: { searches: ["LinkedIn off", "LinkedIn renamed"], useSearchWindow: true } });
   assert.equal(result.state, "failed");
   assert.match(result.message, /None of the LinkedIn searches/);
+});
+
+test("LinkedIn schedule overrides both narrower and wider saved search windows", () => {
+  const job = { filters: { sinceDays: 14 }, linkedin: { searches: [], useSearchWindow: false } };
+  const { result, overlay } = linkedinOverlay(job);
+  assert.equal(result.state, "success");
+  const searches = overlay.tracked_companies.filter((entry) => entry.provider === "linkedin-browser" && entry.enabled !== false);
+  assert.deepEqual(searches.map((entry) => new URL(entry.search_url).searchParams.get("f_TPR")), ["r1209600", "r1209600"]);
+  assert.equal(new URL(searches[1].search_url).searchParams.get("geoId"), "1");
+  assert.ok(buildScanCommand({ engine: "linkedin", ...job }).args.includes("14"));
+
+  const savedWindows = linkedinOverlay({ ...job, linkedin: { searches: [], useSearchWindow: true } }).overlay;
+  assert.deepEqual(savedWindows.tracked_companies.filter((entry) => entry.provider === "linkedin-browser" && entry.enabled !== false).map((entry) => new URL(entry.search_url).searchParams.get("f_TPR")), ["r604800", "r2592000"]);
 });
 
 test("roles found for a LinkedIn run are read from scan.mjs's summary, like portals", () => {
@@ -304,7 +317,7 @@ test("scheduled scan never starts without title keywords", () => {
 
 test("scan command treats null and empty numeric filters as absent", () => {
   assert.deepEqual(buildScanCommand({ engine: "full", filters: { sinceDays: null, limitPerAts: "" } }).args, [
-    "--since", "7", "--ats", "greenhouse,lever,ashby,workday", "--limit", "150", "--json",
+    "--since", "7", "--ats", "greenhouse,lever,ashby,workday", "--limit", "150", "--shuffle", "--history-seeds", "--json",
   ]);
 });
 
@@ -543,7 +556,7 @@ test("lock status reports a live holder, a crashed holder and no lock", async ()
 test("roles-found parsing matches both scanner output formats", () => {
   assert.equal(extractRolesFound("full", JSON.stringify({ postingsKept: 7 })), 7);
   assert.equal(extractRolesFound("portals", "New offers added:      3\n"), 3);
-  assert.equal(extractRolesFound("full", "not json"), 0);
+  assert.throws(() => extractRolesFound("full", "not json"), /no complete, valid result receipt/);
 });
 
 test("queue claim is durable until completion and stale claims are reclaimable", async () => {
