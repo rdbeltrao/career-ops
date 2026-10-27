@@ -4,9 +4,10 @@ import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ArrowLeft, Check, Loader2 } from "lucide-react";
 import { cn } from "@/lib/cn";
+import { CV_PALETTES, PALETTE_COLOR_KEYS, applyCvPalette, selectedPaletteId } from "@/lib/cv-palettes.mjs";
 
 type Template = { name: string; displayName: string; description: string };
-type Style = { accent_color: string; font_family: string; font_size: string };
+type Style = { accent_color: string; font_family: string; font_size: string } & Partial<Record<"secondary_color" | "tag_color" | "tag_bg" | "tag_border", string>>;
 type Preferences = { template: string; useAtsGuidance: boolean; atsTemplates: Record<string, string>; style: Style };
 type Settings = { templates: Template[]; preferences: Preferences; vendors: { id: string; label: string }[]; revision: string };
 type Preview = { loading: boolean; html: string; error: string };
@@ -101,6 +102,7 @@ export function CvTemplateSettings() {
   }
 
   const selected = settings?.templates.find((template) => template.name === preferences?.template);
+  const palette = preferences ? selectedPaletteId(preferences.style) : "template";
 
   return (
     <div className="mx-auto max-w-[1400px] px-4 py-6 sm:px-6">
@@ -130,16 +132,29 @@ export function CvTemplateSettings() {
           </fieldset>
 
           <fieldset disabled={saving || loading} className="min-w-0 rounded-2xl border border-border bg-surface p-5">
-            <legend className="px-1 text-base font-medium text-foreground">Styling</legend>
+            <legend className="px-1 text-base font-medium text-foreground">Color palette</legend>
+            <p className="mb-4 text-xs leading-relaxed text-muted">Coordinated colors for headings, supporting text and skill tags.</p>
+            {palette === "custom" && <div role="status" className="mb-4 rounded-xl border border-border bg-surface-hover p-3">
+              <p className="text-sm font-medium text-foreground">Custom colors</p>
+              <p className="mt-1 text-xs leading-relaxed text-muted">Your existing colors stay until you choose a palette.</p>
+              <PaletteSwatches colors={preferences.style} />
+            </div>}
+            <div className="grid min-w-0 grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-2">
+              <button type="button" aria-label="Template default palette" aria-pressed={palette === "template"} onClick={() => update({ ...preferences, style: applyCvPalette(preferences.style, "template") })} className={cn("col-span-2 rounded-xl border p-3 text-left transition-colors focus-visible:outline-2 focus-visible:outline-brand sm:col-span-3 lg:col-span-2", palette === "template" ? "border-brand bg-brand-soft" : "border-border hover:border-brand/50")}>
+                <span className="flex items-center justify-between gap-2 text-sm font-medium text-foreground">Template default{palette === "template" && <Check aria-hidden="true" className="size-4 shrink-0 text-brand" />}</span>
+                <span className="mt-1 block text-xs text-muted">Use the template’s original colors.</span>
+              </button>
+              {CV_PALETTES.map((choice) => <button type="button" key={choice.id} aria-label={`${choice.name} palette`} aria-pressed={palette === choice.id} onClick={() => update({ ...preferences, style: applyCvPalette(preferences.style, choice.id) })} className={cn("min-w-0 rounded-xl border p-3 text-left transition-colors focus-visible:outline-2 focus-visible:outline-brand", palette === choice.id ? "border-brand bg-brand-soft" : "border-border hover:border-brand/50")}>
+                <span className="flex items-center justify-between gap-2 text-sm font-medium text-foreground">{choice.name}{palette === choice.id && <Check aria-hidden="true" className="size-4 shrink-0 text-brand" />}</span>
+                <PaletteSwatches colors={choice.colors} />
+                <span className="mt-2 block text-xs leading-relaxed text-muted">{choice.description}</span>
+              </button>)}
+            </div>
+          </fieldset>
+
+          <fieldset disabled={saving || loading} className="min-w-0 rounded-2xl border border-border bg-surface p-5">
+            <legend className="px-1 text-base font-medium text-foreground">Typography</legend>
             <div className="grid min-w-0 gap-4 sm:grid-cols-2">
-              <div>
-                <label htmlFor="cv-accent" className="block text-sm text-foreground">Accent color</label>
-                <div className="mt-2 flex min-h-10 items-center gap-3">
-                  <input id="cv-accent" type="color" value={/^#[0-9a-f]{6}$/i.test(preferences.style.accent_color) ? preferences.style.accent_color : "#2563eb"} onChange={(event) => style("accent_color", event.target.value)} className="h-10 w-14 cursor-pointer rounded border border-border bg-background p-1 focus-visible:outline-2 focus-visible:outline-brand" />
-                  <span className="text-xs text-muted">{preferences.style.accent_color || "Template default"}</span>
-                </div>
-                <button type="button" onClick={() => style("accent_color", "")} disabled={!preferences.style.accent_color} className="mt-2 min-h-8 text-xs text-muted underline hover:text-brand disabled:no-underline disabled:opacity-50">Use template color</button>
-              </div>
               <div className="min-w-0 text-sm text-foreground"><label htmlFor="cv-font">Font</label><select id="cv-font" value={preferences.style.font_family} onChange={(event) => style("font_family", event.target.value)} className={CONTROL}>
                 {!FONTS.some(([value]) => value === preferences.style.font_family) && <option value={preferences.style.font_family}>{preferences.style.font_family} (current)</option>}
                 {FONTS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
@@ -186,6 +201,12 @@ export function CvTemplateSettings() {
       </div>}
     </div>
   );
+}
+
+function PaletteSwatches({ colors }: { colors: Partial<Record<string, string>> }) {
+  return <span aria-hidden="true" className="mt-2 grid h-5 grid-cols-5 overflow-hidden rounded-md border border-black/10">
+    {PALETTE_COLOR_KEYS.map((key) => <span key={key} style={{ backgroundColor: colors[key] || "#f5f5f4" }} />)}
+  </span>;
 }
 
 function SamplePreview({ html }: { html: string }) {

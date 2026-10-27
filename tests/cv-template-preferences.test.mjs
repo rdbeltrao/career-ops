@@ -4,9 +4,12 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { loadYaml } from '../lib/yaml-document.mjs';
+import { CV_PALETTES, PALETTE_COLOR_KEYS, applyCvPalette } from '../lib/cv-palettes.mjs';
 import {
   getCvTemplateState, saveCvTemplatePreferences, chooseCvTemplate, validateCvStyle,
 } from '../lib/cv-template-preferences.mjs';
+
+const normalizedStyle = style => Object.fromEntries([...PALETTE_COLOR_KEYS, 'font_family', 'font_size'].map(key => [key, style[key] ?? '']));
 
 function fixture(t, profile) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cv-template-preferences-'));
@@ -26,7 +29,7 @@ function save(options, preferences, revision = getCvTemplateState(options).revis
 
 test('missing profile uses standard and discovers flat templates and packs', t => {
   const state = getCvTemplateState(fixture(t));
-  assert.deepEqual(state.preferences, { template: 'standard', useAtsGuidance: false, atsTemplates: {}, style: { accent_color: '', font_family: '', font_size: '' } });
+  assert.deepEqual(state.preferences, { template: 'standard', useAtsGuidance: false, atsTemplates: {}, style: normalizedStyle({}) });
   assert.deepEqual(state.templates.map(item => item.name), ['ats', 'modern', 'standard']);
   assert.equal(state.templates[0].displayName, 'A readable CV');
   assert.equal(state.templates[0].description, 'Plain example layout.');
@@ -40,7 +43,7 @@ test('saved preferences preserve unrelated settings and remove only owned empty 
   const preferences = { ...previous.preferences, template: 'modern', atsTemplates: { greenhouse: 'ats', ashby: 'modern' }, style: { accent_color: '', font_family: 'Georgia, serif', font_size: '11pt' } };
   const saved = save(options, preferences);
   assert.notEqual(saved.revision, previous.revision);
-  assert.deepEqual(saved.preferences, preferences);
+  assert.deepEqual(saved.preferences, { ...preferences, style: normalizedStyle(preferences.style) });
   const doc = loadYaml(fs.readFileSync(options.profilePath, 'utf8'));
   assert.equal(doc.candidate.full_name, 'Example');
   assert.equal(doc.private_setting, 'keep');
@@ -105,13 +108,54 @@ test('existing CSS style values remain readable, selectable and saveable without
   for (const style of styles) {
     const options = fixture(t, JSON.stringify({ cv: { template: 'modern' }, style: { ...style, margin: '0.6in', tag_color: '#abc' } }));
     const state = getCvTemplateState(options);
-    assert.deepEqual(state.preferences.style, style);
+    assert.deepEqual(state.preferences.style, normalizedStyle({ ...style, tag_color: '#abc' }));
     assert.equal(chooseCvTemplate(options).name, 'modern');
-    assert.deepEqual(validateCvStyle(style), style, 'previews accept the same style values');
+    assert.deepEqual(validateCvStyle(style), normalizedStyle(style), 'previews accept the same style values');
     const saved = save(options, { ...state.preferences, template: 'ats' });
-    assert.deepEqual(saved.preferences.style, style);
+    assert.deepEqual(saved.preferences.style, normalizedStyle({ ...style, tag_color: '#abc' }));
     assert.deepEqual(loadYaml(fs.readFileSync(options.profilePath, 'utf8')).style, { ...style, margin: '0.6in', tag_color: '#abc' });
   }
+});
+
+test('all coordinated palette colors save and reload through the canonical profile', t => {
+  const options = fixture(t, 'cv:\n  template: modern\nstyle:\n  margin: 0.4in\n  font_family: Georgia, serif\n  font_size: 10px\n');
+  for (const palette of CV_PALETTES) {
+    const state = getCvTemplateState(options);
+    const preferences = { ...state.preferences, style: applyCvPalette(state.preferences.style, palette.id) };
+    const saved = save(options, preferences, state.revision);
+    assert.deepEqual(saved.preferences.style, preferences.style);
+    assert.deepEqual(getCvTemplateState(options).preferences, saved.preferences);
+    const doc = loadYaml(fs.readFileSync(options.profilePath, 'utf8'));
+    for (const key of PALETTE_COLOR_KEYS) assert.equal(doc.style[key], palette.colors[key]);
+    assert.equal(doc.style.margin, '0.4in');
+    assert.equal(doc.style.font_family, 'Georgia, serif');
+    assert.equal(doc.style.font_size, '10px');
+  }
+});
+
+test('older clients changing three style controls do not erase advanced color tokens', t => {
+  const initial = { ...CV_PALETTES[0].colors, font_family: 'Georgia, serif', font_size: '10px', margin: '0.4in' };
+  const options = fixture(t, JSON.stringify({ cv: { template: 'modern' }, style: initial }));
+  const state = getCvTemplateState(options);
+  const next = { accent_color: '', font_family: 'Arial, sans-serif', font_size: '11pt' };
+  const saved = save(options, { ...state.preferences, style: next });
+  const doc = loadYaml(fs.readFileSync(options.profilePath, 'utf8'));
+  assert.equal(Object.hasOwn(doc.style, 'accent_color'), false);
+  for (const key of PALETTE_COLOR_KEYS.filter(key => key !== 'accent_color')) {
+    assert.equal(doc.style[key], initial[key]);
+    assert.equal(saved.preferences.style[key], initial[key]);
+  }
+  assert.equal(doc.style.margin, initial.margin);
+  assert.equal(doc.style.font_family, next.font_family);
+});
+
+test('template-default palette explicitly clears every coordinated color while keeping other styling', t => {
+  const options = fixture(t, JSON.stringify({ cv: { template: 'modern' }, style: { ...CV_PALETTES[0].colors, font_family: 'Georgia, serif', font_size: '10px', margin: '0.4in' } }));
+  const state = getCvTemplateState(options);
+  const preferences = { ...state.preferences, style: applyCvPalette(state.preferences.style, 'template') };
+  save(options, preferences);
+  const doc = loadYaml(fs.readFileSync(options.profilePath, 'utf8'));
+  assert.deepEqual(doc.style, { font_family: 'Georgia, serif', font_size: '10px', margin: '0.4in' });
 });
 
 test('CSS controls, HTML controls, remote resources and oversized values remain rejected', () => {
