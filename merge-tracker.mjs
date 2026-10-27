@@ -1660,6 +1660,22 @@ export async function mergeTracker(options = {}) {
     // is checked against every number actually on the tracker, not just the largest
     // one the existingApps loop saw.
     const usedNumbers = new Set();
+    // EVIDENCE: merge-listings preserves removed row identities in these
+    // snapshots. Their ledger and follow-up references still mean the original
+    // listing, so deleting the visible row must never make its number reusable.
+    function reserveMergedNumbers(notes) {
+      const text = String(notes ?? '');
+      const ids = [
+        ...parseMarkdownLinks(text).map(({ label }) => /^Merged listing #([1-9]\d*)$/.exec(label)?.[1]),
+        ...Array.from(text.matchAll(/\bMerged listing #([1-9]\d*):/g), (match) => match[1]),
+      ];
+      for (const id of ids) {
+        const n = Number(id);
+        if (!Number.isSafeInteger(n) || n < 1) continue;
+        usedNumbers.add(n);
+        if (n > maxNum) maxNum = n;
+      }
+    }
     const MAX_COL_IDX = Math.max(...Object.values(COLMAP));
     for (const line of appLines) {
       if (!line.startsWith('|')) continue;
@@ -1670,6 +1686,7 @@ export async function mergeTracker(options = {}) {
         usedNumbers.add(n);
         if (n > maxNum) maxNum = n;
       }
+      reserveMergedNumbers(parts[COLMAP.notes]);
     }
 
     console.log(`📊 Existing: ${existingApps.length} entries, max #${maxNum}`);
@@ -1845,8 +1862,20 @@ export async function mergeTracker(options = {}) {
       const addUrl = normalizeUrl(addition.url);
       let dupReason = null;
       if (addUrl) {
-        duplicate = existingApps.find(a => a.url && normalizeUrl(a.url) === addUrl);
-        if (duplicate) dupReason = 'url';
+        const direct = existingApps.filter(a => a.url && normalizeUrl(a.url) === addUrl);
+        // EVIDENCE: explicit merge-listings selections retain source URLs under
+        // this exact label. Only those confirmed aliases carry identity; ordinary
+        // notes links and similar titles never authorize an automatic merge.
+        const aliases = existingApps.filter(a => parseMarkdownLinks(a.notes).some(link =>
+          /^Merged listing #[1-9]\d*$/.test(link.label) && normalizeUrl(link.target) === addUrl));
+        const candidates = new Set([...direct, ...aliases]);
+        if (aliases.length > 0 && candidates.size > 1) {
+          console.error(`❌ ${file}: ambiguous merged listing URL is claimed by multiple tracker rows; this evaluation was NOT merged.`);
+          failedAdditions.push(file);
+          continue;
+        }
+        duplicate = direct[0] || aliases[0] || null;
+        if (duplicate) dupReason = direct.length > 0 ? 'url' : 'merged-url';
       }
 
       // Guard the report/num/fuzzy fallback against collapsing distinct postings.
@@ -2133,9 +2162,11 @@ export async function mergeTracker(options = {}) {
         // rather than overwriting it.
         const downgrade = newScore < oldScore;
         const oldReportNum = extractReportNum(duplicate.report, duplicate.notes);
-        const supersededNote = downgrade && oldReportNum && oldReportNum !== reportNum
-          ? `Superseded report [${oldReportNum}] (was ${oldScore}/5)`
-          : '';
+        const supersededNote = dupReason === 'merged-url' && duplicate.report && duplicate.report !== addition.report
+          ? `Previous primary report ${duplicate.report} (was ${oldScore}/5)`
+          : downgrade && oldReportNum && oldReportNum !== reportNum
+            ? `Superseded report [${oldReportNum}] (was ${oldScore}/5)`
+            : '';
 
         console.log(
           `${downgrade ? '🔽' : '🔄'} Update: #${duplicate.num} ${addition.company} — ${addition.role} (${oldScore}→${newScore})`
@@ -2184,7 +2215,9 @@ export async function mergeTracker(options = {}) {
           // Carry the key forward. Without this the update path rewrites the row
           // with an empty URL cell and the posting loses the very key that matched
           // it, silently demoting every later merge back to the fuzzy tiers.
-          url: addition.url || duplicate.url || '',
+          // An explicitly merged source updates the canonical row without
+          // replacing its chosen primary posting URL with a repost URL.
+          url: (dupReason === 'merged-url' ? duplicate.url : addition.url) || duplicate.url || '',
         });
         if (replaceTrackerLine(duplicate.raw, updatedLine)) {
           // Refresh the cached row from the line just written (#2392). `raw` was
@@ -2200,8 +2233,10 @@ export async function mergeTracker(options = {}) {
           // read of the tracker would produce. syncPdfFlags() has always kept its
           // cache in step this way; the update path did not.
           const refreshed = parseAppLine(updatedLine);
-          if (refreshed) Object.assign(duplicate, refreshed);
-          else duplicate.raw = updatedLine;
+          if (refreshed) {
+            Object.assign(duplicate, refreshed);
+            reserveMergedNumbers(refreshed.notes);
+          } else duplicate.raw = updatedLine;
           updated++;
         } else {
           // Unreachable once `raw` is refreshed above, but never silent again: a
@@ -2257,6 +2292,7 @@ export async function mergeTracker(options = {}) {
         // disk.
         const parsedNew = parseAppLine(newLine);
         if (parsedNew) {
+          reserveMergedNumbers(parsedNew.notes);
           // Mark the row as queued this run: tier-2 treats a num collision with a
           // same-run row as a reservation race unless the roles also fuzzy-match
           // (see the tier-2 guard above). Object.assign() in the update path never

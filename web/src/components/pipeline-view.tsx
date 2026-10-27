@@ -3,7 +3,7 @@
 import { startTransition, useCallback, useDeferredValue, useEffect, useMemo, useOptimistic, useRef, useState, useTransition } from "react";
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { Search, ChevronsUpDown, ChevronRight, X, Compass, ArrowRight, ExternalLink, Download, Loader2 } from "lucide-react";
+import { Search, ChevronsUpDown, ChevronRight, X, Compass, ArrowRight, ExternalLink, Download, Loader2, Merge } from "lucide-react";
 import type { Application, InboxJob } from "@/lib/career-ops";
 import { Badge } from "@/components/ui/badge";
 import { jevTone, jevLabel } from "@/lib/jev-presentation";
@@ -23,6 +23,8 @@ import { COMPARE_MAX } from "@/lib/pipeline-compare.mjs";
 import { postingHref, postingLabel } from "@/lib/posting-url.mjs";
 import { trackerCsv, trackerCsvFilename } from "@/lib/tracker-csv.mjs";
 import { groupSimilarApplications } from "@/lib/pipeline-groups.mjs";
+import { canMergeListings } from "@/lib/pipeline-merge.mjs";
+import { MergeListingsDialog } from "@/components/merge-listings-dialog";
 
 type Tab = (typeof PIPELINE_TABS)[number];
 
@@ -56,6 +58,7 @@ export function PipelineView({
   const [bulkError, setBulkError] = useState("");
   const [groupListings, setGroupListings] = useState(true);
   const [expandedGroups, setExpandedGroups] = useState<ReadonlySet<string>>(new Set());
+  const [mergeRows, setMergeRows] = useState<Application[] | null>(null);
   const activeTab = useRef<HTMLButtonElement>(null);
 
   // The URL is the SINGLE source of truth for tab/min/sort/dir, so the home stat
@@ -311,6 +314,16 @@ export function PipelineView({
               Compare
             </Link>
           )}
+          {canMergeListings(selectedRows) && (
+            <button
+              type="button"
+              disabled={bulkBusy}
+              onClick={() => setMergeRows(selectedRows)}
+              className="inline-flex items-center gap-1.5 rounded-md border border-border px-2.5 py-1 text-xs font-medium hover:border-brand/40 hover:text-brand disabled:opacity-50"
+            >
+              <Merge aria-hidden="true" className="size-3" /> Merge listings
+            </button>
+          )}
           <button type="button" onClick={() => setSelected(new Set())} className="text-xs text-muted hover:text-foreground">
             Clear
           </button>
@@ -413,6 +426,7 @@ export function PipelineView({
                         {company.label}
                       </Link>
                       {groupListings && !child && group.rows.length > 1 && (
+                        <div className="mt-1 flex flex-wrap items-center gap-2">
                         <button
                           type="button"
                           aria-expanded={expandedGroups.has(group.key)}
@@ -423,11 +437,23 @@ export function PipelineView({
                             else next.add(group.key);
                             return next;
                           })}
-                          className="mt-1 inline-flex items-center gap-1 rounded px-1 py-1 text-xs font-normal text-brand hover:underline focus-visible:ring-2 focus-visible:ring-brand/40"
+                          className="inline-flex items-center gap-1 rounded px-1 py-1 text-xs font-normal text-brand hover:underline focus-visible:ring-2 focus-visible:ring-brand/40"
                         >
                           <ChevronRight aria-hidden="true" className={cn("size-3 transition-transform", expandedGroups.has(group.key) && "rotate-90")} />
                           {group.rows.length} similar listings
                         </button>
+                        {canMergeListings(group.rows) && (
+                          <button
+                            type="button"
+                            disabled={bulkBusy}
+                            onClick={() => setMergeRows(group.rows)}
+                            aria-label={`Merge ${group.rows.length} similar listings for ${company.label}, ${r.role}`}
+                            className="inline-flex items-center gap-1 rounded border border-border px-2 py-1 text-xs font-normal text-muted hover:border-brand/40 hover:text-brand focus-visible:ring-2 focus-visible:ring-brand/40 disabled:opacity-50"
+                          >
+                            <Merge aria-hidden="true" className="size-3" /> Merge listings
+                          </button>
+                        )}
+                        </div>
                       )}
                     </td>
                   <td className="px-4 py-3 text-muted">
@@ -497,6 +523,19 @@ export function PipelineView({
           <p className="font-display text-lg">No matches</p>
           <p className="mx-auto mt-1 max-w-sm text-sm text-muted">Try a different tab or clear the search.</p>
         </div>
+      )}
+      {mergeRows && (
+        <MergeListingsDialog
+          rows={mergeRows}
+          onClose={() => setMergeRows(null)}
+          onMerged={(kept, merged) => {
+            setMergeRows(null);
+            setSelected(new Set());
+            setExpandedGroups(new Set());
+            setAnnouncement(`Merged ${merged.length + 1} listings into #${kept}. Source links and reports preserved in notes.`);
+            startTransition(() => router.refresh());
+          }}
+        />
       )}
     </PageFrame>
   );
