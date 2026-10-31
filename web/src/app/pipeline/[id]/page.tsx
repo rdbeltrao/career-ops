@@ -19,6 +19,7 @@ export default async function ReportPage({ params, searchParams }: {
   const app = findApplication(id);
   const report = readReport(id);
   if (!app && !report) notFound();
+  const reportNum = reportNumberFor(id, app, report?.file ?? null);
   // Resolved here rather than in the component so the link is only rendered when
   // THIS application's cover is actually on disk. `id` is passed as the
   // application number, never as a company: a report with no tracker row has no
@@ -35,11 +36,11 @@ export default async function ReportPage({ params, searchParams }: {
       report={report?.content ?? null}
       file={report?.file ?? null}
       canDelete={trackerCanDelete()}
-      pdfReadyFromIndex={await pdfReadyForReport(id)}
+      pdfReadyFromIndex={await pdfReadyForReport(String(reportNum ?? id))}
       coverReady={coverReady}
       backHref={`/pipeline${query ? `?${query}` : ""}`}
       applyHref={`/pipeline/${encodeURIComponent(id)}/apply${query ? `?${query}` : ""}`}
-      reportNum={reportNumberFor(id, app, report?.file ?? null)}
+      reportNum={reportNum}
       linkedinApply={li ? { applyUrl: li.applyUrl, kind: li.kind } : null}
     />
   );

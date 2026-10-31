@@ -4,7 +4,7 @@ import { use } from "react";
 import Link from "next/link";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { ArrowLeft, Loader2, Wrench, CircleDot, Check, X } from "lucide-react";
+import { ArrowLeft, Loader2, Wrench, CircleDot, Check, X, FileDown } from "lucide-react";
 import { useJobs } from "@/components/jobs/job-store";
 import { HeroGlow } from "@/components/hero-glow";
 import { Badge } from "@/components/ui/badge";
@@ -27,6 +27,10 @@ export default function JobPage({ params }: { params: Promise<{ id: string }> })
     );
   }
 
+  const pdfQuery = job.reportN != null
+    ? `n=${encodeURIComponent(String(job.reportN))}`
+    : job.input ? `application=${encodeURIComponent(job.input)}` : null;
+
   return (
     <div className="mx-auto max-w-3xl px-6 py-8">
       <Link href="/pipeline" className="inline-flex items-center gap-1.5 text-sm text-muted transition-colors hover:text-brand">
@@ -47,6 +51,15 @@ export default function JobPage({ params }: { params: Promise<{ id: string }> })
           </p>
           <h1 className="mt-2 font-display text-2xl tracking-tight text-landing">{job.title}</h1>
           {job.subtitle && <p className="mt-1 text-sm text-muted">{job.subtitle}</p>}
+          {job.kind === "pdf" && job.status === "done" && pdfQuery && (
+            <a
+              href={`/api/cv-pdf?${pdfQuery}`}
+              download
+              className="mt-4 inline-flex min-h-[44px] items-center justify-center gap-1.5 rounded-full border border-emerald-500/40 bg-emerald-500/10 px-3 py-1 text-sm font-medium text-emerald-700 transition-colors hover:bg-emerald-500/15 dark:text-emerald-400"
+            >
+              <FileDown className="size-4" /> Download CV (PDF)
+            </a>
+          )}
           {job.result?.score != null && (
             <div className="mt-3 flex flex-wrap items-center gap-2.5">
               <Badge tone={job.result.tone}>{job.result.score}/5</Badge>

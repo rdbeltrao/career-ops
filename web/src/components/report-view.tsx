@@ -117,7 +117,7 @@ export function ReportView({
 
         <div className="mt-4 flex flex-wrap items-center gap-2.5">
           {app && <StatusSelect n={id} current={app.status} />}
-          <GeneratePdfButton n={id} company={app?.company ?? meta?.title ?? id} pdfReady={pdfReady} />
+          <GeneratePdfButton n={id} company={app?.company ?? meta?.title ?? id} pdfReady={pdfReady} reportNum={reportNum} />
           {app && report && <CoverDraftButton n={id} company={companyName} />}
           {applyHref && (
             <Link

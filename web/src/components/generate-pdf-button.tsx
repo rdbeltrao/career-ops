@@ -10,8 +10,8 @@ import { pdfButtonState, type PdfFailure } from "@/lib/pdf-button-state.mjs";
 // Fires the real career-ops `pdf` mode (worker kind "pdf") to generate an
 // ATS-optimized CV tailored to THIS offer → output/cv-… + marks the tracker.
 // Once a tailored CV exists (tracker PDF ✅, or a pdf worker just finished), it
-// becomes a "View tailored CV" link (served by /api/cv-pdf) + a regenerate icon.
-export function GeneratePdfButton({ n, company, pdfReady }: { n: string; company: string; pdfReady: boolean }) {
+// exposes preview/download links (served by /api/cv-pdf) + a regenerate icon.
+export function GeneratePdfButton({ n, company, pdfReady, reportNum }: { n: string; company: string; pdfReady: boolean; reportNum?: number | null }) {
   const { jobs, startJob } = useJobs();
   const job = useMemo(
     () => jobs.filter((j) => j.kind === "pdf" && j.input === n).sort((a, b) => b.startedAt - a.startedAt)[0],
@@ -21,6 +21,8 @@ export function GeneratePdfButton({ n, company, pdfReady }: { n: string; company
     startJob({ title: `CV PDF · ${company}`, subtitle: "tailored for this role", kind: "pdf", input: n, page: `/pipeline/${n}` });
 
   const state = pdfButtonState(job, pdfReady);
+  const completedReport = job?.status === "done" ? job.reportN : null;
+  const pdfHref = `/api/cv-pdf?n=${encodeURIComponent(String(completedReport ?? reportNum ?? n))}&company=${encodeURIComponent(company)}`;
 
   if (state.kind === "running")
     return (
@@ -33,7 +35,14 @@ export function GeneratePdfButton({ n, company, pdfReady }: { n: string; company
     return (
       <span className="inline-flex flex-wrap items-center gap-1">
         <a
-          href={`/api/cv-pdf?n=${encodeURIComponent(n)}&company=${encodeURIComponent(company)}`}
+          href={pdfHref}
+          download
+          className="inline-flex items-center justify-center gap-1.5 rounded-full border border-emerald-500/40 bg-emerald-500/10 px-3 py-1 text-xs font-medium text-emerald-700 transition-colors hover:bg-emerald-500/15 dark:text-emerald-400 max-sm:min-h-[44px]"
+        >
+          <FileDown className="size-3.5" /> Download CV (PDF)
+        </a>
+        <a
+          href={pdfHref}
           target="_blank"
           rel="noreferrer"
           className="inline-flex items-center justify-center gap-1.5 rounded-full border border-emerald-500/40 bg-emerald-500/10 px-3 py-1 text-xs font-medium text-emerald-700 transition-colors hover:bg-emerald-500/15 dark:text-emerald-400 max-sm:min-h-[44px]"
