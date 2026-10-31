@@ -789,6 +789,19 @@ export default {
 
   dedupKey: workdayDedupKey,
 
+  // Reverse scans ask only for title/location matches that still lack a date.
+  // Read the native absolute startDate; never substitute discovery time.
+  async enrichDate(job, ctx) {
+    if (job.postedAt) return;
+    const ep = resolveEndpoint({ careers_url: job.url });
+    if (!ep || !job.url.startsWith(`${ep.jobBase}/job/`)) return;
+    const detail = await fetchJsonWithRetry(ctx, `${ep.cxsBase}${job.url.slice(ep.jobBase.length)}`, {
+      redirect: 'error', headers: { accept: 'application/json', 'user-agent': BROWSER_LIKE_USER_AGENT, referer: `${ep.jobBase}/` },
+    }, { retries: 1 });
+    const date = postedAtFromDetail(detail);
+    if (date !== undefined) job.postedAt = date;
+  },
+
   /**
    * Fetch all job postings for a Workday-backed entry, paginating through
    * the tenant's CXS API.

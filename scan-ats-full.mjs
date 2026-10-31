@@ -55,7 +55,8 @@ import { fileURLToPath } from 'url';
 import { loadYaml } from './lib/yaml-document.mjs';
 import { renameSyncWithRetry } from './tracker-utils.mjs';
 
-import { makeHttpCtx, fetchJson, fetchTextHead } from './providers/_http.mjs';
+import { makeHttpCtx, fetchJson, fetchTextHead, fetchJsonWithRetry } from './providers/_http.mjs';
+import { openScanCoverage } from './lib/scan-coverage.mjs';
 import { withConnectionScope, withAbortScope } from './providers/_connection-scope.mjs';
 import { isResolverFailure, dnsPacingStats } from './providers/_dns-cache.mjs';
 import greenhouse from './providers/greenhouse.mjs';
@@ -397,12 +398,12 @@ export const SOURCES = {
 const KNOWN_FLAGS = [
   '--since', '--limit', '--ats', '--seeds', '--history-seeds', '--probe-unknown-hosts', '--dry-run', '--liveness',
   '--verbose', '--md-out', '--json', '--include-undated', '--include-blacklisted',
-  '--shuffle', '--resume', '--help', '-h',
+  '--shuffle', '--resume', '--coverage-state', '--help', '-h',
 ];
 
 // Flags that consume the next argv token as a value (space-separated form —
 // the `--flag=value` form is self-contained and never needs this).
-const VALUE_FLAGS = ['--since', '--limit', '--ats', '--seeds', '--md-out'];
+const VALUE_FLAGS = ['--since', '--limit', '--ats', '--seeds', '--md-out', '--coverage-state'];
 
 const USAGE = `Usage:
   node scan-ats-full.mjs                      # scan all ATS directories, last 3 days
@@ -418,6 +419,7 @@ const USAGE = `Usage:
   node scan-ats-full.mjs --verbose            # log per-board fetch failures
   node scan-ats-full.mjs --md-out <dir>       # also write a dated markdown digest to <dir>
   node scan-ats-full.mjs --resume             # continue an interrupted sweep from its checkpoint
+  node scan-ats-full.mjs --coverage-state data/cache/coverage.json # uncapped, durable directory coverage across runs
   node scan-ats-full.mjs --help               # print this usage block and exit`;
 
 export function parseArgs(argv) {
@@ -452,6 +454,10 @@ export function parseArgs(argv) {
   }
   const sinceDays = sinceArg.days ?? 3;
   const limit = Number(valueOf('--limit')) || Infinity;
+  const coverageState = valueOf('--coverage-state');
+  if (coverageState && (args.includes('--shuffle') || args.includes('--resume') || limit !== Infinity || args.includes('--dry-run'))) {
+    throw new Error('--coverage-state cannot be combined with --limit, --shuffle, --resume or --dry-run.');
+  }
   const atsArg = valueOf('--ats');
   // --seeds: optional comma-separated VC portfolio sources (e.g. yc,a16z).
   // When set, the seed companies are fetched and probed via the ATS providers
@@ -486,6 +492,7 @@ export function parseArgs(argv) {
   }
   return {
     sinceDays,
+    coverageState,
     limit,
     ats,
     atsExplicit: Boolean(atsArg),
@@ -834,7 +841,8 @@ export function keepAndMaybeEmit(job, source, sink, blacklist, opts) {
     opts.companyRoleDuplicates = (opts.companyRoleDuplicates || 0) + 1;
     return;
   }
-  const kept = { ...job, source, dateStatus: job.postedAt ? 'dated' : 'unknown' };
+  const kept = { ...job, source, dateStatus: job.postedAt ? 'dated' : 'unknown',
+    ...(!job.postedAt ? { note: [job.note, 'Posting date unknown; freshness not verified.'].filter(Boolean).join(' ') } : {}) };
   sink.push(kept);
   const live = filterBlacklistedOffers([kept], blacklist, { includeBlacklisted: opts.includeBlacklisted });
   if (live.offers.length) emitLiveOffer(live.offers[0], source, { json: opts.json });
@@ -961,6 +969,7 @@ export async function runHistorySeedScan(seeds, providers, opts, ctx, processJob
     } catch { /* unroutable history is a skipped seed, not a failed network request */ }
   }
   let errors = 0;
+  let missing = 0;
   const timeoutMs = opts.companyTimeoutMs ?? COMPANY_TIMEOUT_MS;
   const withHostSlot = createKeyedLimiter(SINGLE_HOST_CONCURRENCY);
   // An arbitrary provider may ignore cancellation or never settle. Once one
@@ -1001,7 +1010,8 @@ export async function runHistorySeedScan(seeds, providers, opts, ctx, processJob
       } catch (err) {
         operation.active = false;
         if (timedOut) quarantinedHosts.add(hostKey);
-        errors++;
+        if ([404, 410].includes(err.status) && err.firstPage !== false) missing++;
+        else errors++;
         if (opts.verbose) console.error(`  ✗ ${seed.vendor}-history/${entry.name}: ${err.message}`);
       } finally {
         // Observe a late rejection without waiting indefinitely. A timed-out
@@ -1018,6 +1028,7 @@ export async function runHistorySeedScan(seeds, providers, opts, ctx, processJob
     derived: selected.length,
     unsupported: capped.length - scannable.length,
     errors,
+    missing,
   };
 }
 
@@ -1159,6 +1170,8 @@ function isoDay(v) {
   return Number.isNaN(d.getTime()) ? null : d.toISOString().slice(0, 10);
 }
 
+let terminatingScan = false;
+
 async function main() {
   const opts = parseArgs(process.argv);
   let checkpoint = null;
@@ -1173,7 +1186,7 @@ async function main() {
       process.exit(1);
     }
     checkpoint = cp;
-  } else if (loadCheckpoint() && !opts.dryRun) {
+  } else if (!opts.coverageState && loadCheckpoint() && !opts.dryRun) {
     console.error(`⚠️  Unfinished sweep checkpoint found at ${CHECKPOINT_PATH} — pass --resume to continue it; this fresh run will overwrite it.`);
   }
   // Resume reuses the ORIGINAL cutoff so the date window stays consistent
@@ -1225,6 +1238,19 @@ async function main() {
   }
   const domainFilter = buildDomainFilter(config?.domain_filter);
   const filters = filterFingerprints(config);
+  const coverage = opts.coverageState ? await openScanCoverage(path.resolve(DATA_ROOT, opts.coverageState),
+    createHash('sha256').update(JSON.stringify({ filters, ats: [...opts.ats].sort(), sinceDays: opts.sinceDays,
+      includeUndated: opts.includeUndated, includeBlacklisted: opts.includeBlacklisted, liveness: opts.liveness,
+      blacklist: [...loadBlacklist()] })).digest('hex')) : null;
+  if (coverage) process.once('exit', () => coverage.close());
+  const companyLists = new Map();
+  if (coverage) {
+    for (const name of opts.ats.filter(ats => SOURCES[ats])) {
+      const data = await loadCompanyList(name, SOURCES[name].dataset);
+      companyLists.set(name, data);
+      coverage.register(name, data.list.map(SOURCES[name].toEntry).filter(Boolean).map(boardKey), data.status);
+    }
+  }
   const changedFilters = changedFilterKeys(checkpoint, filters);
   if (changedFilters.length) {
     console.error(`Error: portals.yml ${changedFilters.join(', ')} changed since the checkpoint was written — the boards already swept were filtered under the old settings. Restore them to finish this sweep, or delete ${CHECKPOINT_PATH} to start fresh.`);
@@ -1328,8 +1354,9 @@ async function main() {
   const completedSources = new Set(checkpoint?.completedSources || []);
   const cc = checkpoint?.counters || {};
   let totalCompaniesScanned = cc.totalCompaniesScanned || 0;
-  let totalCompaniesAvailable = 0;
+  let totalCompaniesAvailable = coverage?.summary().companiesTotal ?? 0;
   let totalErrors = cc.totalErrors || 0;
+  let missingBoards = 0;
   let totalRetiredBoardsSkipped = cc.totalRetiredBoardsSkipped || 0;
   let droppedNoDate = cc.droppedNoDate || 0;
   let droppedContent = cc.droppedContent || 0;
@@ -1367,15 +1394,47 @@ async function main() {
   let curDone = 0;
   let curErrors = 0;
   let curDeadSkipped = 0;
+  let stopping = false;
+  let coverageSaveError = null;
+  const saveCoverage = () => {
+    try { coverage?.save(); }
+    catch (error) {
+      coverageSaveError = error.message;
+      console.error(`Warning: Could not save coverage progress: ${error.message}`);
+    }
+  };
+  let persistence = null;
+  let persistedOffers = null;
+  let finalizedOffers = null;
+  // Normal completion and SIGTERM may overlap while a canonical writer waits
+  // for its lock. Both paths must await the same write, never append twice.
+  const persistOffers = (offers) => {
+    persistedOffers ||= offers;
+    persistence ||= (async () => {
+      if (!offers.length || opts.dryRun) return false;
+      await appendToPipeline(offers);
+      await appendToScanHistory(offers, date);
+      return true;
+    })();
+    return persistence;
+  };
   if (opts.json) {
     let flushed = false;
-    process.on('SIGTERM', () => {
+    process.on('SIGTERM', async () => {
       if (flushed) return;
       flushed = true;
+      stopping = true;
+      terminatingScan = true;
       try {
-        const partial = filterBlacklistedOffers(newOffers, blacklist, {
+        const partialOffers = finalizedOffers ?? filterBlacklistedOffers(newOffers, blacklist, {
           includeBlacklisted: opts.includeBlacklisted,
-        }).offers.map((o) => ({
+        }).offers;
+        const companiesScanned = Math.max(0, totalCompaniesScanned - (curEntries - curDone) - curDeadSkipped);
+        // An interrupted --liveness run has not verified its candidates yet.
+        // Keep them as a preview; never bypass a requested validation to save.
+        const saved = opts.liveness && !finalizedOffers ? false : await persistOffers(partialOffers);
+        if (!opts.liveness || finalizedOffers) saveCoverage();
+        const partial = (persistedOffers ?? partialOffers).map((o) => ({
           company: o.company,
           title: o.title,
           url: o.url,
@@ -1383,26 +1442,33 @@ async function main() {
           postedAt: isoDay(o.postedAt),
           dateStatus: o.dateStatus || (o.postedAt ? 'dated' : 'unknown'),
           source: o.source,
+          note: o.note || null,
         }));
         process.stdout.write(JSON.stringify({
           date,
           sources: opts.ats,
           stoppedEarly: true,
           companiesAvailable: totalCompaniesAvailable,
-          companiesScanned: Math.max(0, totalCompaniesScanned - (curEntries - curDone) - curDeadSkipped),
+          companiesScanned,
           capHit,
           datasetStatus,
           postingsKept: partial.length,
           postingsDroppedNoDate: droppedNoDate,
           postingsDroppedDuplicateRole: opts.companyRoleDuplicates,
           unreachableBoards: totalErrors + curErrors,
+          missingBoards,
+          coverage: coverage?.summary(),
+          coverageSaveError,
+          postingsKeptUndated: (persistedOffers ?? partialOffers).filter(o => !o.postedAt).length,
           domainFilterActive: Boolean(domainFilter),
           domainGatedBoards,
           domainGatedPostings,
+          saved,
           offers: partial,
         }) + '\n', () => process.exit(0));
-      } catch {
-        process.exit(0);
+      } catch (error) {
+        console.error(`Error: Could not save interrupted scan: ${error.message}`);
+        process.exit(1);
       }
     });
   }
@@ -1431,7 +1497,7 @@ async function main() {
   // counters so both passes update the same run totals.
   const processJobs = async (jobs, sourceName, provider, companySlug, shouldContinue = () => true) => {
     for (const job of jobs) {
-      if (!shouldContinue()) return;
+      if (stopping || !shouldContinue()) return;
       if (!job.url || !job.title) continue;
       // Confirmed-stale postings are always dropped. Undated postings are
       // dropped by default (a reverse scan targets *fresh* roles) but
@@ -1453,7 +1519,7 @@ async function main() {
       if (dateClass === 'undated' && provider.enrichDate
           && titleFilter(job.title, companySlug) && locationFilter(job.location, job.url, job.title)) {
         try { await provider.enrichDate(job, ctx); } catch { /* stays undated */ }
-        if (!shouldContinue()) return;
+        if (stopping || !shouldContinue()) return;
         dateClass = classifyPostingDate(job, cutoff);
       }
       if (dateClass === 'stale') continue;
@@ -1475,22 +1541,30 @@ async function main() {
   // scope by the time the checkpoint's fate is decided at the end of main().
   let stoppedByOutage = false;
 
-  for (const name of opts.ats.filter((ats) => SOURCES[ats])) {
+  const sourceNames = opts.ats.filter(ats => SOURCES[ats]);
+  if (coverage) sourceNames.sort((a, b) => coverage.fraction(a) - coverage.fraction(b));
+  for (const name of sourceNames) {
     const source = SOURCES[name];
     // Stats are accumulated BEFORE the completed-source skip: on --resume a
     // source finished before the checkpoint was written still contributed its
     // companies to the sweep, so it must still count toward the availability /
     // cap figures the final report and --json output show.
-    const { list, status } = await loadCompanyList(name, source.dataset);
+    const { list, status } = companyLists.get(name) ?? await loadCompanyList(name, source.dataset);
     datasetStatus[name] = status;
-    totalCompaniesAvailable += list.length;
+    if (!coverage) totalCompaniesAvailable += list.length;
     if (opts.limit < list.length) capHit = true;
     if (completedSources.has(name)) {
       log(`\n⚙  ${name} — already complete in resumed checkpoint, skipping`);
       continue;
     }
     const datasetHash = datasetFingerprint(list);
-    const entriesAll = sampleCompanies(list, opts.limit, opts.shuffle).map(source.toEntry).filter(Boolean);
+    const entriesAll = sampleCompanies(list, opts.limit, opts.shuffle).map(source.toEntry).filter(Boolean)
+      .filter(entry => !coverage || coverage.pending(name, boardKey(entry)));
+    // These three providers have no built-in retry. Reuse the core's bounded,
+    // cancellation-aware Retry-After policy instead of dropping transient boards.
+    const sourceCtx = coverage && ['greenhouse', 'lever', 'ashby'].includes(name)
+      ? { ...ctx, fetchJson: (url, options) => fetchJsonWithRetry(ctx, url, options, { retries: 1, baseDelayMs: 500, maxDelayMs: 5000 }) }
+      : ctx;
 
     let startAt = 0;
     if (checkpoint && checkpoint.current?.name === name) {
@@ -1540,8 +1614,10 @@ async function main() {
     const deferredIndices = () => [...deferred.values()].map((d) => d.index);
     await parallelEach(entries, source.concurrency ?? CONCURRENCY, async (entry, idx) => {
       const deadBoard = boardKey(entry);
+      let fullyScanned = true;
       if (shouldSkipDeadBoard(deadBoards, name, deadBoard)) {
         deadBoardsSkipped++;
+        if (!stopping) coverage?.done(name, deadBoard);
         return;
       }
       try {
@@ -1549,11 +1625,12 @@ async function main() {
         // per-job detail-page requests via provider.enrichDate) — runs inside
         // one watchdog, so enrichment latency can't blow past COMPANY_TIMEOUT_MS.
         await boardScope(source, `${name}/${entry.name}`, COMPANY_TIMEOUT_MS, async () => {
+          const boardCtx = { ...sourceCtx, titleWanted: title => titleFilter(title, entry.name) };
           // Most boards in a public directory hold nothing the title filter
           // wants; where the provider can list a board cheaply, find that out
           // before downloading every posting body.
           if (typeof source.provider.fetchListing === 'function') {
-            const listing = await source.provider.fetchListing(entry, ctx);
+            const listing = await source.provider.fetchListing(entry, sourceCtx);
             if (!listingMayMatch(listing, { cutoff, titleFilter, companySlug: entry.name })) {
               if (!opts.includeUndated) droppedNoDate += undatedInListing(listing, cutoff);
               recordBoardResult(deadBoards, name, deadBoard, 200);
@@ -1561,7 +1638,7 @@ async function main() {
               return;
             }
           }
-          const jobs = await source.provider.fetch(entry, ctx);
+          const jobs = await source.provider.fetch(entry, boardCtx);
           recordBoardResult(deadBoards, name, deadBoard, 200);
           consecutiveResolverFailures = 0;
           // Queued BEFORE the gate, deliberately: a board the gate cannot yet
@@ -1571,6 +1648,7 @@ async function main() {
           // (facet-split slice/depth/page budget) that a repeat run reaches
           // again, paying the same expensive split for the same result.
           if (jobs.workdayTruncated === WORKDAY_TRUNCATED_REASON.TRANSIENT) truncated.push(entry);
+          if (jobs.workdayTruncated || jobs.icimsTruncated) fullyScanned = false;
           // Ahead of processJobs, deliberately: a gated board is not merely
           // quieter but CHEAPER, since provider.enrichDate() issues a per-job
           // detail request for undated providers (icims) and a board dropped
@@ -1599,10 +1677,14 @@ async function main() {
           if (jobs.workdayNoDateSkip) { noDateSkipCompanies++; noDateSkipJobs += jobs.length; }
           await processJobs(jobs, name, source.provider, entry.name);
         });
+        if (!stopping && fullyScanned && !deferred.has(entry)) coverage?.done(name, deadBoard);
       } catch (err) {
         // Mostly defunct boards in the public dataset — expected noise, so the
         // default stays quiet; --verbose surfaces per-board failures.
-        errors++;
+        if ([404, 410].includes(err.status) && err.firstPage !== false) {
+          missingBoards++;
+          if (!stopping) coverage?.done(name, deadBoard);
+        } else errors++;
         recordBoardFailure(deadBoards, name, deadBoard, err);
         // A dead board and a dead resolver look identical one at a time; only
         // the *consecutive* run tells them apart, so any non-resolver outcome
@@ -1627,7 +1709,7 @@ async function main() {
       if (done % 200 === 0 || done === entries.length) {
         progress(`  ${done}/${entries.length} scanned, ${newOffers.length} total matches\r`);
       }
-      if (done % CHECKPOINT_EVERY === 0 && !opts.dryRun) {
+      if (done % CHECKPOINT_EVERY === 0 && !opts.dryRun && !coverage) {
         saveDeadBoardsBestEffort(deadBoards);
         writeCheckpoint({
           ...checkpointBase(),
@@ -1687,7 +1769,7 @@ async function main() {
                   ? 'facet split hit its bound' : 'still truncated';
                 console.error(`  ✗ ${name}/${entry.name}: ${why} after sequential retry`);
               }
-            }
+            } else if (!stopping) coverage?.done(name, boardKey(entry));
           });
         } catch (err) {
           errors++;
@@ -1726,7 +1808,7 @@ async function main() {
       // and --resume would replay all of them against the resolver that just
       // refused.
       let checkpointWritten = false;
-      if (!opts.dryRun) {
+      if (!opts.dryRun && !coverage) {
         checkpointWritten = writeCheckpoint({
           ...checkpointBase(),
           current: { name, resumeAt: startAt + lastResumeAt, datasetLen: list.length, datasetHash, deferred: deferredIndices() },
@@ -1747,7 +1829,7 @@ async function main() {
     // Source finished and folded into the totals — clear the live deltas so a
     // SIGTERM between sources reports the totals, not this source's slice twice.
     curEntries = 0; curDone = 0; curErrors = 0; curDeadSkipped = 0;
-    if (!opts.dryRun) {
+    if (!opts.dryRun && !coverage) {
       writeCheckpoint({ ...checkpointBase(), current: null, counters: snapshotCounters() });
     }
     log(`\n  done (${errors} unreachable boards, ${deadBoardsSkipped} retired boards skipped)`);
@@ -1760,6 +1842,7 @@ async function main() {
     const result = await runHistorySeedScan(historySeeds, providers, opts, ctx, processJobs);
     totalCompaniesScanned += result.total;
     totalErrors += result.errors;
+    missingBoards += result.missing;
     log(`  done — ${result.total} board(s) probed, ${result.unsupported} without a scanner provider (${result.errors} errors)`);
   }
 
@@ -1780,6 +1863,7 @@ async function main() {
   let offers = blacklistResult.offers;
   if (offers.length && opts.liveness) offers = await filterLive(offers);
   offers.sort((a, b) => (b.postedAt || 0) - (a.postedAt || 0));
+  finalizedOffers = offers;
 
   printScanSummaryHeader('Reverse ATS Scan', date, log);
   log(`Companies scanned:  ${totalCompaniesScanned}${capHit ? ` of ${totalCompaniesAvailable} (capped)` : ''}`);
@@ -1827,6 +1911,7 @@ async function main() {
   }
 
   // Persist (unless dry-run, or nothing to save).
+  if (stopping) return; // The signal handler owns persistence and the receipt.
   let saved = false;
   if (offers.length && !opts.dryRun) {
     // appendToPipeline assumes the file exists (onboarding creates it) — cover fresh setups.
@@ -1834,9 +1919,8 @@ async function main() {
       mkdirSync(path.dirname(PIPELINE_PATH), { recursive: true });
       writeFileSync(PIPELINE_PATH, '# Pipeline\n\n## Pendientes\n', 'utf-8');
     }
-    await appendToPipeline(offers);
-    await appendToScanHistory(offers, date);
-    saved = true;
+    saved = await persistOffers(offers);
+    if (stopping) return;
     log(`\nResults saved to ${PIPELINE_PATH} and data/scan-history.tsv`);
 
     if (opts.mdOut) {
@@ -1859,11 +1943,12 @@ async function main() {
       }
     }
   }
+  if (!stopping) saveCoverage();
 
   // Sweep completed — the checkpoint's job is done. A run the breaker stopped
   // did NOT complete: deleting here would destroy the resume point the outage
   // branch just wrote, which is the one case --resume exists for (#2283).
-  if (!opts.dryRun && !stoppedByOutage && existsSync(CHECKPOINT_PATH)) unlinkSync(CHECKPOINT_PATH);
+  if (!opts.dryRun && !coverage && !stoppedByOutage && existsSync(CHECKPOINT_PATH)) unlinkSync(CHECKPOINT_PATH);
 
   // The authoritative machine-readable result: lets a caller (e.g. the web)
   // tell a *degraded* scan (capped / stale dataset / undated dropped) apart
@@ -1890,6 +1975,10 @@ async function main() {
       postingsAnnotatedBlacklisted: blacklistResult.annotatedBlacklisted,
       postingsDroppedContent: droppedContent,
       unreachableBoards: totalErrors,
+      missingBoards,
+      coverage: coverage?.summary(),
+      coverageSaveError,
+      postingsKeptUndated: offers.filter(o => !o.postedAt).length,
       retiredBoardsSkipped: totalRetiredBoardsSkipped,
       cappedBoards,
       // `domainFilterActive` is not derivable from the two counts: zero skipped
@@ -1943,8 +2032,11 @@ if (isMainModule(import.meta.url)) {
     process.stdout.write('', () => process.exit(code));
   };
   main()
-    .then(() => flushAndExit(0))
+    // SIGTERM owns the final write while it persists its snapshot. The normal
+    // loop may finish during that await; it must not exit ahead of the save.
+    .then(() => { if (!terminatingScan) flushAndExit(0); })
     .catch(err => {
+      if (terminatingScan) return;
       console.error('Fatal:', err.message);
       flushAndExit(1);
     });

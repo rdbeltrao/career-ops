@@ -4563,6 +4563,7 @@ async function main() {
       // browser's seen-id store) must not consume postings a dry run never
       // writes to the pipeline.
       dryRun,
+      deadlineMs: Number(process.env.CAREER_OPS_SCAN_DEADLINE_MS) > 0 ? Number(process.env.CAREER_OPS_SCAN_DEADLINE_MS) : Infinity,
       locationHints: config.location_filter,
       // A provider that serves extra language versions of a posting at extra
       // cost fetches them only when the scan will keep them.
@@ -4597,6 +4598,9 @@ async function main() {
       }
       if (!Array.isArray(jobs)) {
         throw new Error(`${provider.id}: fetch() did not return an array`);
+      }
+      if (jobs.incompleteReason) {
+        errors.push({ company: company.name, error: String(jobs.incompleteReason) });
       }
       totalFound += jobs.length;
       if (!company._isBoard && jobs.length === 0) {

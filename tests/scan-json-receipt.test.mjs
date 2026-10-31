@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { chmodSync, lstatSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { spawnSync } from 'node:child_process';
 
 import { atomicWriteFile, isIgnorableDirectoryFsyncError } from '../scan.mjs';
@@ -150,6 +150,34 @@ test('--json returns exit 2 and structured errors for a partial failure', () => 
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
+});
+
+test('provider deadline preserves collected jobs and reports incomplete coverage after saving', () => {
+  const root = workspace('title_filter:\n  positive: [Engineer]\ntracked_companies:\n  - name: Fixture\n    provider: linkedin-browser\n');
+  try {
+    const launcher = join(root, 'launch.mjs');
+    writeFileSync(launcher, `
+      import provider from ${JSON.stringify(pathToFileURL(join(ROOT, 'providers.local/linkedin-browser.mjs')).href)};
+      provider.fetch = async (_entry, ctx) => {
+        if (ctx.deadlineMs !== 123) throw new Error('deadline not forwarded');
+        return Object.assign([{ company:'Fixture', title:'Engineer', url:'https://www.linkedin.com/jobs/view/1234567890/', location:'Remote', postedAt:Date.now() }],
+          { incompleteReason:'Scan time budget reached; collected jobs were kept.' });
+      };
+      process.argv[1] = ${JSON.stringify(SCAN)};
+      await import(${JSON.stringify(pathToFileURL(SCAN).href)});
+    `);
+    const result = spawnSync(process.execPath, [launcher, '--json'], {
+      cwd: root, encoding: 'utf8', timeout: 10_000,
+      env: { ...process.env, CAREER_OPS_ROOT: root, CAREER_OPS_PORTALS: join(root, 'portals.yml'), CAREER_OPS_PROFILE: join(root, 'config/profile.yml'),
+        CAREER_OPS_PIPELINE: join(root, 'data/pipeline.md'), CAREER_OPS_SCAN_HISTORY: join(root, 'data/scan-history.tsv'), CAREER_OPS_NO_AUTO_JEV: '1', CAREER_OPS_SCAN_DEADLINE_MS: '123' },
+    });
+    assert.equal(result.status, 2, result.stderr);
+    const receipt = JSON.parse(result.stdout);
+    assert.equal(receipt.added, 1);
+    assert.match(receipt.errors[0].error, /time budget reached/);
+    assert.match(readFileSync(join(root, 'data/pipeline.md'), 'utf8'), /1234567890/);
+    assert.match(readFileSync(join(root, 'data/scan-history.tsv'), 'utf8'), /1234567890/);
+  } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
 test('a receipt larger than the pipe buffer drains completely', () => {

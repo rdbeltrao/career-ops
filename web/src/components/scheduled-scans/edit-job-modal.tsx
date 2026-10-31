@@ -162,7 +162,7 @@ export function EditJobModal({
             {engine === "linkedin" ? (
               <LinkedInScheduleFields filters={filters} onFiltersChange={setFilters} linkedin={linkedin} onLinkedInChange={setLinkedIn} />
             ) : (
-              <FilterBuilder filters={filters} onChange={setFilters} />
+              <FilterBuilder filters={filters} onChange={setFilters} continuousCoverage={engine === "full"} />
             )}
           </div>
 

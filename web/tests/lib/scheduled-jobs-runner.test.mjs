@@ -113,7 +113,7 @@ test("scan command honors the selected engine and bounded filters", () => {
   });
   assert.deepEqual(buildScanCommand({ engine: "full", filters }), {
     script: "scan-ats-full.mjs",
-    args: ["--since", "5", "--ats", "lever,ashby", "--limit", "500", "--shuffle", "--history-seeds", "--json"],
+    args: ["--since", "5", "--ats", "lever,ashby", "--coverage-state", "data/cache/scheduled-coverage/default.json", "--include-undated", "--history-seeds", "--json"],
   });
   // LinkedIn searches alone: the same scanner as portals, limited to the
   // signed-in LinkedIn provider (scan.mjs --provider). By default each search
@@ -154,12 +154,13 @@ tracked_companies:
     enabled: false
 `;
 
-function linkedinOverlay(job) {
+async function linkedinOverlay(job) {
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), "career-ops-scheduled-linkedin-"));
   fs.writeFileSync(path.join(temp, "portals.yml"), LINKEDIN_PORTALS, "utf8");
   let overlay = null;
   try {
-    const result = executeJob(temp, { id: "22222222-2222-4222-8222-222222222222", engine: "linkedin", ...job }, {
+    const result = await executeJob(temp, { id: "22222222-2222-4222-8222-222222222222", engine: "linkedin", ...job }, {
+      sessionFn: () => ({ state: "signed-in" }),
       spawnFn: (_node, _args, options) => {
         overlay = yaml.load(fs.readFileSync(options.env.CAREER_OPS_PORTALS, "utf8"));
         return { status: 0, stdout: JSON.stringify({ version: "careerops.scan.receipt@1", added: 0 }), stderr: "" };
@@ -171,8 +172,8 @@ function linkedinOverlay(job) {
   }
 }
 
-test("LinkedIn schedule: empty fields keep the portals.yml title and location filters", () => {
-  const { result, overlay } = linkedinOverlay({ filters: { positive: [], negative: [], allow: [], block: [], blockHard: [], alwaysAllow: [] } });
+test("LinkedIn schedule: empty fields keep the portals.yml title and location filters", async () => {
+  const { result, overlay } = await linkedinOverlay({ filters: { positive: [], negative: [], allow: [], block: [], blockHard: [], alwaysAllow: [] } });
   assert.equal(result.state, "success");
   assert.deepEqual(overlay.title_filter.positive, ["Engineering Manager"]);
   assert.deepEqual(overlay.title_filter.negative, ["Werkstudent", "Junior"]);
@@ -181,41 +182,41 @@ test("LinkedIn schedule: empty fields keep the portals.yml title and location fi
   assert.deepEqual(overlay.location_filter.block_hard, ["India"]);
 });
 
-test("LinkedIn schedule: a field that is set replaces only that filter", () => {
-  const { overlay } = linkedinOverlay({ filters: { positive: ["Head of Engineering"], negative: [], allow: ["Remote"], block: [], blockHard: [], alwaysAllow: [] } });
+test("LinkedIn schedule: a field that is set replaces only that filter", async () => {
+  const { overlay } = await linkedinOverlay({ filters: { positive: ["Head of Engineering"], negative: [], allow: ["Remote"], block: [], blockHard: [], alwaysAllow: [] } });
   assert.deepEqual(overlay.title_filter.positive, ["Head of Engineering"]);
   assert.deepEqual(overlay.title_filter.negative, ["Werkstudent", "Junior"], "exclusions not set: kept");
   assert.deepEqual(overlay.location_filter.allow, ["Remote"]);
   assert.deepEqual(overlay.location_filter.block_hard, ["India"]);
 });
 
-test("LinkedIn schedule: chosen searches run, the others are switched off for this run", () => {
-  const { overlay } = linkedinOverlay({ filters: {}, linkedin: { searches: ["LinkedIn em-es"], useSearchWindow: true } });
+test("LinkedIn schedule: chosen searches run, the others are switched off for this run", async () => {
+  const { overlay } = await linkedinOverlay({ filters: {}, linkedin: { searches: ["LinkedIn em-es"], useSearchWindow: true } });
   const enabled = (name) => overlay.tracked_companies.find((c) => c.name === name).enabled !== false;
   assert.equal(enabled("LinkedIn em-es"), true);
   assert.equal(enabled("LinkedIn em-de"), false);
   assert.equal(enabled("LinkedIn off"), false, "a search that is off in portals.yml stays off");
   assert.equal(enabled("Acme"), true, "other entries are untouched (the provider filter skips them)");
-  const all = linkedinOverlay({ filters: {}, linkedin: { searches: [], useSearchWindow: true } }).overlay;
+  const all = (await linkedinOverlay({ filters: {}, linkedin: { searches: [], useSearchWindow: true } })).overlay;
   assert.deepEqual(all.tracked_companies.filter((c) => c.provider === "linkedin-browser" && c.enabled !== false).map((c) => c.name), ["LinkedIn em-de", "LinkedIn em-es"], "no choice: every search that is on");
 });
 
-test("LinkedIn schedule: a choice that matches no search that is on fails with a clear message", () => {
-  const { result } = linkedinOverlay({ filters: {}, linkedin: { searches: ["LinkedIn off", "LinkedIn renamed"], useSearchWindow: true } });
+test("LinkedIn schedule: a choice that matches no search that is on fails with a clear message", async () => {
+  const { result } = await linkedinOverlay({ filters: {}, linkedin: { searches: ["LinkedIn off", "LinkedIn renamed"], useSearchWindow: true } });
   assert.equal(result.state, "failed");
   assert.match(result.message, /None of the LinkedIn searches/);
 });
 
-test("LinkedIn schedule overrides both narrower and wider saved search windows", () => {
+test("LinkedIn schedule overrides both narrower and wider saved search windows", async () => {
   const job = { filters: { sinceDays: 14 }, linkedin: { searches: [], useSearchWindow: false } };
-  const { result, overlay } = linkedinOverlay(job);
+  const { result, overlay } = await linkedinOverlay(job);
   assert.equal(result.state, "success");
   const searches = overlay.tracked_companies.filter((entry) => entry.provider === "linkedin-browser" && entry.enabled !== false);
   assert.deepEqual(searches.map((entry) => new URL(entry.search_url).searchParams.get("f_TPR")), ["r1209600", "r1209600"]);
   assert.equal(new URL(searches[1].search_url).searchParams.get("geoId"), "1");
   assert.ok(buildScanCommand({ engine: "linkedin", ...job }).args.includes("14"));
 
-  const savedWindows = linkedinOverlay({ ...job, linkedin: { searches: [], useSearchWindow: true } }).overlay;
+  const savedWindows = (await linkedinOverlay({ ...job, linkedin: { searches: [], useSearchWindow: true } })).overlay;
   assert.deepEqual(savedWindows.tracked_companies.filter((entry) => entry.provider === "linkedin-browser" && entry.enabled !== false).map((entry) => new URL(entry.search_url).searchParams.get("f_TPR")), ["r604800", "r2592000"]);
 });
 
@@ -224,7 +225,7 @@ test("roles found for a LinkedIn run are read from scan.mjs's summary, like port
   assert.equal(extractRolesFound("portals", "New offers added: 3"), 3);
 });
 
-test("scheduled overlay falls back to portal title keywords and preserves hard location blocks", () => {
+test("scheduled overlay falls back to portal title keywords and preserves hard location blocks", async () => {
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), "career-ops-scheduled-filters-"));
   fs.writeFileSync(path.join(temp, "portals.yml"), "title_filter:\n  positive: [engineer]\ntitle_filter_full:\n  positive: [architect]\nlocation_filter: {}\n", "utf8");
   const job = {
@@ -234,7 +235,7 @@ test("scheduled overlay falls back to portal title keywords and preserves hard l
   };
   try {
     let overlay;
-    const result = executeJob(temp, job, {
+    const result = await executeJob(temp, job, {
       spawnFn: (_node, _args, options) => {
         assert.equal(options.env.CAREER_OPS_ROOT, temp);
         assert.ok(fs.existsSync(path.join(options.cwd, "scan.mjs")));
@@ -247,7 +248,7 @@ test("scheduled overlay falls back to portal title keywords and preserves hard l
     assert.deepEqual(overlay.title_filter_full.positive, ["engineer"]);
     assert.deepEqual(overlay.location_filter.block_hard, ["Brazil"]);
     assert.deepEqual(overlay.location_filter.always_allow, ["Porto"]);
-    const explicit = executeJob(temp, { ...job, filters: { ...job.filters, positive: ["designer"] } }, {
+    const explicit = await executeJob(temp, { ...job, filters: { ...job.filters, positive: ["designer"] } }, {
       spawnFn: (_node, _args, options) => {
         overlay = yaml.load(fs.readFileSync(options.env.CAREER_OPS_PORTALS, "utf8"));
         return { status: 0, stdout: JSON.stringify({ postingsKept: 0 }), stderr: "" };
@@ -261,7 +262,7 @@ test("scheduled overlay falls back to portal title keywords and preserves hard l
   }
 });
 
-test("scheduled scan hands core the profile path the web resolves, not the raw relative value", () => {
+test("scheduled scan hands core the profile path the web resolves, not the raw relative value", async () => {
   // The scanner runs with cwd = the checkout, but the web resolves a relative
   // CAREER_OPS_PROFILE under the data root it passes, so forwarding the raw value
   // would let a data root outside the checkout read a different profile.
@@ -269,11 +270,11 @@ test("scheduled scan hands core the profile path the web resolves, not the raw r
   fs.writeFileSync(path.join(temp, "portals.yml"), "title_filter:\n  positive: [engineer]\nlocation_filter: {}\n", "utf8");
   const job = { id: "22222222-2222-4222-8222-222222222222", engine: "full", filters: { positive: ["engineer"] } };
   const saved = process.env.CAREER_OPS_PROFILE;
-  const seen = (value) => {
+  const seen = async (value) => {
     if (value === undefined) delete process.env.CAREER_OPS_PROFILE;
     else process.env.CAREER_OPS_PROFILE = value;
     let profile;
-    const result = executeJob(temp, job, {
+    const result = await executeJob(temp, job, {
       spawnFn: (_node, _args, options) => {
         profile = options.env.CAREER_OPS_PROFILE;
         return { status: 0, stdout: JSON.stringify({ postingsKept: 0 }), stderr: "" };
@@ -283,11 +284,11 @@ test("scheduled scan hands core the profile path the web resolves, not the raw r
     return profile;
   };
   try {
-    assert.equal(seen("profiles/me.yml"), path.join(temp, "profiles", "me.yml"));
-    assert.equal(seen("  profiles/me.yml  "), path.join(temp, "profiles", "me.yml"));
+    assert.equal(await seen("profiles/me.yml"), path.join(temp, "profiles", "me.yml"));
+    assert.equal(await seen("  profiles/me.yml  "), path.join(temp, "profiles", "me.yml"));
     const absolute = path.join(os.tmpdir(), "elsewhere", "profile.yml");
-    assert.equal(seen(absolute), absolute);
-    assert.equal(seen(undefined), undefined);
+    assert.equal(await seen(absolute), absolute);
+    assert.equal(await seen(undefined), undefined);
   } finally {
     if (saved === undefined) delete process.env.CAREER_OPS_PROFILE;
     else process.env.CAREER_OPS_PROFILE = saved;
@@ -295,12 +296,12 @@ test("scheduled scan hands core the profile path the web resolves, not the raw r
   }
 });
 
-test("scheduled scan never starts without title keywords", () => {
+test("scheduled scan never starts without title keywords", async () => {
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), "career-ops-scheduled-no-titles-"));
   fs.writeFileSync(path.join(temp, "portals.yml"), "title_filter: {}\n", "utf8");
   try {
     let spawned = false;
-    const result = executeJob(temp, {
+    const result = await executeJob(temp, {
       id: "11111111-1111-4111-8111-111111111111",
       engine: "full",
       filters: { positive: [] },
@@ -317,7 +318,7 @@ test("scheduled scan never starts without title keywords", () => {
 
 test("scan command treats null and empty numeric filters as absent", () => {
   assert.deepEqual(buildScanCommand({ engine: "full", filters: { sinceDays: null, limitPerAts: "" } }).args, [
-    "--since", "7", "--ats", "greenhouse,lever,ashby,workday", "--limit", "150", "--shuffle", "--history-seeds", "--json",
+    "--since", "7", "--ats", "greenhouse,lever,ashby,workday", "--coverage-state", "data/cache/scheduled-coverage/default.json", "--include-undated", "--history-seeds", "--json",
   ]);
 });
 
@@ -723,13 +724,13 @@ const FULL_SCAN_PROGRESS = [
   "",
 ].join("\n");
 
-test("executeJob retries exactly three times and records the scanner's cause, not its first progress line", () => {
+test("executeJob retries exactly three times and records the scanner's cause, not its first progress line", async () => {
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), "career-ops-scheduled-retry-"));
   const job = { id: "11111111-1111-4111-8111-111111111111", engine: "full", filters: {}, timezone: "UTC" };
   fs.writeFileSync(path.join(temp, "portals.yml"), "title_filter:\n  positive: [engineer]\nlocation_filter: {}\n", "utf8");
   try {
     let attempts = 0;
-    const recovered = executeJob(temp, job, {
+    const recovered = await executeJob(temp, job, {
       spawnFn: () => {
         attempts += 1;
         return attempts < 3 ? { status: 1, stdout: "", stderr: "transient" } : { status: 0, stdout: JSON.stringify({ postingsKept: 4 }), stderr: "" };
@@ -740,7 +741,7 @@ test("executeJob retries exactly three times and records the scanner's cause, no
     assert.equal(recovered.attempt, 3);
 
     attempts = 0;
-    const fatal = executeJob(temp, job, {
+    const fatal = await executeJob(temp, job, {
       spawnFn: () => {
         attempts += 1;
         return { status: 1, stdout: "", stderr: `${FULL_SCAN_PROGRESS}  greenhouse: 120/150\nFatal: EACCES: permission denied, open 'data/scan-history.tsv'\n` };
@@ -755,13 +756,13 @@ test("executeJob retries exactly three times and records the scanner's cause, no
   }
 });
 
-test("executeJob reports a scanner timeout as a timeout and does not retry it", () => {
+test("executeJob reports a scanner timeout as a timeout and does not retry it", async () => {
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), "career-ops-scheduled-timeout-"));
   const job = { id: "11111111-1111-4111-8111-111111111111", engine: "full", filters: {}, timezone: "UTC" };
   fs.writeFileSync(path.join(temp, "portals.yml"), "title_filter:\n  positive: [engineer]\nlocation_filter: {}\n", "utf8");
   try {
     let attempts = 0;
-    const timedOut = executeJob(temp, job, {
+    const timedOut = await executeJob(temp, job, {
       spawnFn: () => {
         attempts += 1;
         // spawnSync's shape on a timeout: the progress printed so far, a kill
@@ -799,13 +800,13 @@ test("scan failure messages skip progress, stack frames and the Node banner", ()
   assert.equal(scanFailureMessage({ status: null, stderr: FULL_SCAN_PROGRESS, error: Object.assign(new Error("spawnSync node ENOBUFS"), { code: "ENOBUFS" }) }), "spawnSync node ENOBUFS");
 });
 
-test("executeJob retries thrown setup and spawn failures before succeeding", () => {
+test("executeJob retries thrown setup and spawn failures before succeeding", async () => {
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), "career-ops-scheduled-thrown-retry-"));
   const job = { id: "11111111-1111-4111-8111-111111111111", engine: "full", filters: {}, timezone: "UTC" };
   fs.writeFileSync(path.join(temp, "portals.yml"), "title_filter:\n  positive: [engineer]\nlocation_filter: {}\n", "utf8");
   try {
     let attempts = 0;
-    const result = executeJob(temp, job, {
+    const result = await executeJob(temp, job, {
       spawnFn: () => {
         attempts += 1;
         if (attempts < 3) throw new Error(`transient setup ${attempts}`);

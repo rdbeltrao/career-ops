@@ -107,11 +107,13 @@ export function Label({ children, hint }: { children: React.ReactNode; hint?: st
 export function FilterBuilder({
   filters,
   onChange,
+  continuousCoverage = false,
   seededFrom = [],
   disabled = false,
 }: {
   filters: ExploreFilters;
   onChange: (f: ExploreFilters) => void;
+  continuousCoverage?: boolean;
   seededFrom?: string[];
   disabled?: boolean;
 }) {
@@ -127,6 +129,12 @@ export function FilterBuilder({
   return (
     <fieldset disabled={disabled} className="space-y-4">
       <style>{STYLE}</style>
+      {continuousCoverage && (
+        <p className="text-xs text-muted">
+          Scans cover the full directory over successive runs, continuing saved progress.
+          Matching roles with unknown posting dates are kept and labeled.
+        </p>
+      )}
       <fieldset>
         <legend className="mb-1.5 text-[13px] font-medium">Discovery sources</legend>
         <div className="flex flex-wrap gap-4 text-sm">
@@ -244,7 +252,7 @@ export function FilterBuilder({
             <Label hint="hard reject — overrides Always include">Never include</Label>
             <KeywordField ariaLabel="Never include" values={filters.blockHard} tone="exc" placeholder="USA, Brazil…" onChange={(v) => set({ blockHard: v })} />
           </div>
-          <div>
+          {!continuousCoverage && <div>
             <Label hint={`${filters.limitPerAts} companies / source`}>Scan depth</Label>
             <input
               type="range"
@@ -256,7 +264,7 @@ export function FilterBuilder({
               onChange={(e) => set({ limitPerAts: Number(e.target.value) })}
               className="w-full accent-brand"
             />
-          </div>
+          </div>}
         </div>
       )}
     </fieldset>

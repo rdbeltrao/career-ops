@@ -188,7 +188,7 @@ try {
   );
   assert.equal(calls.length, 1);
   assert.equal(processed[0].source, 'lever-history');
-  assert.deepEqual(run, { total: 1, derived: 2, unsupported: 1, errors: 0 });
+  assert.deepEqual(run, { total: 1, derived: 2, unsupported: 1, errors: 0, missing: 0 });
   pass('history scan fetches only locally installed providers and keeps unsupported host labels inert');
 
   let lateProcessCalls = 0;

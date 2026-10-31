@@ -17,7 +17,7 @@ export function scheduledScanResult(engine, stdout) {
   if (engine === "full") {
     if (Number.isSafeInteger(receipt.companiesScanned)) {
       details.push(`Scanned ${receipt.companiesScanned}${Number.isSafeInteger(receipt.companiesAvailable) ? ` of ${receipt.companiesAvailable}` : ""} companies.`);
-      if (receipt.companiesScanned === 0) failed = true;
+      if (receipt.companiesScanned === 0 && !receipt.coverage?.companiesCompleted) failed = true;
     }
     if (receipt.capHit) warnings.push("Company limit reached; only a rotating sample was searched.");
     if (receipt.stoppedByOutage || receipt.stoppedEarly) warnings.push("Scan stopped before all sources finished.");
@@ -26,15 +26,26 @@ export function scheduledScanResult(engine, stdout) {
     if (unavailable.length) warnings.push(`Company lists unavailable or stale: ${unavailable.map(([name]) => name).join(", ")}.`);
     if (datasets.length && datasets.every(([, status]) => status === "empty")) failed = true;
     if (receipt.unreachableBoards > 0) warnings.push(`${receipt.unreachableBoards} boards unreachable.`);
+    if (receipt.missingBoards > 0) details.push(`${receipt.missingBoards} boards returned HTTP 404 or 410 (not found or removed).`);
+    if (receipt.coverage) {
+      const { companiesCompleted, companiesTotal, remaining } = receipt.coverage;
+      details.push(`Directory coverage: ${companiesCompleted} of ${companiesTotal} boards checked in this cycle.`);
+      if (remaining > 0) warnings.push(`${remaining} boards remain; the next run continues saved progress and retries unresolved boards.`);
+    }
+    if (receipt.coverageSaveError) warnings.push("Coverage progress could not be saved; the next run will revisit boards. Saved matches were retained.");
     if (receipt.cappedBoards > 0) warnings.push(`${receipt.cappedBoards} boards reached their page limit.`);
     if (receipt.postingsDroppedNoDate > 0) warnings.push(`${receipt.postingsDroppedNoDate} posting${receipt.postingsDroppedNoDate === 1 ? "" : "s"} excluded because no posting date was available.`);
+    if (receipt.postingsKeptUndated > 0) warnings.push(`${receipt.postingsKeptUndated} matching role${receipt.postingsKeptUndated === 1 ? "" : "s"} kept with unknown posting dates; freshness could not be verified.`);
   } else {
     if (Number.isSafeInteger(receipt.scanned)) {
       details.push(`Searched ${receipt.scanned} sources; ${receipt.found ?? 0} jobs read, ${receipt.filtered ?? 0} filtered out, ${receipt.duplicates ?? 0} already known.`);
       if (receipt.scanned === 0) failed = true;
     }
     if (receipt.errors?.length) {
-      warnings.push(`${receipt.errors.length} source errors: ${String(receipt.errors[0].error || "unknown error").slice(0, 200)}.`);
+      const loginRequired = engine === "linkedin" && receipt.errors.some(({ error }) => /login or a checkpoint|sign.in|authwall|login.required/i.test(String(error)));
+      warnings.push(loginRequired
+        ? "LinkedIn sign-in required. Open LinkedIn settings and sign in to the scan browser, then run this schedule again."
+        : `${receipt.errors.length} source errors: ${String(receipt.errors[0].error || "unknown error").slice(0, 200)}.`);
       if (receipt.errors.length >= receipt.scanned && receipt.found === 0) failed = true;
     }
     if (receipt.unverified_zero?.length) warnings.push(`${receipt.unverified_zero.length} sources returned an unverified empty result.`);

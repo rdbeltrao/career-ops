@@ -2,7 +2,6 @@
 
 import fs from "node:fs";
 import path from "node:path";
-import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import * as yaml from "js-yaml";
@@ -18,6 +17,8 @@ import { getCareerOpsRoot } from "../../path-resolver.mjs";
 import { getProfilePath } from "../src/lib/core/profile-path.mjs";
 import { scanFailureMessage } from "../src/lib/scheduled-scan-error.mjs";
 import { scheduledScanResult } from "../src/lib/scheduled-scan-result.mjs";
+import { runScheduledScanner } from "../src/lib/scheduled-scan-process.mjs";
+import { sessionStatus, readCrawlStatus } from "../../lib/linkedin-session.mjs";
 import { jevAutoLogPath, startJevPass } from "../../lib/jev-auto.mjs";
 import { evaluateLogPath, startEvaluatePass } from "../../lib/auto-evaluate.mjs";
 import { parsePendingJev } from "../../jev-rank.mjs";
@@ -190,12 +191,12 @@ export function buildScanCommand(job) {
   const ats = Array.isArray(filters.ats) && filters.ats.length
     ? filters.ats.join(",")
     : "greenhouse,lever,ashby,workday";
-  const limit = numericFilter(filters.limitPerAts, 150, 50, 500);
   return {
     script: "scan-ats-full.mjs",
-    // Revisit known employer boards as well as sampling the public directory.
-    // A capped random slice alone can miss new openings at those employers.
-    args: ["--since", String(sinceDays), "--ats", ats, "--limit", String(limit), "--shuffle", "--history-seeds", "--json"],
+    // Complete the directory over bounded runs instead of repeatedly sampling
+    // 150 random employers. Each schedule owns its progress independently.
+    args: ["--since", String(sinceDays), "--ats", ats, "--coverage-state",
+      `data/cache/scheduled-coverage/${job.id || "default"}.json`, "--include-undated", "--history-seeds", "--json"],
   };
 }
 
@@ -272,29 +273,53 @@ function childEnv(root) {
   };
 }
 
-export function executeJob(root, job, options = {}) {
-  const spawnFn = options.spawnFn || spawnSync;
+export async function executeJob(root, job, options = {}) {
+  const spawnFn = options.spawnFn || runScheduledScanner;
   const startedAt = Date.now();
   let lastError = "Scan failed";
   let finalAttempt = MAX_ATTEMPTS;
+
+  if (job.engine === "linkedin") {
+    const session = (options.sessionFn || (() => sessionStatus({ crawl: readCrawlStatus(root) })))();
+    if (["no-profile", "signed-out", "expired", "sign-in-needed"].includes(session.state)) {
+      return { state: "failed", attempt: 1, rolesFound: 0, durationMs: Date.now() - startedAt,
+        message: "LinkedIn sign-in required. Open LinkedIn settings and sign in to the scan browser, then run this schedule again." };
+    }
+  }
 
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt += 1) {
     let tempPortals = null;
     try {
       tempPortals = writeJobPortals(root, job);
       const command = buildScanCommand(job);
-      const result = spawnFn(
+      const result = await spawnFn(
         process.execPath,
         [command.script, ...command.args],
         {
           cwd: CODE_ROOT,
-          env: { ...childEnv(root), CAREER_OPS_PORTALS: tempPortals },
-          encoding: "utf8",
+          env: { ...childEnv(root), CAREER_OPS_PORTALS: tempPortals,
+            // Browser scans finish their current posting, then let scan.mjs
+            // filter and persist results before the outer process deadline.
+            CAREER_OPS_SCAN_DEADLINE_MS: String(Date.now() + SCAN_TIMEOUT_MS - 120_000) },
           timeout: SCAN_TIMEOUT_MS,
           maxBuffer: MAX_OUTPUT_BYTES,
           windowsHide: true,
         },
       );
+
+      // SIGTERM can produce a complete, persisted partial receipt. Keep its
+      // count; retrying would lose it to dedup. An unsaved preview is not enough.
+      if (result.error?.code === "ETIMEDOUT" && job.engine === "full") {
+        try {
+          const receipt = JSON.parse(result.stdout || "");
+          if (receipt.stoppedEarly === true && receipt.saved === true) {
+            const outcome = scheduledScanResult("full", result.stdout);
+            return { ...outcome, state: outcome.state === "failed" ? "failed" : "partial", attempt,
+              durationMs: Date.now() - startedAt,
+              message: `${scanFailureMessage(result, { timeoutMs: SCAN_TIMEOUT_MS })} ${outcome.message}` };
+          }
+        } catch { /* No usable persisted result: report the timeout below. */ }
+      }
 
       // scan.mjs exits 2 with a valid receipt when some sources failed. It has
       // already saved its matches, so rerunning would obscure the first count.
@@ -439,7 +464,7 @@ async function main() {
 
       if (!claim) return { status: "idle" };
 
-      const result = executeJob(root, claim.job);
+      const result = await executeJob(root, claim.job);
       await recordCompletion(storePath, claim, result);
       if (result.state === "failed") throw new Error(result.message);
       return { status: "success", jobId: claim.job.id, ...result };

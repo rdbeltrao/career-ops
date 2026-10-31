@@ -978,7 +978,11 @@ export function resolveMaxPages(entry) {
 
 export class LoginRequiredError extends Error {
   constructor(url) {
-    super(`${SOURCE}: LinkedIn asked for a login or a checkpoint at ${url}. The LinkedIn part of this run stops here and is not retried; sign in with "node linkedin-login.mjs" and run the scan again.`);
+    // Authwall query strings can contain session identifiers and bury recovery
+    // instructions in the scheduler's bounded error summary.
+    let page = 'LinkedIn';
+    try { const parsed = new URL(url); page = `${parsed.origin}${parsed.pathname}`; } catch { /* omit malformed URLs */ }
+    super(`${SOURCE}: Sign in with "node linkedin-login.mjs" or LinkedIn settings, then run the scan again. LinkedIn requested login or a checkpoint at ${page}; this run is not retried.`);
     this.name = 'LoginRequiredError';
     this.url = url;
   }
@@ -1191,7 +1195,7 @@ function dump(name, html) {
  * durable dedup. Legacy seen ids without a payload are visited again: a
  * previous scan may have died before saving them to the pipeline.
  */
-export async function walkSearch(page, { entry, searchUrl, maxPages, seenPath, dryRun, applyRoot = getCareerOpsRoot(), titleWanted, pause = sleepRandom, readDetail = openDetail }) {
+export async function walkSearch(page, { entry, searchUrl, maxPages, seenPath, dryRun, applyRoot = getCareerOpsRoot(), titleWanted, pause = sleepRandom, readDetail = openDetail, deadlineMs = Infinity, now = Date.now }) {
   const name = String(entry.name ?? '');
   // Posting-page visits that read an offsite employer URL, per search.
   let applyLookupsLeft = resolveApplyLookups(entry);
@@ -1199,7 +1203,13 @@ export async function walkSearch(page, { entry, searchUrl, maxPages, seenPath, d
   const seenThisRun = new Set();
   /** @type {Job[]} */
   const jobs = [];
+  const budgetReached = () => {
+    if (now() < deadlineMs) return false;
+    jobs.incompleteReason = 'Scan time budget reached; remaining LinkedIn results were not searched. Collected jobs were kept.';
+    return true;
+  };
   for (let pageNo = 1; pageNo <= maxPages; pageNo++) {
+    if (budgetReached()) return jobs;
     const url = pagedUrl(searchUrl, pageNo);
     if (pageNo > 1) await pause(PAGE_WAIT_MS);
     let listHtml;
@@ -1224,6 +1234,7 @@ export async function walkSearch(page, { entry, searchUrl, maxPages, seenPath, d
     log(`${name} page ${pageNo}/${maxPages}: ${cards.length} cards, ${fresh.length} unique in this search`);
     if (cards.length === 0) break;
     for (const card of fresh) {
+      if (budgetReached()) return jobs;
       // The core provides its exact title rule. Keep the rejected card in the
       // result for filter accounting, but avoid opening its pane/apply page.
       if (card.title && titleWanted && !titleWanted(card.title)) {
@@ -1254,7 +1265,7 @@ export async function walkSearch(page, { entry, searchUrl, maxPages, seenPath, d
       }
       // The pane says "on company website" but carries no URL; the posting page
       // does. One more page, paced like the cards, only for offsite postings.
-      if (apply.applyKind === 'offsite' && applyLookupsLeft > 0) {
+      if (apply.applyKind === 'offsite' && applyLookupsLeft > 0 && now() < deadlineMs) {
         applyLookupsLeft -= 1;
         await pause(CARD_WAIT_MS);
         try {
@@ -1307,6 +1318,9 @@ export default {
     if (halted) throw halted;
     return withBrowserLock(async () => {
       if (halted) throw halted;
+      if (Date.now() >= (ctx.deadlineMs ?? Infinity)) {
+        return Object.assign([], { incompleteReason: 'Scan time budget reached; this LinkedIn search was not started.' });
+      }
       // Launched inside the try: a launch that fails (profile in use, browser
       // missing) is recorded as this search's result like any other failure.
       let context;
@@ -1320,8 +1334,10 @@ export default {
           seenPath: seenStorePath(),
           dryRun: ctx?.dryRun === true,
           titleWanted: ctx?.titleWanted,
+          deadlineMs: ctx.deadlineMs,
         });
-        noteCrawl(ctx, { result: 'ok', search: String(entry.name ?? ''), jobs: jobs.length });
+        noteCrawl(ctx, { result: jobs.incompleteReason ? 'error' : 'ok', search: String(entry.name ?? ''), jobs: jobs.length,
+          message: jobs.incompleteReason || '' });
         return jobs;
       } catch (err) {
         noteCrawl(ctx, {

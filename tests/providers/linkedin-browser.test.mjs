@@ -71,6 +71,30 @@ function searchPage(html) {
   };
 }
 
+test('search deadline keeps collected jobs and stops before another posting', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'linkedin-deadline-'));
+  let time = 0, opened = 0;
+  try {
+    const jobs = await walkSearch(searchPage(fixture('list.html')), {
+      entry: { name: 'search', resolve_apply_url: false }, searchUrl: 'https://www.linkedin.com/jobs/search/', maxPages: 1,
+      seenPath: seenStorePath(root), dryRun: true, applyRoot: root, pause: async () => {}, deadlineMs: 10, now: () => time,
+      readDetail: async (_page, id) => { opened++; time = 10; return detailForCard(id); },
+    });
+    assert.equal(opened, 1);
+    assert.equal(jobs.length, 1);
+    assert.match(jobs.incompleteReason, /time budget reached/);
+    assert.ok(jobs[0].description);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('expired search deadline does not navigate', async () => {
+  const page = searchPage('');
+  page.goto = async () => { throw new Error('must not navigate'); };
+  const jobs = await walkSearch(page, { entry: {}, searchUrl: '', maxPages: 1, seenPath: '/nonexistent/seen.json', dryRun: true, deadlineMs: 1, now: () => 1 });
+  assert.equal(jobs.length, 0);
+  assert.match(jobs.incompleteReason, /time budget reached/);
+});
+
 test('interrupted search replays captured jobs and revisits legacy seen ids without losing postings', async () => {
   const root = mkdtempSync(join(tmpdir(), 'linkedin-recover-'));
   const ids = parseCards(fixture('list.html')).map((card) => card.id);
@@ -369,6 +393,10 @@ test('a LoginRequiredError names the URL and the login script and says nothing i
   assert.ok(err.message.includes('https://www.linkedin.com/checkpoint/challenge/1'));
   assert.ok(err.message.includes('node linkedin-login.mjs'));
   assert.ok(err.message.includes('not retried'));
+  const authwall = new LoginRequiredError('https://www.linkedin.com/authwall?trk=private-value#private-fragment');
+  assert.ok(authwall.message.includes('https://www.linkedin.com/authwall'));
+  assert.ok(!authwall.message.includes('private-value'));
+  assert.ok(!authwall.message.includes('private-fragment'));
 });
 
 // ---- building the scanner job
