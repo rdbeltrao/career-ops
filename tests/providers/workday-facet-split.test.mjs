@@ -548,6 +548,28 @@ try {
     fail(`slice failing on page 0 produced recovery line ${JSON.stringify(page0RecoveryLine)}, expected it to carry "(still incomplete)"`);
   }
 
+  // A clamp detected on page 0 must not survive a later date-window stop.
+  // Otherwise a completed incremental crawl fans out across the stale board,
+  // wasting its budget and potentially reporting a structural coverage gap.
+  const windowCalls = [];
+  const { result: windowJobs } = await captureConsoleErrors(() => workday.fetch(ENTRY, mkCtx(async (_url, opts) => {
+    const body = JSON.parse(opts.body);
+    windowCalls.push(body);
+    return {
+      total: 2000,
+      facets: [{ facetParameter: 'jobFamily', values: [{ id: 'a', count: 1500 }, { id: 'b', count: 1200 }] }],
+      jobPostings: postings('window', body.offset).map(p => ({
+        ...p, postedOn: body.offset === 0 ? 'Posted Today' : 'Posted 20 Days Ago',
+      })),
+    };
+  }, { includeUndated: true, sinceMs: Date.now() - 14 * 86400000 })));
+  if (windowCalls.length === 2 && windowCalls.every(body => !Object.keys(body.appliedFacets).length)
+    && windowJobs.length === 40 && windowJobs.workdayTruncated === undefined) {
+    pass('workday.fetch() does not facet-split a clamped board after pagination finishes the date window');
+  } else {
+    fail(`date-window completion made ${windowCalls.length} requests, returned ${windowJobs.length} jobs, truncated=${windowJobs.workdayTruncated}; expected 2 unfaceted pages, 40 jobs, no truncation`);
+  }
+
   // early-stop must stay exempt: a slice that paginated past the --since
   // window is genuinely done for this sweep, and tagging it would send the
   // whole tenant back through the retry pass on every incremental scan.

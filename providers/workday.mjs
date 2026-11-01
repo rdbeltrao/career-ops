@@ -956,7 +956,9 @@ export default {
         }
       }
 
-      return { jobs, total, facets, stopReason, clamped };
+      // A later page can finish the date window after page 0 detected a
+      // clamp. No facet split is needed once this query covered that window.
+      return { jobs, total, facets, stopReason, clamped: clamped && stopReason !== STOP_REASON.EARLY_STOP };
     };
 
     let root;
