@@ -1197,7 +1197,11 @@ export default {
         let nextFacet = facet;
         while (nextFacet) {
           tried.add(nextFacet.facetParameter);
-          for (const value of nextFacet.values) {
+          // A complementary pass needs only the omitted rows. Probe its small
+          // buckets first and stop as soon as the unique count is verified.
+          const values = fullCoverage && tried.size > 1
+            ? [...nextFacet.values].sort((a, b) => a.count - b.count) : nextFacet.values;
+          for (const value of values) {
             if (fullCoverage && scopeSeen.size >= trueTotal) break;
             if (slicesSpent >= maxSplitSlices) { splitIncomplete = true; splitStructural = true; break; }
             if (pagesSpent >= pageBudget) { splitIncomplete = true; splitStructural = true; break; }
