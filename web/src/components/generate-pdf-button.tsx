@@ -4,6 +4,7 @@ import { useMemo } from "react";
 import Link from "next/link";
 import { FileDown, Loader2, FileText, FilePenLine, RotateCcw, SlidersHorizontal, TriangleAlert } from "lucide-react";
 import { useJobs } from "@/components/jobs/job-store";
+import { PdfDownloadLink } from "@/components/pdf-download-link";
 import { CostBadge } from "@/components/cost/cost-badge";
 import { pdfButtonState, type PdfFailure } from "@/lib/pdf-button-state.mjs";
 
@@ -34,13 +35,12 @@ export function GeneratePdfButton({ n, company, pdfReady, reportNum }: { n: stri
   if (state.kind === "ready")
     return (
       <span className="inline-flex flex-wrap items-center gap-1">
-        <a
+        <PdfDownloadLink
           href={pdfHref}
-          download
           className="inline-flex items-center justify-center gap-1.5 rounded-full border border-emerald-500/40 bg-emerald-500/10 px-3 py-1 text-xs font-medium text-emerald-700 transition-colors hover:bg-emerald-500/15 dark:text-emerald-400 max-sm:min-h-[44px]"
         >
           <FileDown className="size-3.5" /> Download CV (PDF)
-        </a>
+        </PdfDownloadLink>
         <a
           href={pdfHref}
           target="_blank"

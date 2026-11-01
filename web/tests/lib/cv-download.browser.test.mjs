@@ -79,10 +79,13 @@ test("generated CV downloads from job details and completed run, using the exact
   const page = await browser.newPage({ acceptDownloads: true });
   page.setDefaultTimeout(15_000);
   const assertDownload = async () => {
+    const pdfResponse = page.waitForResponse(response => response.url().includes("/api/cv-pdf?"));
     const before = page.url();
     const [download] = await Promise.all([
       page.waitForEvent("download"), page.getByRole("link", { name: "Download CV (PDF)", exact: true }).click(),
     ]);
+    assert.equal((await pdfResponse).request().resourceType(), "fetch", "PDF retrieval stays in the page context");
+    assert.equal(await download.failure(), null);
     assert.equal(download.suggestedFilename(), filename);
     assert.deepEqual(await readFile(await download.path()), pdf);
     assert.equal(page.url(), before, "download keeps the job page open");
@@ -94,6 +97,13 @@ test("generated CV downloads from job details and completed run, using the exact
   await assertDownload();
   await page.reload();
   await assertDownload();
+  await page.route("**/api/cv-pdf?*", route => route.fulfill({ status: 403, body: "Forbidden" }));
+  await page.getByRole("link", { name: "Download CV (PDF)", exact: true }).click();
+  await page.getByRole("alert").filter({ hasText: "PDF download failed (HTTP 403)." }).waitFor();
+  await page.unroute("**/api/cv-pdf?*");
+  await assertDownload();
+  assert.equal(await page.getByRole("alert").filter({ hasText: "PDF download failed" }).count(), 0);
+
   await page.goto(`${origin}/pipeline/311`);
   assert.equal(await page.getByRole("link", { name: "Download CV (PDF)", exact: true }).count(), 0);
 
