@@ -878,7 +878,7 @@ export default {
     const fullCoverage = ctx?.syntheticEntries === true;
     const maxPages = fullCoverage && entry.max_pages == null ? MAX_PAGES_CAP : resolveMaxPages(entry);
     const maxSplitDepth = fullCoverage ? 4 : MAX_SPLIT_DEPTH;
-    const maxSplitSlices = fullCoverage ? 256 : MAX_SPLIT_SLICES;
+    const maxSplitSlices = fullCoverage ? 512 : MAX_SPLIT_SLICES;
 
     // Honor a context page cap — verify-portals' liveness probe sets
     // `ctx.maxPages: 1` so it only needs to know a board is live, not its full
@@ -920,6 +920,7 @@ export default {
      * Returns the facets alongside the jobs because the caller needs them to
      * decide whether this query was clamped and, if so, what to split it on.
      */
+    let verifyNativeCounts = false;
     const runQuery = async (appliedFacets, expectedTotal = null) => {
       pagesSpent++;
       const first = await fetchJsonWithRetry(ctx, ep.api, { ...postOpts, body: makeBody(0, appliedFacets) }, RETRY_POLICY);
@@ -928,6 +929,9 @@ export default {
       const total = typeof first?.total === 'number' ? first.total : null;
       const facets = Array.isArray(first?.facets) ? first.facets : [];
       const firstPostings = Array.isArray(first?.jobPostings) ? first.jobPostings : [];
+      const scopeTotal = trueTotalFromFacets(facets.filter(f => !Object.hasOwn(appliedFacets, f.facetParameter)));
+      if (fullCoverage && total === WORKDAY_OFFSET_CEILING && expectedTotal > WORKDAY_OFFSET_CEILING
+        && expectedTotal > (scopeTotal || 0)) verifyNativeCounts = true;
 
       // How many pages to fetch in total (including the first, already-fetched
       // one): bounded by `total` when the server reports it, always capped at
@@ -942,13 +946,13 @@ export default {
       // FETCH_ERROR must NOT produce the "raise max_pages" advice: that knob
       // does nothing for a tenant that died on a rate limit rather than hit the cap.
       let stopReason = STOP_REASON.COMPLETE;
-      if (pageIsPastWindow(jobs, sinceMs)) stopReason = STOP_REASON.EARLY_STOP;
+      if (!verifyNativeCounts && pageIsPastWindow(jobs, sinceMs)) stopReason = STOP_REASON.EARLY_STOP;
       // Some tenants' CXS responses never include postedOn at all (e.g.
       // adventhealth, on every page). Early-stop can't apply then — there's
       // no dated posting to recognize as "past the window".
       const sawAnyDatedPosting = jobs.some((j) => typeof j.postedAt === 'number');
       const canBatchPages = fullCoverage && ctx?.includeUndated === true
-        && !jobs.some(job => Number.isFinite(job.postedAt) || Number.isFinite(job.postedAtUpperBound));
+        && (verifyNativeCounts || !jobs.some(job => Number.isFinite(job.postedAt) || Number.isFinite(job.postedAtUpperBound)));
 
       // Zero dated postings on page 0, --include-undated off, --since-bounded
       // scan: further pagination is pure waste — every posting from this
@@ -970,16 +974,16 @@ export default {
       // download the same first 2,000 rows at every level of the tree.
       const splitChild = fullCoverage && clamped && Object.keys(appliedFacets).length > 0;
 
-      // Dated pages stay sequential so the window stop can avoid later work.
-      // Undated full sweeps use at most two staggered requests. Either path
-      // retains successful pages when a neighbour fails.
+      // Window-limited pages stay sequential so the stop can avoid later work.
+      // Undated sweeps and native-count verification use at most two staggered
+      // requests. Either path retains successful pages when a neighbour fails.
       let page = 1;
       if (stopReason === STOP_REASON.COMPLETE && !splitChild) {
         for (; page < pagesToFetch; page++) {
           if (pagesSpent >= pageBudget) { budgetExhausted = true; break; }
           if (canBatchPages && page + 1 < pagesToFetch && pagesSpent + 2 <= pageBudget) {
-            // Undated boards cannot use a chronological early stop. Keep two
-            // requests in flight, staggered by the existing per-tenant delay.
+            // These queries must enumerate rows instead of stopping by date.
+            // Keep two requests in flight, staggered by the per-tenant delay.
             // Observe both outcomes immediately and retain either successful
             // page even if its neighbour fails.
             pagesSpent += 2;
@@ -1004,7 +1008,7 @@ export default {
             page++;
             if (failed) { stopReason = STOP_REASON.FETCH_ERROR; break; }
             if (shortPage) break;
-            if (pageIsPastWindow(lastPage, sinceMs)) { stopReason = STOP_REASON.EARLY_STOP; break; }
+            if (!verifyNativeCounts && pageIsPastWindow(lastPage, sinceMs)) { stopReason = STOP_REASON.EARLY_STOP; break; }
             continue;
           }
           await sleep(INTER_PAGE_DELAY_MS, ctx);
@@ -1028,7 +1032,7 @@ export default {
             const postings = Array.isArray(json?.jobPostings) ? json.jobPostings : [];
             if (postings.length < PAGE_SIZE) break; // short page → last page reached
           }
-          if (pageIsPastWindow(pageJobs, sinceMs)) { stopReason = STOP_REASON.EARLY_STOP; break; }
+          if (!verifyNativeCounts && pageIsPastWindow(pageJobs, sinceMs)) { stopReason = STOP_REASON.EARLY_STOP; break; }
         }
         if (stopReason === STOP_REASON.COMPLETE && page === pagesToFetch && pagesToFetch === maxPages) {
           stopReason = STOP_REASON.CAP;
@@ -1111,7 +1115,10 @@ export default {
        * the facet parameters already spent — without which the next level would
        * keep re-deriving the same partition.
        */
-      const split = async (result, applied, depth, excluded) => {
+      const split = async (result, applied, depth, excluded, ancestors = []) => {
+        const scopeSeen = new Set();
+        const collectors = [...ancestors, scopeSeen];
+        for (const job of result.jobs) for (const collector of collectors) collector.add(job.url);
         absorb(result.jobs);
         // A slice that stopped early is not a slice that finished. `clamped` is
         // only ever true for stopReason 'complete', so without this the
@@ -1171,6 +1178,8 @@ export default {
         const trueTotal = fullCoverage
           ? Math.max(result.expectedTotal || 0, trueTotalFromFacets(scopeFacets) || 0)
           : trueTotalFromFacets(result.facets);
+        const partitionGap = fullCoverage && chosenCoverage < trueTotal;
+        if (partitionGap) verifyNativeCounts = true;
         if (trueTotal !== null) {
           const others = [];
           for (const f of scopeFacets) {
@@ -1184,34 +1193,48 @@ export default {
           }
         }
 
-        for (const value of facet.values) {
-          if (slicesSpent >= maxSplitSlices) { splitIncomplete = true; splitStructural = true; break; }
-          if (pagesSpent >= pageBudget) { splitIncomplete = true; splitStructural = true; break; }
-          slicesSpent++;
-          await sleep(INTER_PAGE_DELAY_MS, ctx);
-          const nextApplied = { ...applied, [facet.facetParameter]: [value.id] };
-          // runQuery()'s page-0 fetch is unguarded — fine for the one page-0 of
-          // an ordinary board, but here it runs once per slice against a tenant
-          // that is by definition large, which is where a WAF or rate limiter
-          // lives. Letting it throw would abandon the whole tenant including
-          // the unfaceted crawl already absorbed into `out`, so a dead slice
-          // becomes an incomplete split and the rest of the partition is still
-          // tried. Same accounting as a slice that died mid-pagination.
-          let sliceResult;
-          try {
-            sliceResult = await runQuery(nextApplied, value.count);
-          } catch (err) {
-            const attempts = err.attempts ?? RETRY_POLICY.retries + 1;
-            console.error(`⚠️  workday: ${entry.name} slice ${facet.facetParameter}=${value.id} failed on its first page after ${attempts} attempts: ${err.message}`);
-            splitIncomplete = true;
-            continue;
+        const tried = new Set();
+        let nextFacet = facet;
+        while (nextFacet) {
+          tried.add(nextFacet.facetParameter);
+          for (const value of nextFacet.values) {
+            if (fullCoverage && scopeSeen.size >= trueTotal) break;
+            if (slicesSpent >= maxSplitSlices) { splitIncomplete = true; splitStructural = true; break; }
+            if (pagesSpent >= pageBudget) { splitIncomplete = true; splitStructural = true; break; }
+            slicesSpent++;
+            await sleep(INTER_PAGE_DELAY_MS, ctx);
+            const nextApplied = { ...applied, [nextFacet.facetParameter]: [value.id] };
+            // runQuery()'s page-0 fetch is unguarded — fine for the one page-0 of
+            // an ordinary board, but here it runs once per slice against a tenant
+            // that is by definition large, which is where a WAF or rate limiter
+            // lives. Letting it throw would abandon the whole tenant including
+            // the unfaceted crawl already absorbed into `out`, so a dead slice
+            // becomes an incomplete split and the rest of the partition is still
+            // tried. Same accounting as a slice that died mid-pagination.
+            let sliceResult;
+            try {
+              sliceResult = await runQuery(nextApplied, value.count);
+            } catch (err) {
+              const attempts = err.attempts ?? RETRY_POLICY.retries + 1;
+              console.error(`⚠️  workday: ${entry.name} slice ${nextFacet.facetParameter}=${value.id} failed on its first page after ${attempts} attempts: ${err.message}`);
+              splitIncomplete = true;
+              continue;
+            }
+            await split(
+              sliceResult,
+              nextApplied,
+              depth + 1,
+              [...excluded, nextFacet.facetParameter],
+              collectors,
+            );
           }
-          await split(
-            sliceResult,
-            nextApplied,
-            depth + 1,
-            [...excluded, facet.facetParameter],
-          );
+          // An unclassified posting may be absent from one partition and present
+          // in another. Check complementary partitions only for a measured gap;
+          // their unique union, not facet sums, must substantiate recovery.
+          nextFacet = partitionGap && scopeSeen.size < trueTotal
+            && slicesSpent < maxSplitSlices && pagesSpent < pageBudget
+            ? chooseSplitFacet(scopeFacets.filter(f => !tried.has(f.facetParameter)), { exclude: excluded, completePartition: true })
+            : null;
         }
       };
 

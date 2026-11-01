@@ -70,6 +70,30 @@ test('an honest un-clamped total above 2000 is fully paginated', async () => {
   assert.equal(jobs.workdayTruncated, undefined);
 });
 
+test('complementary partitions recover unclassified rows and verify counts before excluding old postings', async () => {
+  const missing = rows('missing', 3), a = rows('a', 1100), b = rows('b', 1100), c = rows('c', 200);
+  for (const job of b.slice(-100)) job.postedOn = 'Posted 30+ Days Ago';
+  const child = [...a, ...b, ...missing], all = [...child, ...c];
+  const alternate = [...a.slice(3), ...b, ...missing];
+  let complementaryRequests = 0;
+  const jobs = await workday.fetch(entry, { ...context(async (_url, opts) => {
+    const { appliedFacets: f, offset } = JSON.parse(opts.body);
+    if (!f.division) return { total: 2000, facets: [facet('division', [['large', 2203], ['small', 200]])], jobPostings: all.slice(offset, offset + 20) };
+    if (f.division[0] === 'small') return { total: 200, jobPostings: c.slice(offset, offset + 20) };
+    if (!f.team && !f.category) return { total: 2000,
+      facets: [facet('team', [['a', 1100], ['b', 1100]]), facet('category', [['x', 1100], ['y', 1100]])],
+      jobPostings: child.slice(offset, offset + 20) };
+    let page;
+    if (f.team) page = f.team[0] === 'a' ? a : b;
+    else { complementaryRequests++; page = f.category[0] === 'x' ? alternate.slice(0, 1100) : alternate.slice(1100); }
+    return { total: page.length, jobPostings: page.slice(offset, offset + 20) };
+  }), sinceMs: Date.now() - 14 * 86400000 });
+  assert.ok(complementaryRequests > 0);
+  assert.equal(jobs.length, 2303, 'native union covers all 2403 rows before the 100 provably stale rows are excluded');
+  assert.equal(jobs.filter(job => job.url.includes('/missing_')).length, 3);
+  assert.equal(jobs.workdayTruncated, undefined);
+});
+
 test('an explicit page limit stays visibly incomplete when postings remain', async () => {
   const all = rows('limited', 60);
   const jobs = await workday.fetch({ ...entry, max_pages: 2 }, context(async (_url, opts) => {

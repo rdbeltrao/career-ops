@@ -410,8 +410,10 @@ Notes:
 - **Full-directory Workday sweeps refine large boards into bounded facet
   slices.** Selected-facet counts belong to the broader parent query and are
   excluded when sizing a child slice. Undated boards can fetch two staggered
-  pages at a time. A page cap or unresolved posting-count gap keeps the board
-  pending; a successful partial read is never recorded as complete coverage.
+  pages at a time. Measured count gaps trigger complementary partitions and
+  enumeration against native counts before old postings are filtered out.
+  A page cap or unresolved posting-count gap keeps the board pending; a
+  successful partial read is never recorded as complete coverage.
   Changes to retrieval policy recheck live boards while retaining verified
   missing boards. The normal whole-run deadline still applies.
 - **Invalid values fail immediately** — `--since` with no number, `--since=`,
