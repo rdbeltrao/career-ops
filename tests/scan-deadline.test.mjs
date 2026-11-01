@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createScanDeadline, withScanSignal } from '../lib/scan-deadline.mjs';
-import { boardScope, runHistorySeedScan } from '../scan-ats-full.mjs';
+import { boardScope, runHistorySeedScan, coverageBoardTimeoutMs } from '../scan-ats-full.mjs';
 
 test('wall clock expiry aborts a scan even after a delayed timer', () => {
   let now = 1;
@@ -26,4 +26,18 @@ test('history-derived boards honor the same cancellation signal', async () => {
   const result = await runHistorySeedScan([{ vendor: 'fixture', company: 'Fixture', careersUrl: 'https://fixture.test' }], new Map([['fixture', provider]]),
     { limit: Infinity, companyTimeoutMs: 30_000 }, { signal: controller.signal }, () => { throw new Error('must not process'); });
   assert.equal(result.errors, 0, 'a planned budget stop is not a network failure');
+});
+
+test('final Workday recovery still obeys the normal scan deadline', async () => {
+  const timeout = coverageBoardTimeoutMs('workday', 57, true);
+  assert.equal(timeout, 15 * 60_000);
+  assert.equal(coverageBoardTimeoutMs('workday', 101, true), 5 * 60_000);
+  assert.equal(coverageBoardTimeoutMs('lever', 57, true), 5 * 60_000);
+  assert.equal(coverageBoardTimeoutMs('workday', 57, false), 5 * 60_000);
+  const deadline = createScanDeadline(Date.now() + 20);
+  const keepAlive = setTimeout(() => {}, 1000);
+  try {
+    await assert.rejects(boardScope({ singleHost: true }, 'large Workday board', timeout,
+      () => new Promise(() => {}), deadline.signal), /Scan time budget reached/);
+  } finally { deadline.close(); clearTimeout(keepAlive); }
 });

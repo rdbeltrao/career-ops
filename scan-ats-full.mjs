@@ -972,7 +972,6 @@ export async function runHistorySeedScan(seeds, providers, opts, ctx, processJob
   let errors = 0;
   let missing = 0;
   let attempted = 0;
-  const timeoutMs = opts.companyTimeoutMs ?? COMPANY_TIMEOUT_MS;
   const withHostSlot = createKeyedLimiter(SINGLE_HOST_CONCURRENCY);
   // An arbitrary provider may ignore cancellation or never settle. Once one
   // request times out, quarantine that host for the rest of this run: queued
@@ -982,6 +981,8 @@ export async function runHistorySeedScan(seeds, providers, opts, ctx, processJob
   const quarantinedHosts = new Set();
 
   await parallelEach(scannable, CONCURRENCY, async ({ seed, provider, entry }) => {
+    const timeoutMs = opts.companyTimeoutMs ?? coverageBoardTimeoutMs(seed.vendor,
+      grouped.get(seed.vendor).length, Boolean(opts.coverageState));
     const hostKey = (() => {
       try { return new URL(entry.careers_url).hostname.toLowerCase(); } catch { return seed.vendor; }
     })();
@@ -1043,10 +1044,18 @@ export async function runHistorySeedScan(seeds, providers, opts, ctx, processJob
 
 // ── Parallel fetch with concurrency limit ───────────────────────────
 
-// One company's whole fetch may not exceed this — even with per-request
+// Broad sweeps give each company's whole fetch this guard — even with per-request
 // timeouts in _http.mjs, an unforeseen hang (DNS, a provider bug) must cost
 // one company, not freeze a worker slot for the rest of a 12k-company sweep.
 const COMPANY_TIMEOUT_MS = 5 * 60_000;
+
+export function coverageBoardTimeoutMs(sourceName, pendingCount, coverageEnabled) {
+  // Small final Workday batches contain the large boards that could not finish
+  // the broad sweep's five-minute guard. The shared scan deadline still limits
+  // the entire run, including these longer fetches, to its normal work budget.
+  return coverageEnabled && sourceName === 'workday' && pendingCount > 0 && pendingCount <= CONCURRENCY * 5
+    ? 15 * 60_000 : COMPANY_TIMEOUT_MS;
+}
 
 // Run one board's unit of work. For a source that gives every tenant its own
 // hostname (workday, icims, bamboohr), the board gets a private connection
@@ -1592,6 +1601,7 @@ async function main() {
       startAt = checkpoint.current.resumeAt;
     }
     const entries = entriesAll.slice(startAt);
+    const companyTimeoutMs = coverageBoardTimeoutMs(name, entries.length, Boolean(coverage));
     totalCompaniesScanned += entries.length;
     curEntries = entries.length; curDone = 0; curErrors = 0; curDeadSkipped = 0;
     log(`\n⚙  ${name} — ${entriesAll.length} companies${status !== 'ok' ? ` (dataset: ${status})` : ''}${startAt ? ` — resuming at ${startAt}` : ''}`);
@@ -1636,8 +1646,8 @@ async function main() {
       try {
         // The whole per-company unit — fetch AND processJobs (which may issue
         // per-job detail-page requests via provider.enrichDate) — runs inside
-        // one watchdog, so enrichment latency can't blow past COMPANY_TIMEOUT_MS.
-        await boardScope(source, `${name}/${entry.name}`, COMPANY_TIMEOUT_MS, async () => {
+        // one watchdog, so enrichment shares the company's fetch budget.
+        await boardScope(source, `${name}/${entry.name}`, companyTimeoutMs, async () => {
           const boardCtx = { ...sourceCtx, titleWanted: title => titleFilter(title, entry.name) };
           // Most boards in a public directory hold nothing the title filter
           // wants; where the provider can list a board cheaply, find that out
@@ -1759,7 +1769,7 @@ async function main() {
         if (scanDeadline.expired()) break;
         let retrySignal;
         try {
-          await boardScope(source, `${name}/${entry.name} (retry)`, COMPANY_TIMEOUT_MS, async (signal) => {
+          await boardScope(source, `${name}/${entry.name} (retry)`, companyTimeoutMs, async (signal) => {
             retrySignal = signal;
             const jobs = await source.provider.fetch(entry, {
               ...sourceCtx, titleWanted: title => titleFilter(title, entry.name),

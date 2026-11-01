@@ -35,6 +35,9 @@
  *                               usable date. scan.mjs ignores it; consumers
  *                               like scan-ats-full.mjs use it for recency
  *                               filtering.
+ * @property {number} [postedAtUpperBound] Latest possible publication time,
+ *                               when native text supplies only an age bound.
+ *                               This is not an exact posting date.
  * @property {{min?: number, max?: number, currency?: string}} [salary]
  *                               Annualized compensation, attached ONLY when the
  *                               source exposes real figures — never inferred

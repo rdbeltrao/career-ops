@@ -669,7 +669,7 @@ for (const [label, detailImpl] of [
 // be in root.jobs (it only appears in the slices), so the detail endpoint would
 // be called zero times — and the assertion below would go red.
 //
-// Fixture design: the root query reports total=20 (one page, terminates quickly)
+// Fixture design: the root query reports total=2000 (the native offset ceiling)
 // with facets that sum to 3002 (> WORKDAY_OFFSET_CEILING=2000), triggering the
 // clamp. Two facet slices are produced: sliceA has the duplicate placeholder
 // and one ordinary posting; sliceB also has the duplicate placeholder. Root's
@@ -696,7 +696,7 @@ for (const [label, detailImpl] of [
   }];
 
   const ROOT_PAGE = {
-    total: 20, // one page, clamped (total<=2000 and facets sum=3002>2000)
+    total: 2000, // clamped (total=2000 and facets sum=3002>2000)
     facets: CLAMPED_FACETS,
     jobPostings: [{
       title: 'Ordinary Posting',

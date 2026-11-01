@@ -91,8 +91,8 @@ const SPLIT_PAGE_BUDGET_FACTOR = 5;
 // page's oldest *dated* posting is well past --since — no point paying for
 // (and rate-limit-risking) pages that are entirely stale. Only unambiguous
 // numeric ages ("Posted N Days Ago", N < 30) count for this; the unbounded
-// "30+ Days Ago" bucket never triggers it, so a wide --since (>=30 days)
-// simply never early-stops rather than risk a false stop.
+// "30+ Days Ago" bucket proves staleness only for a narrower window; a wide
+// --since (>=30 days) never early-stops on that bucket's unknown exact date.
 //
 // The sort isn't perfectly monotonic day-to-day — some tenants (e.g. Adobe)
 // return day-labels slightly out of order across consecutive postings ("27
@@ -178,13 +178,16 @@ async function confirmDeadViaCareersPage(ep, ctx) {
 // unfaceted crawl, and a board it could not finish keeps the workdayTruncated
 // tag rather than being reported as complete.
 
-/**
- * Sum one facet's value counts; null when none of its values carry a count.
- *
- * Reads a facet's own `values` only. Nested children are deliberately not
- * summed — see the trap documented on `chooseSplitFacet()` (#3875).
- */
+function isPartitionFacet(facet) {
+  // These native controls describe overlapping skills, radius choices, or
+  // individual requisitions, not a partition of the board's postings.
+  const key = String(facet?.facetParameter || '').toLowerCase().replace(/[^a-z]/g, '');
+  return !['skill', 'skills', 'distance', 'jobrequisition', 'jobrequisitions'].includes(key);
+}
+
+/** Sum direct value counts of a partition; nested children may overlap. */
 function facetCoverage(facet) {
+  if (!isPartitionFacet(facet)) return null;
   const values = Array.isArray(facet?.values) ? facet.values : [];
   let sum = 0;
   let counted = 0;
@@ -275,18 +278,23 @@ function locationValueScore(value, hints) {
  * location value may be the only useful slice (for example, Toronto among
  * dozens of US cities), so the location-aware path may return one value while
  * the generic fallback retains the historical two-value partition rule.
+ * Full sweeps require a complete partition and retain every location value;
+ * hints only determine which of those values is read first.
  */
-export function chooseSplitFacet(facets, { exclude = [], locationHints } = {}) {
+export function chooseSplitFacet(facets, { exclude = [], locationHints, completePartition = false } = {}) {
   const skip = new Set(exclude);
   const candidates = [];
   let best = null;
+  const requiredCoverage = completePartition ? trueTotalFromFacets(facets) : null;
   for (const facet of Array.isArray(facets) ? facets : []) {
+    if (!isPartitionFacet(facet)) continue;
     const facetParameter = facet?.facetParameter;
     if (typeof facetParameter !== 'string' || !facetParameter || skip.has(facetParameter)) continue;
     const values = (Array.isArray(facet.values) ? facet.values : []).filter(
       (v) => typeof v?.id === 'string' && v.id && Number.isInteger(v?.count) && v.count >= 0,
     );
     if (values.length < 2) continue;
+    if (requiredCoverage !== null && facetCoverage(facet) !== requiredCoverage) continue;
     candidates.push({ facet, values });
     const largest = Math.max(...values.map((v) => v.count));
     // Tie-break on value count: a finer partition leaves less to re-split.
@@ -309,7 +317,13 @@ export function chooseSplitFacet(facets, { exclude = [], locationHints } = {}) {
       .filter(({ values }) => values.length > 0);
     if (locationCandidates.length > 0) {
       locationCandidates.sort((a, b) => b.values.length - a.values.length);
-      return locationCandidates[0];
+      const chosen = locationCandidates[0];
+      if (completePartition) {
+        const all = candidates.find(({ facet }) => facet.facetParameter === chosen.facetParameter).values;
+        const preferred = new Set(chosen.values.map(value => value.id));
+        return { ...chosen, values: [...chosen.values, ...all.filter(value => !preferred.has(value.id))] };
+      }
+      return chosen;
     }
   }
 
@@ -319,7 +333,8 @@ export function chooseSplitFacet(facets, { exclude = [], locationHints } = {}) {
 /**
  * True once a page's oldest unambiguously-dated posting is past the --since window.
  *
- * Undated postings are invisible here. A page of nothing but undated postings
+ * Truly undated postings are invisible here. Explicit age bounds may prove
+ * staleness without supplying an exact date. A page of undated postings
  * never stops pagination (the `dated.length === 0` guard), but a page that
  * mixes stale dated postings with undated ones does — and the undated ones on
  * later pages are then never fetched, even though scan.mjs's date filters
@@ -328,7 +343,7 @@ export function chooseSplitFacet(facets, { exclude = [], locationHints } = {}) {
  */
 export function pageIsPastWindow(pageJobs, sinceMs) {
   if (typeof sinceMs !== 'number') return false;
-  const dated = pageJobs.map((j) => j.postedAt).filter((v) => typeof v === 'number');
+  const dated = pageJobs.map((j) => j.postedAt ?? j.postedAtUpperBound).filter((v) => Number.isFinite(v));
   if (dated.length === 0) return false;
   return Math.min(...dated) < sinceMs - EARLY_STOP_MARGIN_MS;
 }
@@ -472,6 +487,11 @@ function parsePostedOn(label) {
   const m = label.match(/posted\s+(\d+)(\+?)\s*day/i);
   if (!m || m[2] === '+') return undefined; // "30+ Days Ago" — unbounded, no usable date
   return Date.now() - Number(m[1]) * 86_400_000;
+}
+
+function postedOnUpperBound(label) {
+  const match = String(label || '').match(/posted\s+(\d+)\+\s*days?\s+ago/i);
+  return match ? Date.now() - Number(match[1]) * 86_400_000 : undefined;
 }
 
 // Workday URL path encodes location as /job/{Location-Slug}/{title-slug}.
@@ -773,6 +793,7 @@ export function parseWorkdayResponse(json, entry) {
       requisitionId: reqFromWorkday(j),
       location: j.locationsText || locationFromPath(j.externalPath),
       postedAt: parsePostedOn(j.postedOn),
+      postedAtUpperBound: postedOnUpperBound(j.postedOn),
     });
   }
   return jobs;
@@ -863,7 +884,7 @@ export default {
      */
     const isClamped = (total, facets) => {
       if (ctxCap !== Infinity) return false;
-      if (total === null || total > WORKDAY_OFFSET_CEILING) return false;
+      if (total !== WORKDAY_OFFSET_CEILING) return false;
       const trueTotal = trueTotalFromFacets(facets);
       return trueTotal !== null && trueTotal > WORKDAY_OFFSET_CEILING;
     };
@@ -1035,6 +1056,7 @@ export default {
         const facet = chooseSplitFacet(result.facets, {
           exclude: excluded,
           locationHints: ctx?.locationHints,
+          completePartition: ctx?.syntheticEntries === true,
         });
         if (!facet) { splitIncomplete = true; splitStructural = true; return; }
 
@@ -1109,6 +1131,12 @@ export default {
       const short = splitIncomplete || budgetExhausted ? ' (still incomplete)' : '';
       console.error(`⚠️  workday: ${entry.name} offset-clamped at ${WORKDAY_OFFSET_CEILING} — recovered ${jobs.length} jobs via ${slicesSpent} facet slices${short}`);
     }
+
+    // "30+ Days Ago" has no exact date, but it is certainly outside a
+    // fourteen-day window. Keep the uncertainty for wider windows; do not
+    // spend enrichment requests or emit known-old rows in a narrower one.
+    if (sinceMs !== null) jobs = jobs.filter(job => !Number.isFinite(job.postedAtUpperBound)
+      || job.postedAtUpperBound >= sinceMs);
 
     // Resolve `"53 Locations"` placeholders into the real places (#3860). Runs
     // on the FINAL job list, after the facet split has deduped its overlapping

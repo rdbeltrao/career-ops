@@ -115,6 +115,25 @@ try {
   const workday = workdayModule.default;
   const { trueTotalFromFacets, chooseSplitFacet } = workdayModule;
 
+  const nativeControls = [
+    { facetParameter: 'Skills', values: [{ id: 's', count: 6805 }] },
+    { facetParameter: 'distance', values: [{ id: 'near', count: 1 }, { id: 'far', count: 1 }] },
+    { facetParameter: 'Job_Requisition', values: [{ id: 'r1', count: 1 }, { id: 'r2', count: 1 }] },
+    { facetParameter: 'jobFamily', values: [{ id: 'a', count: 1000 }, { id: 'b', count: 435 }] },
+  ];
+  if (trueTotalFromFacets(nativeControls) === 1435 && chooseSplitFacet(nativeControls)?.facetParameter === 'jobFamily') {
+    pass('Workday skills, distance and individual requisitions never masquerade as whole-board partitions');
+  } else fail('native non-partition controls corrupted board size or split selection');
+
+  const completeFacets = [
+    { facetParameter: 'jobFamily', values: [{ id: 'partial-a', count: 10 }, { id: 'partial-b', count: 10 }] },
+    { facetParameter: 'Location_Country', values: [{ id: 'us', descriptor: 'United States', count: 2100 }, { id: 'de', descriptor: 'Germany', count: 100 }] },
+  ];
+  const completeChoice = chooseSplitFacet(completeFacets, { completePartition: true, locationHints: { allow: ['Germany'] } });
+  if (completeChoice?.facetParameter === 'Location_Country' && completeChoice.values.map(v => v.id).join(',') === 'de,us') {
+    pass('full coverage rejects incomplete facets and prioritizes wanted locations without dropping other slices');
+  } else fail(`full partition lost coverage: ${JSON.stringify(completeChoice)}`);
+
   // ── trueTotalFromFacets ───────────────────────────────────────────
 
   // The clamp is only detectable by comparing the reported total against what
@@ -334,16 +353,16 @@ try {
   }
 
   // A slice can be clamped in its own right; it has to split again on a facet
-  // that has not been applied yet. Totals are kept to one page so the assertion
-  // is about split shape, not pagination.
+  // that has not been applied yet. Clamped totals use the actual ceiling;
+  // repeated pages keep the union assertion focused on split shape.
   const NESTED = {
     '': {
-      total: 20,
+      total: 2000,
       facets: [{ facetParameter: 'jobFamily', values: [{ id: 'a', count: 2600 }, { id: 'b', count: 100 }] }],
       tag: 'unfaceted',
     },
     'jobFamily=a': {
-      total: 20,
+      total: 2000,
       facets: [{ facetParameter: 'timeType', values: [{ id: 'p', count: 1400 }, { id: 'f', count: 1200 }] }],
       tag: 'a',
     },
@@ -358,7 +377,7 @@ try {
     nestedCalls.push(key);
     const res = NESTED[key];
     if (!res) throw new Error(`unexpected slice ${JSON.stringify(key)}`);
-    return { total: res.total, facets: res.facets, jobPostings: postings(res.tag, body.offset) };
+    return { total: res.total, facets: res.facets, jobPostings: postings(res.tag, 0) };
   }, { includeUndated: true }))).then((r) => r.result);
 
   if (nestedCalls.includes('jobFamily=a&timeType=p') && nestedCalls.includes('jobFamily=a&timeType=f')) {
@@ -376,22 +395,24 @@ try {
   // Depth has to bottom out: a tenant that reports a clamp at every level, on a
   // facet it never runs out of, would otherwise recurse until the board does.
   let deepCalls = 0;
+  let deepest = 0;
   const { result: deepJobs } = await captureConsoleErrors(() => workday.fetch(ENTRY, mkCtx(async (_url, opts) => {
     const body = JSON.parse(opts.body);
     deepCalls++;
-    if (deepCalls > 100) throw new Error('runaway facet split');
+    if (deepCalls > 501) throw new Error('runaway facet split');
     const depth = Object.keys(body.appliedFacets || {}).length;
+    deepest = Math.max(deepest, depth);
     return {
-      total: 20,
+      total: 2000,
       facets: [{ facetParameter: `f${depth}`, values: [{ id: 'x', count: 2600 }, { id: 'y', count: 2600 }] }],
       jobPostings: postings(`d${depth}`, body.offset),
     };
   }, { includeUndated: true })));
 
-  if (deepCalls <= 100) {
+  if (deepCalls <= 501 && deepest === 2) {
     pass('workday.fetch() bounds the facet split instead of recursing while the tenant keeps claiming a clamp');
   } else {
-    fail(`facet split made ${deepCalls} requests — unbounded`);
+    fail(`facet split made ${deepCalls} requests, reached depth ${deepest} — expected at most 501 requests and depth 2`);
   }
 
   if (deepJobs.workdayTruncated === STRUCTURAL) {
@@ -683,15 +704,43 @@ try {
     const body = JSON.parse(opts.body);
     healthyCalls.push(sliceKey(body.appliedFacets));
     return {
-      total: 30,
-      facets: [{ facetParameter: 'jobFamily', values: [{ id: 'a', count: 20 }, { id: 'b', count: 10 }] }],
-      jobPostings: postings('h', body.offset, body.offset === 0 ? 20 : 10),
+      total: 1899,
+      facets: [{ facetParameter: 'Location_Country', values: [{ id: 'a', count: 2000 }, { id: 'b', count: 709 }] }],
+      jobPostings: postings('h', body.offset, Math.min(20, 1899 - body.offset)),
     };
   }, { includeUndated: true }));
   if (healthyCalls.every((k) => k === '')) {
     pass('workday.fetch() never issues a faceted request for a tenant whose total is not clamped');
   } else {
     fail(`healthy tenant issued faceted requests: ${JSON.stringify(healthyCalls)}`);
+  }
+
+  const fullCalls = [];
+  const fullFacets = [
+    { facetParameter: 'jobFamily', values: [{ id: 'a', count: 10 }, { id: 'b', count: 10 }] },
+    { facetParameter: 'Location_Country', values: [{ id: 'us', descriptor: 'United States', count: 1200 }, { id: 'de', descriptor: 'Germany', count: 1000 }] },
+  ];
+  const { result: fullJobs } = await captureConsoleErrors(() => workday.fetch(ENTRY, mkCtx(async (_url, opts) => {
+    const body = JSON.parse(opts.body);
+    const key = sliceKey(body.appliedFacets);
+    if (key) fullCalls.push(key);
+    return key ? { total: 20, facets: [], jobPostings: postings(key, 0) }
+      : { total: 2000, facets: fullFacets, jobPostings: postings('full', body.offset) };
+  }, { includeUndated: true, syntheticEntries: true, locationHints: { allow: ['Germany'] } })));
+  if (fullCalls.join(',') === 'Location_Country=de,Location_Country=us' && fullJobs.workdayTruncated === undefined) {
+    pass('full Workday scans read every slice of a complete partition and finish without false structural truncation');
+  } else fail(`full scan stayed incomplete or dropped slices: ${JSON.stringify(fullCalls)}, ${fullJobs.workdayTruncated}`);
+
+  for (const days of [14, 90]) {
+    let ageCalls = 0;
+    const oldJobs = await workday.fetch(ENTRY, mkCtx(async () => {
+      ageCalls++;
+      return { total: 40, jobPostings: postings('age', ageCalls * 20).map(p => ({ ...p, postedOn: 'Posted 30+ Days Ago' })) };
+    }, { includeUndated: true, sinceMs: Date.now() - days * 86400000 }));
+    if (days === 14 ? ageCalls === 1 && oldJobs.length === 0
+      : ageCalls === 2 && oldJobs.length === 40 && oldJobs.every(job => job.postedAt === undefined)) {
+      pass(`Workday 30+ day age bounds respect a ${days}-day window without inventing exact dates`);
+    } else fail(`age-bound scan for ${days} days made ${ageCalls} requests and retained ${oldJobs.length} jobs`);
   }
 
 } catch (e) {
