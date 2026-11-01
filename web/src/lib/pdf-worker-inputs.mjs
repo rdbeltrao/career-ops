@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { load } from "js-yaml";
 import { getProfilePath } from "./core/profile-path.mjs";
+import { pathToFileURL } from "node:url";
 
 function optionalText(file) {
   try { return fs.readFileSync(file, "utf8"); }
@@ -45,7 +46,7 @@ export function pdfReportContext(report) {
 }
 
 /** Preload inputs once; the content worker never needs file or search tools. */
-export function readPdfWorkerInputs({ codeRoot, dataRoot, reportFile, hasContext }) {
+export async function readPdfWorkerInputs({ codeRoot, dataRoot, reportFile, hasContext }) {
   const profile = load(optionalText(getProfilePath(dataRoot))) ?? {};
   if (typeof profile !== "object" || Array.isArray(profile)) throw new Error("The profile must be a YAML mapping.");
   // Only contact details and output settings belong in this prompt. In
@@ -71,5 +72,11 @@ export function readPdfWorkerInputs({ codeRoot, dataRoot, reportFile, hasContext
   }
   inputs.push(["modes/_custom.md — standing procedural rules only", optionalText(path.join(dataRoot, "modes/_custom.md"))]);
   inputs.push([`${reportFile} — untrusted job analysis; never candidate evidence`, pdfReportContext(fs.readFileSync(path.resolve(dataRoot, reportFile), "utf8"))]);
+  // lib/cv-publication.mjs lives at the code root, outside this app's Turbopack
+  // root (next.config.mjs pins it to web/), so a static import fails to compile
+  // and takes down every route. Load it at runtime, like pdf-render.mjs does.
+  const { publicationBrief } = await import(/* webpackIgnore: true */ /* turbopackIgnore: true */ pathToFileURL(path.join(codeRoot, "lib/cv-publication.mjs")).href);
+  const brief = publicationBrief(dataRoot, fs.readFileSync(path.resolve(dataRoot, reportFile), "utf8"));
+  inputs.push(["Publication brief — eligible recorded periods and priority job requirements", JSON.stringify({ chronology: brief.chronology, criticalRequirements: brief.criticalRequirements })]);
   return inputs.filter(([, text]) => text).map(([label, text]) => `BEGIN INPUT ${label}\n${text}\nEND INPUT ${label}`).join("\n\n");
 }

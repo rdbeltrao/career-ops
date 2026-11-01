@@ -13024,6 +13024,7 @@ try {
 // PDF was generated, so merge-tracker should flip only matching ❌ cells to ✅.
 console.log('\n🧪 Testing merge-tracker PDF flag sync from data/pdf-index.tsv (#1429)...');
 try {
+  const { reviewedCvFixture } = await import('./tests/fixtures/reviewed-cv.mjs');
   // A manifest row only means PDF-ready while its file is on disk (#4777), so a
   // fixture lists the files it expects to exist. The deleted-PDF cases live in
   // tests/merge-tracker.test.mjs.
@@ -13041,6 +13042,8 @@ try {
     for (const file of pdfFiles) {
       mkdirSync(dirname(join(tmp, file)), { recursive: true });
       writeFileSync(join(tmp, file), '%PDF-1.4\n');
+      const entry = (pdfIndex ?? '').split('\n').map(line => line.split('\t')).find(fields => fields[1] === file);
+      if (entry) reviewedCvFixture(tmp, Number(entry[0]), join(tmp, file));
     }
     if (additions.length > 0) {
       mkdirSync(additionsDir, { recursive: true });
@@ -13051,7 +13054,7 @@ try {
 
     try {
     const result = run(NODE, ['merge-tracker.mjs'], {
-      env: { ...process.env, CAREER_OPS_TRACKER: tracker, CAREER_OPS_ADDITIONS: additionsDir },
+      env: { ...process.env, CAREER_OPS_ROOT: tmp, CAREER_OPS_TRACKER: tracker, CAREER_OPS_ADDITIONS: additionsDir },
     });
     const merged = readFileSync(tracker, 'utf-8');
     return { result, merged };
@@ -17324,11 +17327,13 @@ try {
         if (existsSync(join(ROOT, 'web', 'tests', 'lib'))) {
           fail('web/tests/lib contains no *.test.mjs — the #2185 unit suites are not being gated');
         }
-      } else if (run(NODE, ['--experimental-strip-types', '--test', ...webUnits], { timeout: 180000 }) !== null) {
+      } else if (run(NODE, ['--experimental-strip-types', '--test', '--test-concurrency=4', ...webUnits], { timeout: 360000 }) !== null) {
         pass('web pdf write-scope unit suites pass (#2185)');
       } else {
         // The signal distinguishes a timeout/kill from an assertion failure —
-        // run()'s default 30s is short for six suites in one child process.
+        // The full web group contains thousands of assertions. Bound process
+        // fan-out to avoid startup-timer flakes; its cap exceeds the measured
+        // full-suite duration while individual test deadlines remain intact.
         const killed = lastRunFailure()?.signal;
         // Surface the child's own output, for the same reason the per-file
         // node:test path does (see runDiscovered): a bare "failed" is not

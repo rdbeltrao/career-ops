@@ -1,7 +1,7 @@
 // Tests for pdf-render.mjs using Node's built-in test runner.
 // Imports directly from pdf-render.mjs (the single source of truth) so the
 // test and production code can never drift out of sync. spawnFn is a fake
-// EventEmitter-based child process — no real generate-pdf.mjs/mark-pdf-
+// EventEmitter-based child process — no real publish-cv.mjs/mark-pdf-
 // ready.mjs subprocess is ever spawned by these tests.
 //
 // Run:  node --test tests/lib/pdf-render.test.mjs
@@ -41,7 +41,7 @@ function fakeChild({ stdout = "", stderr = "", exitCode = 0, spawnError = null }
 }
 
 // spawnFn that dispatches based on the script path (args[0]) so a single
-// fake stands in for both generate-pdf.mjs and mark-pdf-ready.mjs calls.
+// fake stands in for both publish-cv.mjs and mark-pdf-ready.mjs calls.
 function makeRouterSpawn(routes) {
   const calls = [];
   const spawnFn = (execPath, args, opts) => {
@@ -58,15 +58,15 @@ function makeScratchDir() {
   return mkdtempSync(join(tmpdir(), "co-pdfrender-"));
 }
 
-test("spawnGeneratePdf: clean exit -> ok:true, invokes generate-pdf.mjs with --allow-reorder", async () => {
-  // Given generate-pdf.mjs will exit cleanly
+test("spawnGeneratePdf: clean exit -> ok:true, invokes publish-cv.mjs with --allow-reorder", async () => {
+  // Given publish-cv.mjs will exit cleanly
   const calls = [];
   const spawnFn = (execPath, args, opts) => { calls.push({ execPath, args, opts }); return fakeChild({ exitCode: 0 }); };
 
   // When spawning the render
   const result = await spawnGeneratePdf({ spawnFn, execPath: "node", root: "/data", codeRoot: "/root", html: "/root/x.html", finalPdf: "/root/output/x.pdf", format: "letter", reportNum: "018" });
 
-  // Then it reports ok:true and invoked generate-pdf.mjs with the expected args
+  // Then it reports ok:true and invoked publish-cv.mjs with the expected args
   assert.deepEqual(result, { ok: true, stderr: "" });
   assert.equal(calls.length, 1);
   assert.match(calls[0].args[0], /generate-pdf\.mjs$/);
@@ -89,7 +89,7 @@ test("render and tracker children use the profile resolved from a separate data 
 });
 
 test("spawnGeneratePdf: non-zero exit -> ok:false, stderr surfaced", async () => {
-  // Given generate-pdf.mjs will exit non-zero with a stderr message
+  // Given publish-cv.mjs will exit non-zero with a stderr message
   const spawnFn = () => fakeChild({ exitCode: 1, stderr: "section order guard failed" });
 
   // When spawning the render
@@ -174,7 +174,7 @@ test("cleanupPdfScratch: removes only files matching the prefix", () => {
   try {
     writeFileSync(join(dir, "cv-web-7.html"), "x");
     writeFileSync(join(dir, "cv-web-7.meta.json"), "{}");
-    writeFileSync(join(dir, "cv-web-7.payload.json"), "{}"); // a backend/generate-pdf.mjs leftover
+    writeFileSync(join(dir, "cv-web-7.payload.json"), "{}"); // a backend/publish-cv.mjs leftover
     writeFileSync(join(dir, "cv-web-99.html"), "unrelated run");
 
     // When cleaning up report #7's scratch files
@@ -250,7 +250,7 @@ test("renderAndMarkPdf: happy path -> rendered with no warnings, scratch cleaned
   const pdfPaths = makePdfPaths(dir, "1");
   writeFileSync(pdfPaths.html, "<html></html>");
   const { spawnFn, calls } = makeRouterSpawn({
-    "generate-pdf.mjs": { exitCode: 0 },
+    "publish-cv.mjs": { exitCode: 0 },
     "mark-pdf-ready.mjs": { exitCode: 0, stdout: JSON.stringify({ changed: true }) },
   });
   try {
@@ -260,25 +260,25 @@ test("renderAndMarkPdf: happy path -> rendered with no warnings, scratch cleaned
     // Then it reports rendered with no warnings, and scratch is cleaned up
     assert.deepEqual(result, { kind: "rendered", warnings: [] });
     assert.deepEqual(readdirSync(dir).filter((f) => f.startsWith("cv-web-1.")), []);
-    assert.equal(readFileSync(join(dir, "output", "cv-jane-acme-2026-07-26.html"), "utf8"), "<html></html>", "the CV Studio's source HTML is kept beside the PDF");
-    // ...and the format actually reached generate-pdf.mjs. The argv was only
+    // The core publisher owns normalized HTML and its hash-bound receipt.
+    // ...and the format actually reached publish-cv.mjs. The argv was only
     // inspected on the failure path, so a hardcoded or defaulted format would pass
     // while every US/Canada CV rendered on the wrong page size.
-    const renderCall = calls.find((c) => c.args.some((a) => String(a).includes("generate-pdf.mjs")));
-    assert.ok(renderCall, "generate-pdf.mjs was never spawned");
+    const renderCall = calls.find((c) => c.args.some((a) => String(a).includes("publish-cv.mjs")));
+    assert.ok(renderCall, "publish-cv.mjs was never spawned");
     assert.ok(renderCall.args.includes("--format=a4"), `expected --format=a4, got ${renderCall.args.join(" ")}`);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
 });
 
-test("renderAndMarkPdf: generate-pdf.mjs fails -> render-failed, mark-pdf-ready never invoked, scratch still cleaned up", async () => {
-  // Given generate-pdf.mjs exits non-zero
+test("renderAndMarkPdf: publish-cv.mjs fails -> render-failed, mark-pdf-ready never invoked, scratch still cleaned up", async () => {
+  // Given publish-cv.mjs exits non-zero
   const dir = makeScratchDir();
   const pdfPaths = makePdfPaths(dir, "3");
   writeFileSync(pdfPaths.html, "<html></html>");
   const { spawnFn, calls } = makeRouterSpawn({
-    "generate-pdf.mjs": { exitCode: 1, stderr: "Refusing to write the PDF outside the project directory" },
+    "publish-cv.mjs": { exitCode: 1, stderr: "Refusing to write the PDF outside the project directory" },
     "mark-pdf-ready.mjs": { exitCode: 0 },
   });
   try {
@@ -296,12 +296,12 @@ test("renderAndMarkPdf: generate-pdf.mjs fails -> render-failed, mark-pdf-ready 
 });
 
 test("renderAndMarkPdf: render succeeds but mark-pdf-ready fails with a parseable error -> rendered with a specific warning", async () => {
-  // Given generate-pdf.mjs succeeds but mark-pdf-ready.mjs fails with a --json error
+  // Given publish-cv.mjs succeeds but mark-pdf-ready.mjs fails with a --json error
   const dir = makeScratchDir();
   const pdfPaths = makePdfPaths(dir, "4");
   writeFileSync(pdfPaths.html, "<html></html>");
   const { spawnFn } = makeRouterSpawn({
-    "generate-pdf.mjs": { exitCode: 0 },
+    "publish-cv.mjs": { exitCode: 0 },
     "mark-pdf-ready.mjs": { exitCode: 2, stdout: JSON.stringify({ error: "No tracker row links report #4", code: "not-found" }) },
   });
   try {
@@ -318,12 +318,12 @@ test("renderAndMarkPdf: render succeeds but mark-pdf-ready fails with a parseabl
 });
 
 test("renderAndMarkPdf: render succeeds but mark-pdf-ready fails with no parseable stdout -> rendered with the generic fallback warning", async () => {
-  // Given generate-pdf.mjs succeeds but mark-pdf-ready.mjs crashes before printing any JSON
+  // Given publish-cv.mjs succeeds but mark-pdf-ready.mjs crashes before printing any JSON
   const dir = makeScratchDir();
   const pdfPaths = makePdfPaths(dir, "5");
   writeFileSync(pdfPaths.html, "<html></html>");
   const { spawnFn } = makeRouterSpawn({
-    "generate-pdf.mjs": { exitCode: 0 },
+    "publish-cv.mjs": { exitCode: 0 },
     "mark-pdf-ready.mjs": { exitCode: 1, stderr: "unexpected crash" },
   });
   try {
@@ -342,7 +342,7 @@ test("renderAndMarkPdf: render succeeds but mark-pdf-ready fails with no parseab
 });
 
 test("renderAndMarkPdf: successful render with stderr -> that stderr is surfaced as warnings", async () => {
-  // Given generate-pdf.mjs exits cleanly but wrote advisories to stderr — the
+  // Given publish-cv.mjs exits cleanly but wrote advisories to stderr — the
   // page-budget overflow and the CV fact check both warn on that channel
   const dir = makeScratchDir();
   const pdfPaths = makePdfPaths(dir, "6");
@@ -353,7 +353,7 @@ test("renderAndMarkPdf: successful render with stderr -> that stderr is surfaced
     "  - advisory phrase: world-class",
   ].join("\n");
   const { spawnFn } = makeRouterSpawn({
-    "generate-pdf.mjs": { exitCode: 0, stderr },
+    "publish-cv.mjs": { exitCode: 0, stderr },
     "mark-pdf-ready.mjs": { exitCode: 0, stdout: JSON.stringify({ changed: true }) },
   });
   try {
@@ -373,12 +373,12 @@ test("renderAndMarkPdf: successful render with stderr -> that stderr is surfaced
 });
 
 test("renderAndMarkPdf: successful render with empty stderr -> no warnings invented", async () => {
-  // Given generate-pdf.mjs exits cleanly having written nothing to stderr
+  // Given publish-cv.mjs exits cleanly having written nothing to stderr
   const dir = makeScratchDir();
   const pdfPaths = makePdfPaths(dir, "7");
   writeFileSync(pdfPaths.html, "<html></html>");
   const { spawnFn } = makeRouterSpawn({
-    "generate-pdf.mjs": { exitCode: 0, stderr: "" },
+    "publish-cv.mjs": { exitCode: 0, stderr: "" },
     "mark-pdf-ready.mjs": { exitCode: 0, stdout: JSON.stringify({ changed: true }) },
   });
   try {

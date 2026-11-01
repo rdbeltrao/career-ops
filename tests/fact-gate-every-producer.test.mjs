@@ -34,7 +34,7 @@ const PRODUCER_RE = /node (?:build-cv-html|build-cv-latex|patch-latex-content)\.
 const GATE_RE = /node (?:verify-cv-facts|generate-pdf|generate-latex)\.mjs/;
 // Renderers that run the gate in code. Asserted below, so this list cannot
 // claim a renderer gates when it does not.
-const GATED_RENDERERS = ['generate-pdf.mjs', 'generate-latex.mjs', 'generate-cover-letter.mjs'];
+const GATED_RENDERERS = ['generate-pdf.mjs', 'generate-latex.mjs', 'generate-cover-letter.mjs', 'publish-cv.mjs'];
 
 // Forward slashes on every platform: relative() gives `modes\pdf.md` on Windows.
 const repoPath = (path) => relative(ROOT, path).split(sep).join('/');

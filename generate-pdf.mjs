@@ -1370,7 +1370,7 @@ export function injectPrintPageCss(html, format, country) {
   // hardcoded value would silently win the cascade and make style.margin
   // ineffective (#1837 review). PDF_PAGE_MARGIN is only the fallback for a
   // template that never declares --page-margin at all.
-  const pageStyle = `<style id="career-ops-page-setup">\n@page { size: ${pageSize}; margin: var(--page-margin, ${PDF_PAGE_MARGIN}); }\n</style>`;
+  const pageStyle = `<style id="career-ops-page-setup">\n@page { size: ${pageSize}; margin: var(--page-margin, ${PDF_PAGE_MARGIN}); }\n@media print { .job { break-inside: avoid; page-break-inside: avoid; } .job-header, .job-role, .job-context, .job-location { break-after: avoid; break-inside: avoid; } .job > ul { break-before: avoid; } .job li { break-inside: avoid; } }\n</style>`;
 
   if (/<\/head>/i.test(html)) {
     // Replacer function, matching the <html> branch just below. `pageStyle`
@@ -1489,11 +1489,12 @@ export function applyManifestRow(existingLines, row) {
  * gitignored: it references gitignored output/ artifacts and is meaningless on
  * another machine.
  */
-async function updatePDFManifest(reportNum, pdfPath, htmlPath, format, kind) {
-  const manifestPath = resolvePdfIndexPath(trackerPath);
-  const toRel = (p) => relative(workspaceRoot, p).split(sep).join('/');
+export async function updatePDFManifest(reportNum, pdfPath, htmlPath, format, kind, dataRoot = getCareerOpsRoot()) {
+  const root = resolveWorkspaceRootFor(dataRoot);
+  const manifestPath = resolvePdfIndexPath(resolveTrackerPath(dataRoot));
+  const toRel = (p) => relative(root, p).split(sep).join('/');
   const relPDF = toRel(pdfPath);
-  const relHTML = workspaceRelativeManifestPath(htmlPath, workspaceRoot);
+  const relHTML = workspaceRelativeManifestPath(htmlPath, root);
   const date = new Date().toISOString().slice(0, 10);
 
   mkdirSync(dirname(manifestPath), { recursive: true });
@@ -2267,8 +2268,8 @@ async function renderInPage(browser, html, outputPath, opts = {}) {
     console.log(`📊 Pages: ${pageCount}`);
     console.log(`📦 Size: ${(pdfBuffer.length / 1024).toFixed(1)} KB`);
 
-    try {
-      await updatePDFManifest(reportNum, outputPath, inputPath, format, artifactKind);
+    if (opts.publish !== false) try {
+      await updatePDFManifest(reportNum, outputPath, inputPath, format, artifactKind, opts.workspaceRoot ?? getCareerOpsRoot());
       console.log(`🔗 Manifest: data/pdf-index.tsv updated${reportNum ? ` (report ${reportNum})` : ' (no --report given)'}`);
     } catch (err) {
       // The PDF itself succeeded — never fail the run over manifest bookkeeping.

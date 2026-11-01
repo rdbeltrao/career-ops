@@ -5,6 +5,7 @@ import { join } from 'path';
 import { execFileSync, spawnSync } from 'child_process';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, symlinkSync } from 'fs';
 import { tmpdir } from 'os';
+import { reviewedCvFixture } from './fixtures/reviewed-cv.mjs';
 
 console.log('\nsync-pdf-flags.mjs — PDF flag reconciliation');
 
@@ -43,6 +44,7 @@ function runSync() {
     mkdirSync(join(work, 'output'), { recursive: true });
     for (const pdf of ['1-acme-cv.pdf', '2-globex-cv.pdf', '3-initech-cv.pdf', '4-massive-cv.pdf']) {
       writeFileSync(join(work, 'output', pdf), '%PDF-1.4\n');
+      if (/^[123]-/.test(pdf)) reviewedCvFixture(work, Number(pdf[0]), join(work, 'output', pdf));
     }
     
     execFileSync(NODE, [join(ROOT, 'sync-pdf-flags.mjs')], {
@@ -478,6 +480,7 @@ console.log('\nsync-pdf-flags.mjs — a deleted PDF leaves a stale manifest row 
     // Report 1's PDF is on disk. Report 2's is not: the file was deleted and
     // the operator corrected the tracker cell to ❌ by hand.
     writeFileSync(join(work, 'output', '1-acme-cv.pdf'), '%PDF-1.4\n');
+    reviewedCvFixture(work, 1, join(work, 'output', '1-acme-cv.pdf'));
 
     writeFileSync(tracker, [
       '# Applications Tracker',
@@ -555,6 +558,7 @@ const PDF_HEADER = '# report\tpdf\thtml\tformat\tdate\tkind';
     // report 6 has a CV. The PDF column describes the CV.
     writeFileSync(join(work, 'output', '5-acme-cover.pdf'), '%PDF-1.4\n');
     writeFileSync(join(work, 'output', '6-globex-cv.pdf'), '%PDF-1.4\n');
+    reviewedCvFixture(work, 6, join(work, 'output', '6-globex-cv.pdf'));
     writeFileSync(tracker, TRACKER_FOR(ROW(5, 'Acme', '❌'), ROW(6, 'Globex', '❌')));
     writeFileSync(pdfIndex, [
       PDF_HEADER,
@@ -604,6 +608,7 @@ const PDF_HEADER = '# report\tpdf\thtml\tformat\tdate\tkind';
       '',
     ].join('\n'));
     symlinkSync(join(external, 'data'), join(repo, 'data'), process.platform === 'win32' ? 'junction' : 'dir');
+    reviewedCvFixture(repo, 1, join(repo, 'output', '1-acme-cv.pdf'));
 
     const env = { ...process.env, CAREER_OPS_ROOT: repo };
     delete env.CAREER_OPS_TRACKER;
@@ -686,6 +691,7 @@ if (process.platform === 'win32') {
     const pdfIndex = join(work, 'pdf-index.tsv');
     mkdirSync(join(work, 'output'), { recursive: true });
     writeFileSync(join(work, 'output', '1-acme-cv.pdf'), '%PDF-1.4\n');
+    reviewedCvFixture(work, 1, join(work, 'output', '1-acme-cv.pdf'));
     // A link to itself fails stat with ELOOP: neither present nor provably absent.
     symlinkSync('loop.pdf', join(work, 'output', 'loop.pdf'));
     writeFileSync(tracker, TRACKER_FOR(ROW(1, 'Acme', '❌'), ROW(2, 'Globex', '❌')));

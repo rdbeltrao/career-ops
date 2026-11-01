@@ -11,7 +11,7 @@
  * — no agent CLI or its sandbox involved — so a browser launch never depends
  * on an interactive sandbox-escalation approval nobody is present to grant in
  * a headless/web-triggered run. The tracker is marked ✅ only after a
- * CONFIRMED successful render, never optimistically.
+ * confirmed source-backed final-PDF review, never optimistically.
  */
 import fs from "node:fs";
 import path from "node:path";
@@ -102,6 +102,11 @@ export async function buildCvPayload({ spawnFn, execPath, root, codeRoot, pdfPat
   const payloadFile = pdfPaths.html.replace(/\.html$/, ".json");
   try {
     const ats = await import(/* webpackIgnore: true */ pathToFileURL(path.join(codeRoot, "ats-payload.mjs")).href);
+    if (pdfPaths.reportFile) {
+      const review = await import(/* webpackIgnore: true */ pathToFileURL(path.join(codeRoot, "lib/cv-publication.mjs")).href);
+      review.validateCvPublication(payload, { dataRoot: root, report: fs.readFileSync(path.resolve(root, pdfPaths.reportFile), "utf8") });
+    }
+    fs.writeFileSync(`${pdfPaths.html}.payload.json`, JSON.stringify(payload), "utf8");
     fs.writeFileSync(payloadFile, JSON.stringify(ats.payloadForTemplate(payload, template)), "utf8");
     return await new Promise((resolve) => {
       const child = spawnFn(execPath, [path.join(codeRoot, "build-cv-html.mjs"), payloadFile, pdfPaths.html, path.join(codeRoot, template)], {
@@ -126,6 +131,14 @@ export async function buildCvPayload({ spawnFn, execPath, root, codeRoot, pdfPat
  * @returns {Promise<{ok: boolean, stderr: string}>}
  */
 export function spawnGeneratePdf({ spawnFn, execPath, root, html, finalPdf, format, reportNum, codeRoot = resolveCodeRoot(process.cwd()) }) {
+  return spawnPdfScript({ spawnFn, execPath, root, codeRoot, args: [path.join(codeRoot, "generate-pdf.mjs"), html, finalPdf, `--format=${format}`, `--report=${reportNum}`, "--allow-reorder"] });
+}
+
+export function spawnPublishCv({ spawnFn, execPath, root, html, finalPdf, format, reportNum, codeRoot = resolveCodeRoot(process.cwd()) }) {
+  return spawnPdfScript({ spawnFn, execPath, root, codeRoot, args: [path.join(codeRoot, "publish-cv.mjs"), `--html=${html}`, `--payload=${html}.payload.json`, `--pdf=${finalPdf}`, `--format=${format}`, `--report=${reportNum}`] });
+}
+
+function spawnPdfScript({ spawnFn, execPath, root, codeRoot, args }) {
   return new Promise((resolve) => {
     const child = spawnFn(
       execPath,
@@ -133,7 +146,7 @@ export function spawnGeneratePdf({ spawnFn, execPath, root, html, finalPdf, form
       // from the template's fixed markup order, so this guard would otherwise
       // hard-fail every web-triggered render — same bypass a human already
       // applies manually via the CLI when this diverges.
-      [path.join(codeRoot, "generate-pdf.mjs"), html, finalPdf, `--format=${format}`, `--report=${reportNum}`, "--allow-reorder"],
+      args,
       { cwd: codeRoot, env: pdfWorkspaceEnv(root) },
     );
     let stderr = "";
@@ -232,14 +245,15 @@ export function keepTailoredHtml(pdfPaths, warnings) {
  * Call after writeCvHtml for the same pdfPaths — this reads the HTML that
  * function wrote. `format` is passed in rather than read back off disk, so the two
  * no longer share a file and the only coupling left is the HTML itself.
- * @param {{spawnFn: Function, execPath: string, root: string, pdfPaths: {html: string, finalPdf: string}, format: "letter"|"a4", reportNum: string}} args
+ * @param {{spawnFn: Function, execPath: string, root: string, codeRoot?: string, pdfPaths: {html: string, finalPdf: string}, format: "letter"|"a4", reportNum: string}} args
  * @returns {Promise<RenderResult>}
  */
-export async function renderAndMarkPdf({ spawnFn, execPath, root, pdfPaths, format, reportNum }) {
+export async function renderAndMarkPdf({ spawnFn, execPath, root, pdfPaths, format, reportNum, codeRoot = resolveCodeRoot(process.cwd()) }) {
   const warnings = [];
 
-  const render = await spawnGeneratePdf({ spawnFn, execPath, root, html: pdfPaths.html, finalPdf: pdfPaths.finalPdf, format, reportNum });
-  if (render.ok) keepTailoredHtml(pdfPaths, warnings);
+  const render = await spawnPublishCv({ spawnFn, execPath, root, codeRoot, html: pdfPaths.html, finalPdf: pdfPaths.finalPdf, format, reportNum });
+  // publish-cv keeps the normalized HTML and hash-bound review receipt.
+  // Copying the pre-normalized scratch HTML now would invalidate that review.
   cleanupPdfScratch(path.dirname(pdfPaths.html), `cv-web-${reportNum}.`);
 
   if (!render.ok) {
@@ -262,7 +276,7 @@ export async function renderAndMarkPdf({ spawnFn, execPath, root, pdfPaths, form
   // tracker-sync miss (e.g. the row was edited away mid-flight) doesn't fail
   // the whole job, but it must still be visible to whoever is watching this
   // run, not just a server-side log nobody sees.
-  const mark = await markTrackerReady({ spawnFn, execPath, root, reportNum });
+  const mark = await markTrackerReady({ spawnFn, execPath, root, codeRoot, reportNum });
   if (!mark.ok) {
     console.error(`mark-pdf-ready.mjs failed for report #${reportNum}: ${mark.data?.error ?? mark.stderr}`);
     warnings.push(

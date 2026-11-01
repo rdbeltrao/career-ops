@@ -36,13 +36,14 @@ import { LEGACY_COLMAP, TSV_REQUIRED_FIELDS, detectColumns, isHeaderRow, resolve
 // The ATS vendor table shared with analyze-patterns.mjs and the scanners, so
 // the URL cell's label and the per-vendor analysis name a board identically.
 import { atsVendorOf } from './ats-vendor.mjs';
-import { resolveTrackerPath, resolveWorkspaceRoot, resolvePdfIndexPath, trackerLockDirFor, acquireTrackerLock, writeFileAtomic, normalizeCompany, companiesMatchIgnoringCorporateForm, cell, loadCanonicalStates, findDeadReportLink, rebuildRow, trackerLinkDirsFor } from './tracker-utils.mjs';
+import { resolveTrackerPath, resolveWorkspaceRoot, resolveWorkspaceRootFor, resolvePdfIndexPath, trackerLockDirFor, acquireTrackerLock, writeFileAtomic, normalizeCompany, companiesMatchIgnoringCorporateForm, cell, loadCanonicalStates, findDeadReportLink, rebuildRow, trackerLinkDirsFor } from './tracker-utils.mjs';
 // Canonical posting-URL key and URL comparison, shared with the other tracker
 // scripts and scan.mjs so the definitions cannot drift apart.
 import { normalizeUrl, isAggregatorUrl, aggregatorPostingId, postingUrlRelation } from './url-key.mjs';
 import { validateFlags } from './lib/cli-flags.mjs';
 import { isMainModule } from './lib/is-main-module.mjs';
 import { syncTrackerPdfFlags } from './sync-pdf-flags.mjs';
+import { assertCurrentCvReview } from './lib/cv-publication.mjs';
 import { withPipelineLock } from './pipeline-lock.mjs';
 // After a merge, every merged addition's posting leaves pipeline.md Pending
 // through the one helper the other evaluator paths share (#limbo): matched by
@@ -675,11 +676,16 @@ export async function mergeTracker(options = {}) {
    */
   function loadPdfIndex() {
     if (!existsSync(PDF_INDEX_FILE)) return new Map();
-    return livePdfIndex(
+    const live = livePdfIndex(
       parsePdfIndex(readFileSync(PDF_INDEX_FILE, 'utf-8')),
       DATA_ROOT,
       (message) => console.warn(`⚠️  ${message}`),
     );
+    for (const [report, pdf] of live) {
+      try { assertCurrentCvReview(resolve(resolveWorkspaceRootFor(DATA_ROOT), pdf), { dataRoot: DATA_ROOT, reportNum: report }); }
+      catch { live.delete(report); }
+    }
+    return live;
   }
 
   // generate-pdf.mjs owns the manifest row rules (applyManifestRow) and the lock
@@ -714,7 +720,11 @@ export async function mergeTracker(options = {}) {
     }
 
     pdfIndex.delete(oldKey);
-    pdfIndex.set(newKey, pdfPath);
+    // Re-keying a file does not review it against the new report's requirements.
+    try {
+      assertCurrentCvReview(resolve(resolveWorkspaceRootFor(DATA_ROOT), pdfPath), { dataRoot: DATA_ROOT, reportNum: newKey });
+      pdfIndex.set(newKey, pdfPath);
+    } catch { /* The canonical sync leaves this new report unready. */ }
   }
 
   /**

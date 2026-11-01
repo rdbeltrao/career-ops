@@ -23,10 +23,11 @@
 import { readFileSync, existsSync } from 'fs';
 import { join, resolve, dirname } from 'path';
 import { extractTrackerReportNumbers, resolveColumns, parseTrackerRow } from './tracker-parse.mjs';
-import { rebuildRow, resolveTrackerPath, resolvePdfIndexPath, openTrackerTransaction, writeFileAtomic, resolveWorkspaceRoot, pathIsInsideCanonical } from './tracker-utils.mjs';
+import { rebuildRow, resolveTrackerPath, resolvePdfIndexPath, openTrackerTransaction, writeFileAtomic, resolveWorkspaceRoot, resolveWorkspaceRootFor, pathIsInsideCanonical } from './tracker-utils.mjs';
 import { getCareerOpsRoot } from './path-resolver.mjs';
 import { isMainModule } from './lib/is-main-module.mjs';
 import { parsePdfIndex, livePdfIndex } from './find.mjs';
+import { assertCurrentCvReview } from './lib/cv-publication.mjs';
 
 const USAGE = 'Usage: node sync-pdf-flags.mjs [--dry-run] [--json]\n       node sync-pdf-flags.mjs --prune [--write] [--json]';
 
@@ -185,6 +186,7 @@ export async function syncTrackerPdfFlags(options = {}) {
   // ---------------------------------------------------------------------------
 
   const manifestReports = new Set();
+  const invalidReviews = new Set();
   if (existsSync(PDF_MANIFEST)) {
     let content;
     try {
@@ -200,8 +202,15 @@ export async function syncTrackerPdfFlags(options = {}) {
     // A manifest row only means PDF-ready when a CV PDF it names is still on
     // disk. merge-tracker.mjs asks the same question the same way (#4777).
     const live = livePdfIndex(parsePdfIndex(content), DATA_ROOT, (message) => console.warn(`⚠️  ${message}`));
-    for (const report of live.keys()) {
-      if (/^\d+$/.test(report) && Number(report) > 0) manifestReports.add(Number(report));
+    for (const [report, pdf] of live) {
+      if (!/^\d+$/.test(report) || Number(report) <= 0) continue;
+      try {
+        assertCurrentCvReview(resolve(resolveWorkspaceRootFor(DATA_ROOT), pdf), { dataRoot: DATA_ROOT, reportNum: report });
+        manifestReports.add(Number(report));
+      } catch (error) {
+        invalidReviews.add(Number(report));
+        console.warn(`⚠️ report ${report}: PDF review required (${error.message})`);
+      }
     }
   }
 
@@ -244,6 +253,13 @@ export async function syncTrackerPdfFlags(options = {}) {
 
       const reportNums = extractTrackerReportNumbers(row.report);
       const hasPdf = reportNums.some(num => manifestReports.has(num));
+
+      if (!hasPdf && row.pdf === '✅' && reportNums.some(num => invalidReviews.has(num))) {
+        const parts = lines[i].split('|').map(s => s.trim());
+        parts[colmap.pdf] = '❌';
+        lines[i] = rebuildRow(parts);
+        updated++;
+      }
 
       if (hasPdf) {
         if (row.pdf !== '✅') {

@@ -199,7 +199,7 @@ export async function POST(req: Request) {
   let pdfInputs = "";
   if (pdfPaths) {
     try {
-      pdfInputs = readPdfWorkerInputs({ codeRoot, dataRoot, reportFile: pdfPaths.reportFile, hasContext: Boolean(contextLibrary) });
+      pdfInputs = await readPdfWorkerInputs({ codeRoot, dataRoot, reportFile: pdfPaths.reportFile, hasContext: Boolean(contextLibrary) });
     } catch {
       return Response.json({ error: "The CV inputs could not be read. Check the profile, mode and evaluation report before retrying." }, { status: 409 });
     }
@@ -553,10 +553,11 @@ export async function POST(req: Request) {
             send({ type: "error", msg: built.error });
             return;
           }
-          send({ type: "status", label: "Checking facts and rendering PDF…" });
+          send({ type: "status", label: "Checking dates, evidence and final PDF…" });
           const result = await renderAndMarkPdf({
             spawnFn: spawn,
             execPath: process.execPath,
+            codeRoot,
             root: careerOpsRoot(),
             pdfPaths: paths,
             format: envelope.format,
@@ -569,7 +570,7 @@ export async function POST(req: Request) {
           // Non-fatal issues (a defaulted page format, a tracker row not marked) still
           // surface here rather than only in a server log nobody sees.
           sendWarnings(result.warnings);
-          send({ type: "text", text: "PDF generated successfully. Required fact checks passed.\n" });
+          send({ type: "text", text: "PDF generated successfully. Dates, career evidence and final PDF review passed.\n" });
           send({ type: "done", tokens: lastTokens, costUsd: lastCostUsd, reportN: Number(paths.reportNum) });
         } catch (e) {
           send({ type: "error", msg: `PDF rendering crashed unexpectedly: ${e instanceof Error ? e.message : String(e)}`.slice(0, 200) });

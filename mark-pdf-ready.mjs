@@ -21,7 +21,7 @@
  * zero or 2+ matches fail closed rather than guessing.
  *
  * Idempotent: a row whose PDF cell is already ✅ is a no-op success (changed:
- * false), so a retried render never fails this step.
+ * false) only while its review is current; stale reviews revoke readiness.
  *
  * The read-modify-write runs under the shared tracker lock (tracker-utils.mjs,
  * same lock as merge-tracker.mjs / set-status.mjs) and the file is replaced
@@ -40,6 +40,7 @@ import {
   rebuildRow, resolveTrackerPath, writeFileAtomic, CLI_EXIT, makeCliFailWith, makeCliFailUsage, acquireTrackerLockForCli,
 } from './tracker-utils.mjs';
 import { getCareerOpsRoot } from './path-resolver.mjs';
+import { reviewedCvForReport } from './lib/cv-publication.mjs';
 
 // The USER's data root, not this file's directory — same defect, same fix as
 // set-status.mjs above it in this change.
@@ -140,6 +141,22 @@ if (matches.length > 1) {
     { candidates });
 }
 const target = matches[0];
+try {
+  reviewedCvForReport(DATA_ROOT, targetReportNum);
+} catch (error) {
+  if (!flags.dryRun && target.pdf.trim() === '✅') {
+    const parts = lines[target.lineIdx].split('|').map(s => s.trim());
+    parts[colmap.pdf] = '❌';
+    lines[target.lineIdx] = rebuildRow(parts);
+    try { writeFileAtomic(APPS_FILE, lines.join('\n')); }
+    catch (writeError) {
+      lock?.release();
+      failWith(EXIT_USAGE, 'write-failure', `Cannot revoke stale PDF readiness: ${writeError.message}`);
+    }
+  }
+  lock?.release();
+  failWith(EXIT_USAGE, 'review-required', `Cannot mark PDF ready: ${error.message}`);
+}
 
 // ── locked read-modify-write ─────────────────────────────────────
 
