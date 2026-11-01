@@ -4,14 +4,15 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { executeJob } from '../web/scripts/scheduled-jobs-runner.mjs';
-import { runScheduledScanner } from '../web/src/lib/scheduled-scan-process.mjs';
 
 const codeRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const moduleUrl = name => JSON.stringify(pathToFileURL(path.join(codeRoot, name)).href);
 
 for (const engine of ['full', 'linkedin']) {
-  test(`${engine} exits naturally at its work deadline and preserves its receipt`, async () => {
+  test(`${engine} exits naturally at its work deadline and preserves its receipt`, async t => {
+    if (!fs.existsSync(path.join(codeRoot, 'web', 'src'))) return t.skip('web/ not present in this checkout');
+    const { executeJob } = await import('../web/scripts/scheduled-jobs-runner.mjs');
+    const { runScheduledScanner } = await import('../web/src/lib/scheduled-scan-process.mjs');
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'scan-natural-deadline-'));
     try {
       fs.mkdirSync(path.join(root, 'data/cache/ats-companies'), { recursive: true });

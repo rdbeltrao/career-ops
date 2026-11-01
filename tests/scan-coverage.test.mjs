@@ -5,6 +5,33 @@ import os from 'node:os';
 import path from 'node:path';
 import { openScanCoverage } from '../lib/scan-coverage.mjs';
 
+test('a changed provider policy rechecks only that source and counts new progress', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'scan-coverage-policy-'));
+  const file = path.join(root, 'coverage.json');
+  let coverage;
+  try {
+    coverage = await openScanCoverage(file, 'filters');
+    coverage.register('greenhouse', ['g']);
+    coverage.register('workday', ['a', 'b', 'c'], 'ok', 'old');
+    coverage.done('greenhouse', 'g');
+    coverage.done('workday', 'a'); coverage.done('workday', 'b');
+    coverage.save(); coverage.close();
+    coverage = await openScanCoverage(file, 'filters');
+    coverage.register('greenhouse', ['g']);
+    coverage.register('workday', ['a', 'b', 'c'], 'ok', 'new');
+    assert.equal(coverage.pending('greenhouse', 'g'), false);
+    assert.equal(coverage.fraction('workday'), 0);
+    coverage.done('workday', 'a');
+    coverage.save(); coverage.close();
+    assert.equal(JSON.parse(fs.readFileSync(file)).stalledRuns, 0);
+    coverage = await openScanCoverage(file, 'filters');
+    coverage.register('greenhouse', ['g']);
+    coverage.register('workday', ['a', 'b', 'c'], 'ok', 'new');
+    assert.equal(coverage.pending('workday', 'a'), false);
+    assert.equal(coverage.pending('workday', 'b'), true);
+  } finally { coverage?.close(); fs.rmSync(root, { recursive: true, force: true }); }
+});
+
 test('coverage resumes pending boards and reconciles directory changes without repeating completed boards', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'scan-coverage-'));
   const file = path.join(root, 'coverage.json');

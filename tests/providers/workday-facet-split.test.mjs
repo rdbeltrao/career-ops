@@ -743,6 +743,17 @@ try {
     } else fail(`age-bound scan for ${days} days made ${ageCalls} requests and retained ${oldJobs.length} jobs`);
   }
 
+  let mixedCalls = 0;
+  const mixedJobs = await workday.fetch(ENTRY, mkCtx(async () => {
+    mixedCalls++;
+    return { total: 40, jobPostings: postings('mixed', mixedCalls * 20).map((p, i) => ({
+      ...p, postedOn: mixedCalls === 1 && i > 0 ? 'Posted 30+ Days Ago' : 'Posted Today',
+    })) };
+  }, { includeUndated: true, sinceMs: Date.now() - 14 * 86400000 }));
+  if (mixedCalls === 2 && mixedJobs.length === 21) {
+    pass('mixed old and fresh Workday pages do not hide fresh roles on later pages');
+  } else fail(`mixed-age scan made ${mixedCalls} requests and kept ${mixedJobs.length} jobs; expected 2 requests and 21 fresh jobs`);
+
 } catch (e) {
   fail(`workday facet-split fetch tests crashed: ${e.message}`);
 }

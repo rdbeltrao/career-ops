@@ -34,6 +34,7 @@ export const WORKDAY_TRUNCATED_REASON = {
   TRANSIENT: 'transient',
   STRUCTURAL: 'structural',
 };
+export const WORKDAY_COVERAGE_POLICY = 'complete-partition-full-page-window-v1';
 
 const PAGE_SIZE = 20;
 
@@ -156,6 +157,27 @@ async function confirmDeadViaCareersPage(ep, ctx) {
     if (err.status >= 300 && err.status < 400) return WORKDAY_OUTAGE_REDIRECT_RE.test(err.location || '');
     return typeof err.body === 'string' && err.body.includes(WORKDAY_MAINTENANCE_MARKER);
   }
+}
+
+const canonicalEndpoints = new Map();
+
+async function canonicalTenantEndpoint(ep, ctx) {
+  const match = ep.cxsBase.match(/\/wday\/cxs\/([\w-]+)\/([^/?#]+)/);
+  if (!match || !match[1].includes('-') || typeof ctx.fetchText !== 'function') return null;
+  try {
+    const body = await ctx.fetchText(ep.jobBase, {
+      redirect: 'manual',
+      headers: { 'user-agent': BROWSER_LIKE_USER_AGENT, 'accept-language': 'en-US,en;q=0.9' },
+    });
+    const tenant = typeof body === 'string'
+      ? body.match(/["']?\btenant["']?\s*:\s*["']([\w-]+)["']/i)?.[1] : null;
+    // Workday exposes DNS hyphens as tenant underscores on legacy aliases.
+    // Only accept that same identity, never an unrelated namespace from HTML.
+    if (!tenant || tenant === match[1]
+      || tenant.replace(/_/g, '-').toLowerCase() !== match[1].replace(/_/g, '-').toLowerCase()) return null;
+    const cxsBase = `${ep.origin}/wday/cxs/${tenant}/${match[2]}`;
+    return { ...ep, cxsBase, api: `${cxsBase}/jobs` };
+  } catch { return null; }
 }
 
 // ── Facet split ───────────────────────────────────────────────────
@@ -331,21 +353,16 @@ export function chooseSplitFacet(facets, { exclude = [], locationHints, complete
 }
 
 /**
- * True once a page's oldest unambiguously-dated posting is past the --since window.
- *
- * Truly undated postings are invisible here. Explicit age bounds may prove
- * staleness without supplying an exact date. A page of undated postings
- * never stops pagination (the `dated.length === 0` guard), but a page that
- * mixes stale dated postings with undated ones does — and the undated ones on
- * later pages are then never fetched, even though scan.mjs's date filters
- * would have accepted them. Exported for test-all.mjs, which pins that
- * behaviour so it can't drift without the docs drifting too.
+ * Stop only when every posting on the page is provably past the window.
+ * Workday can mix old and fresh roles on one page; a single old row cannot
+ * justify dropping later pages. Unknown dates keep pagination open too.
  */
 export function pageIsPastWindow(pageJobs, sinceMs) {
   if (typeof sinceMs !== 'number') return false;
-  const dated = pageJobs.map((j) => j.postedAt ?? j.postedAtUpperBound).filter((v) => Number.isFinite(v));
-  if (dated.length === 0) return false;
-  return Math.min(...dated) < sinceMs - EARLY_STOP_MARGIN_MS;
+  return pageJobs.length > 0 && pageJobs.every(job => {
+    const latest = job.postedAt ?? job.postedAtUpperBound;
+    return Number.isFinite(latest) && latest < sinceMs - EARLY_STOP_MARGIN_MS;
+  });
 }
 
 // A careers page: `https://{tenant}.{instance}.myworkdayjobs.com[/{locale}]/{site}`.
@@ -814,7 +831,8 @@ export default {
   // Read the native absolute startDate; never substitute discovery time.
   async enrichDate(job, ctx) {
     if (job.postedAt) return;
-    const ep = resolveEndpoint({ careers_url: job.url });
+    let ep = resolveEndpoint({ careers_url: job.url });
+    if (ep) ep = canonicalEndpoints.get(ep.jobBase) || ep;
     if (!ep || !job.url.startsWith(`${ep.jobBase}/job/`)) return;
     const detail = await fetchJsonWithRetry(ctx, `${ep.cxsBase}${job.url.slice(ep.jobBase.length)}`, {
       redirect: 'error', headers: { accept: 'application/json', 'user-agent': BROWSER_LIKE_USER_AGENT, referer: `${ep.jobBase}/` },
@@ -839,8 +857,9 @@ export default {
    * @returns {Promise<Array<{title: string, url: string, company: string, location: string, postedAt?: number}>>}
    */
   async fetch(entry, ctx) {
-    const ep = resolveEndpoint(entry);
+    let ep = resolveEndpoint(entry);
     if (!ep) throw new Error(`workday: cannot derive CXS endpoint for ${entry.name}`);
+    ep = canonicalEndpoints.get(ep.jobBase) || ep;
 
     const postOpts = {
       method: 'POST',
@@ -986,12 +1005,16 @@ export default {
     try {
       root = await runQuery({});
     } catch (err) {
-      if (CONFIRMED_DEAD_API_STATUSES.has(err.status) && await confirmDeadViaCareersPage(ep, ctx)) {
+      const canonical = CONFIRMED_DEAD_API_STATUSES.has(err.status) && await canonicalTenantEndpoint(ep, ctx);
+      if (canonical) {
+        ep = canonical;
+        root = await runQuery({});
+        canonicalEndpoints.set(ep.jobBase, ep);
+      } else if (CONFIRMED_DEAD_API_STATUSES.has(err.status) && await confirmDeadViaCareersPage(ep, ctx)) {
         const notFound = new Error(`workday: ${entry.name} confirmed dead (maintenance page)`);
         notFound.status = 404;
         throw notFound;
-      }
-      throw err;
+      } else throw err;
     }
     const { total, stopReason } = root;
 

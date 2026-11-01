@@ -7999,10 +7999,8 @@ try {
     }
   }
 
-  // The contract above holds for dated postings only. Undated ones pass every
-  // date filter, so the early stop CAN narrow results — pinned here so the
-  // behaviour and modes/scan.md can't drift apart. Change this test only
-  // alongside the doc.
+  // Mixed pages must stay open: neither an old outlier nor an unknown date
+  // proves that later pages contain no eligible postings.
   {
     const { pageIsPastWindow } = await import(pathToFileURL(join(ROOT, 'providers', 'workday.mjs')).href);
     const floor = SINCE_NOW - 7 * SINCE_DAY;
@@ -8018,13 +8016,11 @@ try {
       pageIsPastWindow([undated, undated], floor) === false &&
       // A fresh dated posting holds pagination open.
       pageIsPastWindow([{ postedAt: fresh }, undated], floor) === false &&
-      // KNOWN LIMITATION: the dated postings are stale, the undated ones are
-      // eligible, and pagination stops anyway. Undated postings on later pages
-      // are lost. Fixing it lives in workday.mjs and costs the optimisation on
-      // every mixed tenant.
-      pageIsPastWindow([{ postedAt: stale }, undated], floor) === true
+      pageIsPastWindow([{ postedAt: stale }, undated], floor) === false &&
+      pageIsPastWindow([{ postedAt: stale }, { postedAt: fresh }], floor) === false &&
+      pageIsPastWindow([{ postedAt: stale }, { postedAt: stale }], floor) === true
     ) {
-      pass('early stop ignores undated postings — all-undated pages are safe, mixed pages are not');
+      pass('early stop requires a fully stale page and preserves mixed or undated pages');
     } else {
       fail('workday early-stop no longer matches the undated-posting behaviour documented in modes/scan.md');
     }

@@ -1139,3 +1139,46 @@ try {
 } catch (e) {
   fail(`workday provider tests crashed: ${e.message}`);
 }
+
+try {
+  const workday = (await import('../../providers/workday.mjs')).default;
+  const origin = 'https://osv-acme.wd5.myworkdayjobs.com';
+  const entry = { name: 'Acme', careers_url: `${origin}/careers` };
+  const calls = [];
+  const jobs = await workday.fetch(entry, {
+    sleep: async () => {},
+    fetchText: async (_url, opts) => {
+      if (opts.redirect !== 'manual') throw new Error('must not follow page redirects');
+      return 'window.workday = {tenant: "osv_acme"};';
+    },
+    fetchJson: async url => {
+      calls.push(url);
+      if (url.includes('/cxs/osv-acme/')) throw Object.assign(new Error('HTTP 422'), { status: 422 });
+      if (url.endsWith('/jobs')) return { total: 1, jobPostings: [{ title: 'Engineer', externalPath: '/job/Berlin/Engineer_R1', locationsText: '2 Locations' }] };
+      return { jobPostingInfo: { location: 'Berlin', additionalLocations: ['Remote'] } };
+    },
+  });
+  if (calls.length === 3 && calls.slice(1).every(url => url.includes('/cxs/osv_acme/'))
+    && jobs[0]?.url === `${origin}/careers/job/Berlin/Engineer_R1` && jobs[0].location === 'Berlin · Remote') {
+    pass('Workday aliases recover canonical tenant routing for both listing and detail requests');
+  } else fail(`alias recovery returned incorrect routing or locations: ${JSON.stringify(calls)}`);
+  let dateUrl;
+  await workday.enrichDate(jobs[0], { fetchJson: async url => {
+    dateUrl = url;
+    return { jobPostingInfo: { startDate: '2026-10-28' } };
+  } });
+  if (dateUrl?.includes('/cxs/osv_acme/') && jobs[0].postedAt === Date.parse('2026-10-28')) {
+    pass('date enrichment reuses the verified canonical Workday tenant instead of losing native dates');
+  } else fail('Workday date enrichment lost the recovered tenant route');
+
+  let requests = 0;
+  let rejected = false;
+  try {
+    await workday.fetch({ name: 'Other', careers_url: 'https://osv-other.wd5.myworkdayjobs.com/careers' }, {
+      sleep: async () => {}, fetchText: async () => 'window.workday = {tenant: "unrelated_tenant"};',
+      fetchJson: async () => { requests++; throw Object.assign(new Error('HTTP 422'), { status: 422 }); },
+    });
+  } catch (error) { rejected = error.status === 422; }
+  if (rejected && requests === 1) pass('unrelated tenant namespaces from HTML cannot redirect Workday board scans');
+  else fail('Workday alias recovery accepted an unrelated tenant or repeated the original API request');
+} catch (error) { fail(`Workday alias regression crashed: ${error.message}`); }

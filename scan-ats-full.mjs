@@ -63,7 +63,7 @@ import { isResolverFailure, dnsPacingStats } from './providers/_dns-cache.mjs';
 import greenhouse from './providers/greenhouse.mjs';
 import lever from './providers/lever.mjs';
 import ashby from './providers/ashby.mjs';
-import workday, { WORKDAY_TRUNCATED_REASON } from './providers/workday.mjs';
+import workday, { WORKDAY_TRUNCATED_REASON, WORKDAY_COVERAGE_POLICY } from './providers/workday.mjs';
 import icims from './providers/icims.mjs';
 import bamboohr from './providers/bamboohr.mjs';
 import paylocity, { boardUrl as paylocityBoardUrl } from './providers/paylocity.mjs';
@@ -1267,7 +1267,8 @@ async function main() {
     for (const name of opts.ats.filter(ats => SOURCES[ats])) {
       const data = await loadCompanyList(name, SOURCES[name].dataset);
       companyLists.set(name, data);
-      coverage.register(name, data.list.map(SOURCES[name].toEntry).filter(Boolean).map(boardKey), data.status);
+      coverage.register(name, data.list.map(SOURCES[name].toEntry).filter(Boolean).map(boardKey), data.status,
+        name === 'workday' ? WORKDAY_COVERAGE_POLICY : undefined);
     }
   }
   const changedFilters = changedFilterKeys(checkpoint, filters);

@@ -266,6 +266,10 @@ const EXEMPT = new Map([
   // Assigns argv[1] inside a spawned child's preamble so the copied script's
   // main-guard fires under `node -e` — the child's entry path, not a guard.
   ['tests/scan-ats-full-outage-checkpoint.test.mjs', 'sets a child process\u2019s argv[1] in a spawn preamble'],
+  ['tests/scan-ats-interrupted-save.test.mjs', 'sets the scanner entry in a child preamble to exercise real CLI signal handling'],
+  ['tests/scan-coverage-e2e.test.mjs', 'sets the scanner entry in a child preamble after installing fixture providers'],
+  ['tests/scan-json-receipt.test.mjs', 'sets the scanner entry in a child preamble to verify persisted CLI receipts'],
+  ['tests/scheduled-natural-deadline.test.mjs', 'sets the scanner entry in a child preamble to test its natural deadline'],
   // Asserts that a bash-embedded node snippet reads its input file via ITS OWN
   // argv[1] (injection safety, not a main-guard); the literal lives in strings.
   ['tests/batch-runner-jd-prefetch.test.mjs', 'asserts another script\u2019s argv[1] usage in strings'],

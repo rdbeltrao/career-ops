@@ -3,7 +3,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
-import { pathToFileURL } from 'node:url';
+import { isMainModule } from './lib/is-main-module.mjs';
 import { getCareerOpsRoot, resolveTrackerPath, resolveTrackerPathForWrite } from './path-resolver.mjs';
 import { detectColumns, parseTrackerRow } from './tracker-parse.mjs';
 import { openTrackerTransaction, writeFileAtomic } from './tracker-utils.mjs';
@@ -66,6 +66,11 @@ export function prepareIdentityRepairs(content, repairs) {
 
 async function main() {
   const args = process.argv.slice(2);
+  if (args.includes('--help') || args.includes('-h')) {
+    console.log('Usage: node repair-tracker-identities.mjs --proposal <file.json> [--apply]');
+    console.log('Preview source-backed identity repairs; --apply writes a backup and audit receipt.');
+    return;
+  }
   const apply = args.includes('--apply');
   const rest = args.filter((arg) => arg !== '--apply');
   if (rest.length !== 2 || rest[0] !== '--proposal') throw new Error('Usage: node repair-tracker-identities.mjs --proposal <file.json> [--apply]');
@@ -95,6 +100,6 @@ async function main() {
   } finally { transaction?.close(); }
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
+if (isMainModule(import.meta.url)) {
   main().catch((error) => { console.error(error.message); process.exitCode = 1; });
 }
