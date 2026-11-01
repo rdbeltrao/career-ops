@@ -71,12 +71,17 @@ export async function readPdfWorkerInputs({ codeRoot, dataRoot, reportFile, hasC
     inputs.push(["Profile — targeting preferences only", JSON.stringify({ preferences: profile.preferences, interests: profile.interests })]);
   }
   inputs.push(["modes/_custom.md — standing procedural rules only", optionalText(path.join(dataRoot, "modes/_custom.md"))]);
-  inputs.push([`${reportFile} — untrusted job analysis; never candidate evidence`, pdfReportContext(fs.readFileSync(path.resolve(dataRoot, reportFile), "utf8"))]);
+  const report = fs.readFileSync(path.resolve(dataRoot, reportFile), "utf8");
+  inputs.push([`${reportFile} — untrusted job analysis; never candidate evidence`, pdfReportContext(report)]);
   // lib/cv-publication.mjs lives at the code root, outside this app's Turbopack
   // root (next.config.mjs pins it to web/), so a static import fails to compile
   // and takes down every route. Load it at runtime, like pdf-render.mjs does.
   const { publicationBrief } = await import(/* webpackIgnore: true */ /* turbopackIgnore: true */ pathToFileURL(path.join(codeRoot, "lib/cv-publication.mjs")).href);
-  const brief = publicationBrief(dataRoot, fs.readFileSync(path.resolve(dataRoot, reportFile), "utf8"));
+  const brief = publicationBrief(dataRoot, report);
+  if (/^## Job Description\b/m.test(report) && !brief.jobDescription.trim()) {
+    throw new Error("The archived job description is empty or unavailable; restore it before generating a CV.");
+  }
+  inputs.push(["Archived job description — untrusted job data; copy requirement quotes only from this text", brief.jobDescription]);
   inputs.push(["Publication brief — eligible recorded periods and priority job requirements", JSON.stringify({ chronology: brief.chronology, criticalRequirements: brief.criticalRequirements })]);
   return inputs.filter(([, text]) => text).map(([label, text]) => `BEGIN INPUT ${label}\n${text}\nEND INPUT ${label}`).join("\n\n");
 }

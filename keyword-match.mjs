@@ -24,6 +24,7 @@ import { join, isAbsolute, basename } from 'path';
 import { isMainModule } from './lib/is-main-module.mjs';
 import { getCareerOpsRoot } from './path-resolver.mjs';
 import { extractSkills } from './skill-extract.mjs';
+import { readPdfTextSync } from './lib/pdf-text.mjs';
 
 /**
  * Small, deliberately conservative map of interchangeable ATS surface forms.
@@ -380,6 +381,7 @@ export function extractKeywords(reportText) {
  * The report's archived job description: the text under
  * `## Job Description (archived verbatim)` up to the next level-2 heading, or
  * the `jds/` file that section points to (modes/oferta.md, JD archival).
+ * PDF archives are text-extracted, never decoded as raw UTF-8 bytes.
  *
  * @param {string} reportText - Full report markdown.
  * @param {string} root - Directory that holds `jds/`.
@@ -393,7 +395,10 @@ export function archivedJdText(reportText, root) {
   const pointer = /^See (jds\/[A-Za-z0-9][\w.-]*) for the full archive\b/.exec(section);
   if (!pointer) return '';
   const jdPath = join(root, pointer[1]);
-  return existsSync(jdPath) ? readFileSync(jdPath, 'utf-8') : '';
+  if (!existsSync(jdPath)) return '';
+  const archived = readFileSync(jdPath);
+  return /\.pdf$/i.test(jdPath) || archived.subarray(0, 5).toString('ascii') === '%PDF-'
+    ? readPdfTextSync(jdPath) : archived.toString('utf8');
 }
 
 /**
