@@ -28,9 +28,9 @@ function fixture(t) {
   return root;
 }
 
-test("preloaded PDF prompt excludes reference pages, qualified facts and unrelated profile settings", t => {
+test("preloaded PDF prompt excludes reference pages, qualified facts and unrelated profile settings", async t => {
   const dataRoot = fixture(t);
-  const pdfInputs = readPdfWorkerInputs({ codeRoot, dataRoot, reportFile: "reports/001-example.md", hasContext: true });
+  const pdfInputs = await readPdfWorkerInputs({ codeRoot, dataRoot, reportFile: "reports/001-example.md", hasContext: true });
   const contextLibrary = {
     source: "library", notice: "Only facts support claims.", text: "FULL_REFERENCE_MATERIAL", evidenceText: "CURRENT_FACT",
     pages: [
@@ -49,20 +49,20 @@ test("preloaded PDF prompt excludes reference pages, qualified facts and unrelat
   assert.equal(claudeCliArgs({ kind: "evaluate", prompt, inlineInputs: true }).includes("--tools"), false);
 });
 
-test("missing or malformed PDF inputs fail instead of sending an incomplete prompt", t => {
+test("missing or malformed PDF inputs fail instead of sending an incomplete prompt", async t => {
   const dataRoot = fixture(t);
-  assert.throws(() => readPdfWorkerInputs({ codeRoot, dataRoot, reportFile: "reports/missing.md", hasContext: true }), /ENOENT/);
+  await assert.rejects(() => readPdfWorkerInputs({ codeRoot, dataRoot, reportFile: "reports/missing.md", hasContext: true }), /ENOENT/);
   fs.writeFileSync(path.join(dataRoot, "config/profile.yml"), "candidate: [broken");
-  assert.throws(() => readPdfWorkerInputs({ codeRoot, dataRoot, reportFile: "reports/001-example.md", hasContext: true }));
+  await assert.rejects(() => readPdfWorkerInputs({ codeRoot, dataRoot, reportFile: "reports/001-example.md", hasContext: true }));
 });
 
-test("legacy PDF inputs read each fallback source from the runtime data root", t => {
+test("legacy PDF inputs read each fallback source from the runtime data root", async t => {
   const dataRoot = fixture(t);
   const files = ["modes/_context.md", "cv.md", "article-digest.md", "modes/_profile.md", "voice-dna.md"];
   for (const [index, file] of files.entries()) {
     fs.writeFileSync(path.join(dataRoot, file), `RUNTIME_SOURCE_${index}`);
   }
-  const inputs = readPdfWorkerInputs({ codeRoot, dataRoot, reportFile: "reports/001-example.md", hasContext: false });
+  const inputs = await readPdfWorkerInputs({ codeRoot, dataRoot, reportFile: "reports/001-example.md", hasContext: false });
   for (const index of files.keys()) assert.ok(inputs.includes(`RUNTIME_SOURCE_${index}`));
   assert.match(inputs, /Use plain language\./);
   assert.match(inputs, /UNTRUSTED_REPORT_DATA/);
@@ -127,4 +127,40 @@ test("ATS template generation uses canonical payload folding without rewriting f
   assert.match(text, /Core Competencies:\s*People leadership, Product delivery/);
   assert.match(text, /Built reliable services\./);
   assert.deepEqual(original.competencies, ["People leadership", "Product delivery"]);
+});
+
+test("real web publication checks the rendered PDF before readiness and refuses stale reviews", async t => {
+  const { renderAndMarkPdf } = await import('../../src/lib/pdf-render.mjs');
+  const root = fixture(t);
+  const text = 'Led engineering delivery and product partnerships, coached engineers through clear expectations, improved release practices and strengthened production reliability across customer-facing software.';
+  const dates = 'January 2020 – Present';
+  fs.writeFileSync(path.join(root, 'config/cv-facts.json'), '{}');
+  fs.writeFileSync(path.join(root, 'cv.md'), `# Ada Example\n\n## Experience\n\n### Example — Berlin\n\n**Engineer**\n${dates}\n\n- ${text}\n`);
+  fs.writeFileSync(path.join(root, 'modes/_context.md'), `# Career facts\n\nExample: Engineer. ${text}`);
+  const requirements = ['Lead engineering delivery', 'Coach engineers with clear expectations', 'Improve production reliability'];
+  fs.writeFileSync(path.join(root, 'reports/001-example.md'), `# Evaluation: Example\n\n## Job Description\n\n${requirements.join('. ')}.\n`);
+  fs.mkdirSync(path.join(root, 'data'));
+  fs.mkdirSync(path.join(root, 'output'));
+  fs.writeFileSync(path.join(root, 'data/applications.md'), '| # | Date | Company | Role | Score | Status | PDF | Report | Notes |\n|---|---|---|---|---|---|---|---|---|\n| 1 | 2026-11-01 | Example | Engineer | 4/5 | Evaluated | ❌ | [001](../reports/001-example.md) | |\n');
+  const tailored = { ...payload, summary: text, experience: [{ company: 'Example', role: 'Engineer', dates, bullets: [text] }], tailoring: { requirements: requirements.map(requirement => ({ requirement, jdQuote: requirement, match: 'supported', evidence: [{ source: 'modes/_context.md', quote: text }], placements: [{ section: 'summary', claim: text }] })) } };
+  const paths = { html: path.join(root, 'scratch/cv-web-001.html'), finalPdf: path.join(root, 'output/cv.pdf'), reportFile: 'reports/001-example.md' };
+  const bad = await buildCvPayload({ spawnFn: spawn, execPath: process.execPath, root, codeRoot, pdfPaths: paths, template: 'templates/cv-template.compact.html', payload: { ...tailored, experience: [{ ...tailored.experience[0], dates: '' }] } });
+  assert.equal(bad.ok, false);
+  assert.match(bad.error, /complete employment period/);
+  const built = await buildCvPayload({ spawnFn: spawn, execPath: process.execPath, root, codeRoot, pdfPaths: paths, template: 'templates/cv-template.compact.html', payload: tailored });
+  assert.equal(built.ok, true, built.error);
+  const published = await renderAndMarkPdf({ spawnFn: spawn, execPath: process.execPath, root, codeRoot, pdfPaths: paths, format: 'a4', reportNum: '001' });
+  assert.equal(published.kind, 'rendered', published.error);
+  assert.equal(published.warnings.length, 0, published.warnings.join('\n'));
+  assert.match(fs.readFileSync(path.join(root, 'data/applications.md'), 'utf8'), /✅/);
+  const review = JSON.parse(fs.readFileSync(`${paths.finalPdf}.review.json`, 'utf8'));
+  assert.equal(review.status, 'passed');
+  assert.equal(review.pages.length, 1);
+  fs.appendFileSync(paths.finalPdf, 'changed after review');
+  const mark = await new Promise(resolve => {
+    const child = spawn(process.execPath, [path.join(codeRoot, 'mark-pdf-ready.mjs'), '001', '--json'], { env: { ...process.env, CAREER_OPS_ROOT: root, CAREER_OPS_TRACKER: '', CAREER_OPS_PDF_INDEX: '' } });
+    let output = ''; child.stdout.on('data', b => { output += b; }); child.stderr.resume(); child.on('close', code => resolve({ code, output }));
+  });
+  assert.equal(mark.code, 1);
+  assert.match(mark.output, /review-required/);
 });

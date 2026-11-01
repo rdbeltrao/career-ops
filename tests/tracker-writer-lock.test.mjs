@@ -21,6 +21,7 @@ import {
 import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
+import { reviewedCvFixture } from './fixtures/reviewed-cv.mjs';
 import { acquireTrackerLock, openTrackerTransaction } from '../tracker-utils.mjs';
 import { waitForContentionMarker } from './helpers/tracker-contention-marker.mjs';
 
@@ -125,6 +126,11 @@ async function runWhileLocked({
   isolateDataRoot = false,
 }) {
   const dir = mkdtempSync(join(tmpdir(), 'career-ops-writer-lock-'));
+  if (name === 'mark-pdf-ready') {
+    reviewedCvFixture(dir, 1);
+    mkdirSync(join(dir, 'data'), { recursive: true });
+    writeFileSync(join(dir, 'data/pdf-index.tsv'), '1\toutput/1.pdf\t\ta4\t2026-11-01\tcv\n');
+  }
   const tracker = join(dir, 'applications.md');
   const lockDir = join(dir, `career-ops-merge-tracker-${name}.lock`);
   const db = join(dir, 'applications.db');
@@ -472,6 +478,7 @@ writerCase({
 // else in this matrix.
 writerCase({
   name: 'mark-pdf-ready',
+  isolateDataRoot: true,
   script: 'mark-pdf-ready.mjs',
   args: ['1'],
   content: trackerTable([

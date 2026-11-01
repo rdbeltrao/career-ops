@@ -10,6 +10,7 @@ import { pathToFileURL } from 'url';
 import { execFileSync } from 'child_process';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, existsSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
+import { reviewedCvFixture } from './fixtures/reviewed-cv.mjs';
 
 console.log('\nmerge-tracker.mjs — status validation');
 
@@ -774,11 +775,12 @@ try {
     // A manifest row only counts while its PDF is on disk (#4777).
     mkdirSync(join(work, 'output'), { recursive: true });
     writeFileSync(join(work, 'output', '1.pdf'), '%PDF-1.4\n');
+    reviewedCvFixture(work, 1, join(work, 'output', '1.pdf'));
     
     // Normal run should trigger sync and flip the PDF flag
     const result = execFileSync(NODE, [join(ROOT, 'merge-tracker.mjs')], {
       encoding: 'utf-8',
-      env: { ...process.env, CAREER_OPS_TRACKER: tracker, CAREER_OPS_ADDITIONS: addsDir, CAREER_OPS_PDF_INDEX: pdfIndex },
+      env: { ...process.env, CAREER_OPS_ROOT: typeof work !== 'undefined' ? work : workDry, CAREER_OPS_TRACKER: tracker, CAREER_OPS_ADDITIONS: addsDir, CAREER_OPS_PDF_INDEX: pdfIndex },
     });
     
     const trackerContent = readFileSync(tracker, 'utf-8');
@@ -811,7 +813,7 @@ try {
     
     execFileSync(NODE, [join(ROOT, 'merge-tracker.mjs'), '--dry-run'], {
       encoding: 'utf-8',
-      env: { ...process.env, CAREER_OPS_TRACKER: tracker, CAREER_OPS_ADDITIONS: addsDir, CAREER_OPS_PDF_INDEX: pdfIndex },
+      env: { ...process.env, CAREER_OPS_ROOT: typeof work !== 'undefined' ? work : workDry, CAREER_OPS_TRACKER: tracker, CAREER_OPS_ADDITIONS: addsDir, CAREER_OPS_PDF_INDEX: pdfIndex },
     });
     
     const trackerContent = readFileSync(tracker, 'utf-8');
@@ -845,10 +847,13 @@ try {
       writeFileSync(tracker, TRACKER_HEADER + rows);
       writeFileSync(pdfIndex, '# report\tpdf\thtml\tformat\tdate\n' + manifest);
       for (const [name, line] of Object.entries(additions)) writeFileSync(join(addsDir, name), line);
-      for (const pdf of pdfs) writeFileSync(join(workGone, 'output', pdf), '%PDF-1.4\n');
+      for (const pdf of pdfs) {
+        const row = manifest.split('\n').map(x => x.split('\t')).find(x => x[1] === `output/${pdf}`);
+        if (row) reviewedCvFixture(workGone, Number(row[0]), join(workGone, 'output', pdf));
+      }
       execFileSync(NODE, [join(ROOT, 'merge-tracker.mjs'), ...(dryRun ? ['--dry-run'] : [])], {
         encoding: 'utf-8',
-        env: { ...process.env, CAREER_OPS_TRACKER: tracker, CAREER_OPS_ADDITIONS: addsDir, CAREER_OPS_PDF_INDEX: pdfIndex, CAREER_OPS_BATCH_STATE: isolatedBatchStatePath(addsDir) },
+        env: { ...process.env, CAREER_OPS_ROOT: workGone, CAREER_OPS_TRACKER: tracker, CAREER_OPS_ADDITIONS: addsDir, CAREER_OPS_PDF_INDEX: pdfIndex, CAREER_OPS_BATCH_STATE: isolatedBatchStatePath(addsDir) },
       });
       return {
         tracker: readFileSync(tracker, 'utf-8'),
@@ -896,8 +901,8 @@ try {
   const priorOnly = runManifestMerge({ ...goneReeval, pdfs: ['acme-1.pdf'] });
   const priorOnlyCell = pdfCellOf(priorOnly.tracker, '| 3 ');
   const priorOnlyIndex = INDEX_HEADER + '2\toutput/acme-1.pdf\t\t\t2026-01-04\tcv\n';
-  if (/^\[2\]/.test(reportCell(priorOnlyCell.row)) && priorOnlyCell.pdf === '✅' && priorOnly.index === priorOnlyIndex) {
-    pass('a re-eval with only the prior PDF on disk links report 2, checks the cell, and keys that PDF under report 2');
+  if (/^\[2\]/.test(reportCell(priorOnlyCell.row)) && priorOnlyCell.pdf === '❌' && priorOnly.index === priorOnlyIndex) {
+    pass('a re-eval can re-key its prior PDF but requires a new review before readiness');
   } else {
     fail(`prior-only re-eval did not re-key the live PDF: row "${priorOnlyCell.row}", index ${JSON.stringify(priorOnly.index)}`);
   }

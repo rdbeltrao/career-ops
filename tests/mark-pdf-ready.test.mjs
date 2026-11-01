@@ -14,6 +14,7 @@ import { join } from 'path';
 import { execFileSync } from 'child_process';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, chmodSync } from 'fs';
 import { tmpdir } from 'os';
+import { reviewedCvFixture } from './fixtures/reviewed-cv.mjs';
 
 console.log('\nmark-pdf-ready.mjs — PDF column write path');
 
@@ -22,6 +23,13 @@ function makeSandbox(trackerContent) {
   const dir = mkdtempSync(join(tmpdir(), 'co-markpdf-'));
   const tracker = join(dir, 'applications.md');
   writeFileSync(tracker, trackerContent);
+  mkdirSync(join(dir, 'data'), { recursive: true });
+  const index = [];
+  for (const num of [1, 2, 3, 9]) {
+    reviewedCvFixture(dir, num);
+    index.push(`${num}\toutput/${num}.pdf\t\ta4\t2026-11-01\tcv`);
+  }
+  writeFileSync(join(dir, 'data/pdf-index.tsv'), index.join('\n') + '\n');
   // Must live under tmpdir and use the career-ops lock-name prefix (see
   // trackerLockDirFor) or it's ignored — still safe, just a shared-lock risk.
   const lock = join(dir, 'career-ops-merge-tracker-test.lock');
@@ -36,6 +44,7 @@ function readTracker(sandbox) {
 function runMarkPdfReady(args, sandbox, extraEnv = {}) {
   const env = {
     ...process.env,
+    CAREER_OPS_ROOT: sandbox.dir,
     CAREER_OPS_TRACKER: sandbox.tracker,
     CAREER_OPS_TRACKER_LOCK: sandbox.lock,
     ...extraEnv,
@@ -417,6 +426,9 @@ const TRACKER_DUP_REPORT = `# Applications Tracker
     const tracker = join(roDir, 'applications.md');
     writeFileSync(tracker, TRACKER_9);
     const lock = join(dir, 'career-ops-merge-tracker-wf.lock');
+    reviewedCvFixture(roDir, 1);
+    mkdirSync(join(roDir, 'data'), { recursive: true });
+    writeFileSync(join(roDir, 'data/pdf-index.tsv'), '1\toutput/1.pdf\t\ta4\t2026-11-01\tcv\n');
     // On Windows, directory read-only bits don't block file creation — deny
     // write-data/append-data for Everyone (*S-1-1-0) via icacls instead
     // (mirrors tests/set-status.test.mjs's write-failure test).
@@ -429,7 +441,7 @@ const TRACKER_DUP_REPORT = `# Applications Tracker
     denyWrite();
     try {
       // When mark-pdf-ready tries to flip report #1's PDF cell
-      const r = runMarkPdfReady(['1', '--json'], { tracker, lock });
+      const r = runMarkPdfReady(['1', '--json'], { dir: roDir, tracker, lock });
       let parsed = null;
       try { parsed = JSON.parse(r.stdout); } catch { /* asserted below */ }
 

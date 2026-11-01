@@ -6,6 +6,51 @@ Optional passes:
 
 ## Full pipeline
 
+### Required publication review
+
+Generating HTML or a PDF produces a draft. Mark a CV ready only after the shared
+publication pipeline has checked its source-backed dates, its three critical job
+requirements, and the actual rendered PDF. Never use an ATS score as this review.
+
+Before drafting, resolve the report and read its archived job description. Read
+the eligible career periods and critical requirements through
+`publicationBrief(dataRoot, reportText)` in `lib/cv-publication.mjs`. It extracts
+eligible period fields independently of unrelated uncertain headcounts. A missing
+or conflicting period blocks publication; never guess or leave a blank date.
+
+Build exactly three `tailoring.requirements` entries in the render payload:
+`{requirement, jdQuote, match, evidence, placements, gap}`. `match` is `supported`,
+`partial`, or `gap`. Each `jdQuote` must be a contiguous passage from the actual
+archived JD. Use the three supplied critical requirements when available; otherwise
+select three essential requirements, excluding benefits and page navigation.
+Each supported or partial match quotes eligible career evidence as
+`{source, quote}` and names its actual CV placement as
+`{section: "summary" | "experience" | "skills" | "education", company, bulletIndex, claim}`. `claim` must
+appear in that placement. Partial matches and gaps must describe the remaining
+limitation; gaps may have empty evidence and placements. Never fabricate a skill
+or achievement to close a gap. This metadata is private and is never rendered.
+
+Keep employment newest-first with complete periods matching the source. Tailor
+the summary and first relevant bullets around the critical requirements and
+concrete proof, not a generic competency list or keyword frequency.
+
+After building the HTML, publish with:
+
+`node publish-cv.mjs --html={html-path} --payload={payload-json} --pdf={pdf-path} --report={report-number} --format={a4|letter}`
+
+This checks dates, evidence links, facts and actual PDF text, page bounds, missing
+content and two-page budget. Failed checks preserve the previous PDF. Successful
+review records hashes of the PDF, HTML, payload, report and career evidence in
+`{pdf-path}.review.json`. Inspect the rendered pages as the final recruiter/layout
+review; correct weak proof, clipping, awkward breaks or overflow and republish.
+Only then run `node mark-pdf-ready.mjs {report-number}`. The writer rejects a
+missing or stale review even if the PDF column was already checked. Reconciliation
+also requires a current review before upgrading the PDF flag.
+
+The web flow uses the same publication CLI. `generate-pdf.mjs` remains a draft
+renderer and cannot by itself establish readiness. A one-off CV without a report
+remains a draft until its target JD is archived and publication review can run.
+
 **When a Context library exists:** current Context pages supply career facts and
 preferences throughout this pipeline. References below to facts in `cv.md`, the
 old profile or the digest describe the legacy path; they do not create a second
@@ -94,10 +139,9 @@ Run `npm run jd:similarity -- {bundle-root}/jd/current.md {bundle-root}/jd/previ
     The fact gate proves nothing was invented; it cannot tell you whether these are the *right* bullets for the role. The audit researches the likely reviewer, dispatches a separate subagent role-playing them, and returns a bullet-by-bullet keep/cut/rewrite verdict plus a blunt "would I advance this to a screen?" call. It adds a subagent dispatch plus web research on top of the tailoring, which is why it is opted into rather than run on every PDF.
 
     The audit recommends; the user decides. If they take any rewrite, return to Step 17, rebuild the payload and the HTML, and re-run the fact gate before rendering. The audit is persisted only once that decision is known, and records which rewrites were applied — so the `## HM Audit` section never describes a CV the rendered PDF no longer matches. Do not re-run the audit against the rebuilt CV: a second dispatch doubles the cost for a verdict the user has already acted on.
-21. Execute: `node generate-pdf.mjs {html-path} {pdf-path} --format={letter|a4} --report={report number}`. When `page_format` is `auto`, drop `--format` and pass `--country={code}` with the same code the payload carries, since an explicit `--format` outranks `auto`. Here `{pdf-path}` is the active bundle's `cv/tailored/vNNN/cv.pdf` or `output/cv-{candidate}-{report}-{company}-{YYYY-MM-DD}.pdf` for a one-off CV. `{report number}` is the NNN from the report filename/link (e.g. `008` for `reports/008-acme-….md`), not the tracker `#` column. Pass it whenever the application has (or will have) a report; it records the PDF↔report linkage in `data/pdf-index.tsv` so the dashboard can open and regenerate the exact nested or flat HTML/PDF pair. Omit it only for one-off CVs with no tracker entry.
-    - The rendered PDF has a two-page warning threshold by default. `--max-pages=N` accepts a positive integer; pass `--max-pages=1` when the user or market prefers a one-page CV.
-    - If the rendered PDF exceeds its threshold, generation warns loudly with the actual and allowed page counts plus trimming guidance, then reports and indexes the unchanged PDF so existing longer-CV flows keep working.
-    - Pass `--strict-pages` only when the user or market requires a hard limit. Strict overflow leaves the draft available for inspection but does not report or index it as successful; trim lower-priority content and rerun.
+21. For a report-linked CV, execute `node publish-cv.mjs --html={html-path} --payload=/tmp/cv-{candidate}[-{report}]-{company}.json --pdf={pdf-path} --format={letter|a4} --report={report number}`. This is mandatory: a successful draft render does not establish readiness. A one-off without a report may use `node generate-pdf.mjs {html-path} {pdf-path} --format={letter|a4}` and remains a draft. When `page_format` is `auto`, drop `--format` and pass `--country={code}` with the same code the payload carries, since an explicit `--format` outranks `auto`. Here `{pdf-path}` is the active bundle's `cv/tailored/vNNN/cv.pdf` or `output/cv-{candidate}-{report}-{company}-{YYYY-MM-DD}.pdf` for a one-off CV. `{report number}` is the NNN from the report filename/link (e.g. `008` for `reports/008-acme-….md`), not the tracker `#` column. Pass it whenever the application has (or will have) a report; it records the PDF↔report linkage in `data/pdf-index.tsv` so the dashboard can open and regenerate the exact nested or flat HTML/PDF pair. Omit it only for one-off CVs with no tracker entry.
+    - Publication enforces a two-page maximum. Overflow blocks publication; trim lower-priority detail and rerun.
+    - The separate `generate-pdf.mjs` draft renderer supports `--max-pages=N` and `--strict-pages`. Its default overflow warning never establishes publication readiness.
     - Generation fails when Work Experience is not newest-first, quoting the dates of the role that starts later than the one above it. Return to Step 17 with the roles in reverse-chronological order, rebuild the HTML, and re-run the fact gate before rendering; tailor through the summary, competencies, and bullet selection, never by moving roles. Pass `--allow-nonchronological`, which turns the failure into a warning, only when the user explicitly asks for a non-chronological CV.
 21a. **ATS variant — off by default, opt-in only.** Run this step if and only if the invocation carried `--ats` (`/career-ops pdf --ats`, or the same flag on a natural-language request) or `modes/_custom.md` turns it on as a house rule; otherwise skip straight to Step 22 without prompting. It runs after Step 21 so the payload is final (any Step 20 rewrites are already in it) and the styled CV is done: the variant is an extra, and a failure here never touches the styled HTML/PDF.
     - **This is not a template swap.** The `ats` template owns the DOM, not the payload. `competencies[]` renders as tags separated only by CSS gap, under a header parsers don't recognise, so it gets dropped whole whatever the template looks like. Fold the payload first, and fold only this copy; the styled payload keeps its competency grid:
@@ -107,7 +151,7 @@ Run `npm run jd:similarity -- {bundle-root}/jd/current.md {bundle-root}/jd/previ
     - Gate it: `node verify-cv-facts.mjs output/cv-{candidate}[-{report}]-{company}-ats.html`. The fold cannot add a claim, but Step 19 allows fixing a gate failure in the styled **HTML**, and a fix made there never reaches the JSON this variant is built from. Gating the variant catches that drift instead of shipping it. If it fails, fix the Step 17 payload (not either HTML file), rebuild both, and re-run both gates.
     - No PDF by default: the user copies the text out of the HTML. If they want an uploadable file too, run `node generate-pdf.mjs output/cv-{candidate}[-{report}]-{company}-ats.html output/cv-{candidate}[-{report}]-{company}-ats-{YYYY-MM-DD}.pdf --format={letter|a4}` **without** `--report`. Under `page_format: auto`, use `--country={code}` in place of `--format`. With `--report`, the ATS PDF would be indexed against the report and replace the styled pair the dashboard opens and regenerates.
 22. Verify ATS keyword coverage of the **tailored** CV against the role's evaluation report (when one exists): `node keyword-match.mjs "reports/{###}-{company-slug}-{YYYY-MM-DD}.md" --cv "{html-path}"`. Pass the report's full filename (e.g. `reports/008-acme-2026-09-28.md`), not the bare NNN that Step 21's `--report` takes, and keep both paths quoted. This text-extracts the HTML you just built and reports coverage %, present, thin, and missing keywords — the diagnostic for the document being sent. Surface any missing/thin keywords to the user (reformulate from real experience, never fabricate). If the report has no keyword section, the command prints a `⚠️` line on stderr and scores the skills it finds in the report's archived JD instead. That is a defect in the report, not a pass: tell the user, and add the keyword section to the report. If it exits 1, coverage did not run. Say so in Step 23 rather than leaving the number out.
-23. Report: PDF path, number of pages, keyword coverage % and whether its keywords came from the report or the archived JD (when Step 22 ran), the ATS variant's HTML path and any lint findings the user left open (when Step 21a ran), and any skill gaps from Step 4 still unaddressed
+23. Inspect the final rendered pages for legibility, clipping, overlap, orphaned job headings and awkward splits. Fix and republish if needed. After the final review, run `node mark-pdf-ready.mjs {report number}` for a report-linked CV; never mark a draft or stale review ready. Report: PDF path, number of pages, keyword coverage % and whether its keywords came from the report or the archived JD (when Step 22 ran), the ATS variant's HTML path and any lint findings the user left open (when Step 21a ran), and any skill gaps from Step 4 still unaddressed
 
 ## ATS Rules (clean parsing)
 

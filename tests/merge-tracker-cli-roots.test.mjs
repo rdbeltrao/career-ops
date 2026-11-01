@@ -10,6 +10,7 @@ import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync
 import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
+import { reviewedCvFixture } from './fixtures/reviewed-cv.mjs';
 
 const CODE_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const TRACKER_HEADER = [
@@ -78,7 +79,7 @@ test('merge-tracker resolves executable post-hook from code root and PDF data fr
     // The PDF lives under the external DATA_ROOT, not beside the scripts, and a
     // manifest row only counts while its file is on disk (#4777).
     mkdirSync(join(dataRoot, 'output'), { recursive: true });
-    writeFileSync(join(dataRoot, 'output', 'cv-acme.pdf'), '%PDF-1.4\n');
+    reviewedCvFixture(dataRoot, 12, join(dataRoot, 'output', 'cv-acme.pdf'));
 
     const result = runMergeTrackerCli(dataRoot);
     const trackerAfter = readFileSync(tracker, 'utf-8');
