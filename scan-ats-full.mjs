@@ -1758,7 +1758,9 @@ async function main() {
         try {
           await boardScope(source, `${name}/${entry.name} (retry)`, COMPANY_TIMEOUT_MS, async (signal) => {
             retrySignal = signal;
-            const jobs = await source.provider.fetch(entry, ctx);
+            const jobs = await source.provider.fetch(entry, {
+              ...sourceCtx, titleWanted: title => titleFilter(title, entry.name),
+            });
             recordBoardResult(deadBoards, name, boardKey(entry), 200);
             // Where a board deferred by the parallel sweep is actually decided.
             // A board the sweep already admitted is never gated here, and one

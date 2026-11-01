@@ -62,3 +62,44 @@ test('uncapped coverage retries failures, resumes only pending boards and keeps 
     assert.deepEqual(JSON.parse(fs.readFileSync(path.join(root, 'calls.json'))), { outage: 1 });
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
+
+test('Workday sequential recovery avoids detail requests for unrelated titles', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'scan-workday-retry-'));
+  try {
+    fs.mkdirSync(path.join(root, 'data/cache/ats-companies'), { recursive: true });
+    fs.writeFileSync(path.join(root, 'data/cache/ats-companies/workday.json'), JSON.stringify(['acme|wd5|careers']));
+    fs.writeFileSync(path.join(root, 'portals.yml'), 'title_filter:\n  positive: [Engineer]\n');
+    const scanner = path.join(codeRoot, 'scan-ats-full.mjs');
+    const log = path.join(root, 'details.json');
+    const launcher = path.join(root, 'launch.mjs');
+    fs.writeFileSync(launcher, `
+      import fs from 'node:fs';
+      import workday from ${JSON.stringify(pathToFileURL(path.join(codeRoot, 'providers/workday.mjs')).href)};
+      let attempt = 0;
+      const details = [];
+      workday.fetch = async (entry, ctx) => {
+        const jobs = ['Engineer', 'Accountant'].map((title, i) => ({
+          title, company: 'Acme', location: 'Remote', postedAt: Date.now(),
+          url: 'https://acme.wd5.myworkdayjobs.com/careers/job/Remote/Role_R' + i,
+        }));
+        for (const job of jobs) {
+          if (!ctx.titleWanted || ctx.titleWanted(job.title)) details.push(job.title);
+        }
+        fs.writeFileSync(${JSON.stringify(log)}, JSON.stringify(details));
+        if (++attempt === 1) jobs.workdayTruncated = 'transient';
+        return jobs;
+      };
+      process.argv[1] = ${JSON.stringify(scanner)};
+      await import(${JSON.stringify(pathToFileURL(scanner).href)});
+    `);
+    const result = spawnSync(process.execPath, [launcher, '--ats', 'workday', '--since', '14', '--coverage-state', 'data/cache/coverage.json', '--include-undated', '--json'], {
+      encoding: 'utf8', timeout: 15_000,
+      env: { ...process.env, CAREER_OPS_ROOT: root, CAREER_OPS_DATA_DIR: '', CAREER_OPS_PORTALS: '', CAREER_OPS_PIPELINE: '', CAREER_OPS_SCAN_HISTORY: '', CAREER_OPS_TRACKER: '', CAREER_OPS_NO_AUTO_JEV: '1' },
+    });
+    assert.equal(result.status, 0, result.stderr);
+    assert.deepEqual(JSON.parse(fs.readFileSync(log)), ['Engineer', 'Engineer'], 'both attempts should enrich only wanted titles');
+    const receipt = JSON.parse(result.stdout);
+    assert.equal(receipt.coverage.remaining, 0);
+    assert.equal(receipt.postingsKept, 1, 'retry retains the match without duplicating it');
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
