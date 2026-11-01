@@ -973,6 +973,7 @@ export async function runHistorySeedScan(seeds, providers, opts, ctx, processJob
   }
   let errors = 0;
   let missing = 0;
+  let pageCapped = 0;
   let attempted = 0;
   const withHostSlot = createKeyedLimiter(SINGLE_HOST_CONCURRENCY);
   // An arbitrary provider may ignore cancellation or never settle. Once one
@@ -1009,6 +1010,8 @@ export async function runHistorySeedScan(seeds, providers, opts, ctx, processJob
           : ctx;
         const jobs = await provider.fetch(entry, boardCtx);
         if (!operation.active) return;
+        if (jobs.workdayTruncated === WORKDAY_TRUNCATED_REASON.STRUCTURAL || jobs.icimsTruncated) pageCapped++;
+        else if (jobs.workdayTruncated) errors++;
         await processJobs(jobs, `${seed.vendor}-history`, provider, entry.name, () => operation.active);
       })();
       let timedOut = false;
@@ -1041,6 +1044,7 @@ export async function runHistorySeedScan(seeds, providers, opts, ctx, processJob
     unsupported: capped.length - scannable.length - directoryCovered,
     errors,
     missing,
+    capped: pageCapped,
   };
 }
 
@@ -1679,6 +1683,7 @@ async function main() {
           // (facet-split slice/depth/page budget) that a repeat run reaches
           // again, paying the same expensive split for the same result.
           if (jobs.workdayTruncated === WORKDAY_TRUNCATED_REASON.TRANSIENT) truncated.push(entry);
+          if (jobs.workdayTruncated === WORKDAY_TRUNCATED_REASON.STRUCTURAL) cappedBoards++;
           if (jobs.workdayTruncated || jobs.icimsTruncated) fullyScanned = false;
           // Ahead of processJobs, deliberately: a gated board is not merely
           // quieter but CHEAPER, since provider.enrichDate() issues a per-job
@@ -1794,7 +1799,8 @@ async function main() {
               await processJobs(jobs, name, source.provider, entry.name);
             }
             if (jobs.workdayTruncated) {
-              errors++; // still not fully covered — move on
+              if (jobs.workdayTruncated === WORKDAY_TRUNCATED_REASON.STRUCTURAL) cappedBoards++;
+              else errors++; // transport remains unresolved after retry
               // A board pushed here as 'transient' can legitimately come back
               // 'structural': the retry's root crawl succeeded, the clamp got
               // detected for the first time, and the split then hit its own
@@ -1882,6 +1888,7 @@ async function main() {
     totalCompaniesScanned += result.total;
     totalErrors += result.errors;
     missingBoards += result.missing;
+    cappedBoards += result.capped;
     if (scanDeadline.expired()) stoppedEarly = true;
     log(`  done — ${result.total} board(s) probed, ${result.unsupported} without a scanner provider (${result.errors} errors)`);
   }
@@ -1909,7 +1916,7 @@ async function main() {
   printScanSummaryHeader('Reverse ATS Scan', date, log);
   log(`Companies scanned:  ${totalCompaniesScanned}${capHit ? ` of ${totalCompaniesAvailable} (capped)` : ''}`);
   log(`Unreachable boards: ${totalErrors}`);
-  if (cappedBoards) log(`Page-capped boards: ${cappedBoards} (partial coverage — later postings not scanned)`);
+  if (cappedBoards) log(`Incomplete boards: ${cappedBoards} (pagination limits or native posting-count gaps)`);
   // Reported whenever the gate RAN, including when it skipped nothing: a zero
   // there is the useful reading that the domain list admitted every board, and
   // silence would be indistinguishable from the gate being off.

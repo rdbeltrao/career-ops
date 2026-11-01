@@ -37,10 +37,11 @@ test("no company coverage is a failed scan", () => {
 
 test("directory progress, missing boards and unknown dates are reported separately", () => {
   const result = scheduledScanResult("full", JSON.stringify({ postingsKept: 2, companiesScanned: 60, companiesAvailable: 160,
-    missingBoards: 4, unreachableBoards: 1, postingsKeptUndated: 1, coverage: { companiesTotal: 160, companiesCompleted: 159, remaining: 1 } }));
+    missingBoards: 4, unreachableBoards: 1, cappedBoards: 2, postingsKeptUndated: 1, coverage: { companiesTotal: 160, companiesCompleted: 159, remaining: 1 } }));
   assert.equal(result.state, "partial");
   assert.match(result.message, /4 boards returned HTTP 404 or 410/);
   assert.match(result.message, /1 boards unreachable/);
+  assert.match(result.message, /2 boards have incomplete pagination or native posting-count gaps/);
   assert.match(result.message, /159 of 160 boards checked/);
   assert.match(result.message, /next run continues saved progress/);
   assert.match(result.message, /1 matching role kept with unknown posting dates/);

@@ -33,7 +33,7 @@ export function scheduledScanResult(engine, stdout) {
       if (remaining > 0) warnings.push(`${remaining} boards remain; the next run continues saved progress and retries unresolved boards.`);
     }
     if (receipt.coverageSaveError) warnings.push("Coverage progress could not be saved; the next run will revisit boards. Saved matches were retained.");
-    if (receipt.cappedBoards > 0) warnings.push(`${receipt.cappedBoards} boards reached their page limit.`);
+    if (receipt.cappedBoards > 0) warnings.push(`${receipt.cappedBoards} boards have incomplete pagination or native posting-count gaps.`);
     if (receipt.postingsDroppedNoDate > 0) warnings.push(`${receipt.postingsDroppedNoDate} posting${receipt.postingsDroppedNoDate === 1 ? "" : "s"} excluded because no posting date was available.`);
     if (receipt.postingsKeptUndated > 0) warnings.push(`${receipt.postingsKeptUndated} matching role${receipt.postingsKeptUndated === 1 ? "" : "s"} kept with unknown posting dates; freshness could not be verified.`);
   } else {
