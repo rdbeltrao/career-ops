@@ -46,8 +46,9 @@ test("directory progress, missing boards and unknown dates are reported separate
   assert.match(result.message, /next run continues saved progress/);
   assert.match(result.message, /1 matching role kept with unknown posting dates/);
   const complete = scheduledScanResult("full", JSON.stringify({ postingsKept: 0, companiesScanned: 0, missingBoards: 4,
-    coverage: { companiesTotal: 4, companiesCompleted: 4, remaining: 0 } }));
+    boardsExcludedByConfig: 1, coverage: { companiesTotal: 4, companiesCompleted: 4, remaining: 0 } }));
   assert.equal(complete.state, "success", 'confirmed obsolete boards are not a transient outage');
+  assert.match(complete.message, /1 board exclusion configured/);
   const unsaved = scheduledScanResult("full", JSON.stringify({ postingsKept: 2, coverageSaveError: "EACCES" }));
   assert.equal(unsaved.state, "partial");
   assert.equal(unsaved.rolesFound, 2);

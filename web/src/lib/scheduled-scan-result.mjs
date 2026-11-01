@@ -27,6 +27,7 @@ export function scheduledScanResult(engine, stdout) {
     if (datasets.length && datasets.every(([, status]) => status === "empty")) failed = true;
     if (receipt.unreachableBoards > 0) warnings.push(`${receipt.unreachableBoards} boards unreachable.`);
     if (receipt.missingBoards > 0) details.push(`${receipt.missingBoards} boards returned HTTP 404 or 410 (not found or removed).`);
+    if (receipt.boardsExcludedByConfig > 0) details.push(`${receipt.boardsExcludedByConfig} board exclusion${receipt.boardsExcludedByConfig === 1 ? '' : 's'} configured in saved scan settings.`);
     if (receipt.coverage) {
       const { companiesCompleted, companiesTotal, remaining } = receipt.coverage;
       details.push(`Directory coverage: ${companiesCompleted} of ${companiesTotal} boards checked in this cycle.`);

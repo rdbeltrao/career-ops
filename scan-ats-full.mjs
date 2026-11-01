@@ -186,13 +186,39 @@ export function checkpointCompatible(cp, opts) {
 export function filterFingerprints(config) {
   const titleKey = config?.title_filter_full ? 'title_filter_full' : 'title_filter';
   const fp = (v) => datasetFingerprint(sortKeys(v ?? null));
-  return {
+  const result = {
     [titleKey]: fp(resolveTitleFilterConfig(config)),
     title_filter_overrides: fp(config?.title_filter_overrides),
     location_filter: fp(config?.location_filter),
     content_filter: fp(config?.content_filter),
     domain_filter: fp(config?.domain_filter),
   };
+  const excluded = configuredExcludedBoards(config);
+  if (excluded.size) result.full_scan_excluded_boards = fp([...excluded].sort());
+  return result;
+}
+
+function canonicalBoardUrl(value) {
+  try {
+    const url = new URL(value);
+    url.search = ''; url.hash = '';
+    return url.href.replace(/\/+$/, '');
+  } catch { return String(value || '').trim(); }
+}
+
+/** Explicit board exclusions change the directory scope, never inferred identities. */
+export function configuredExcludedBoards(config) {
+  const raw = config?.full_scan?.excluded_boards;
+  if (raw === undefined) return new Set();
+  if (!Array.isArray(raw)) throw new Error('full_scan.excluded_boards must be a list of credential-free HTTPS board URLs.');
+  return new Set(raw.map(value => {
+    try {
+      if (typeof value !== 'string') throw new Error();
+      const url = new URL(value);
+      if (url.protocol !== 'https:' || url.username || url.password) throw new Error();
+      return canonicalBoardUrl(value);
+    } catch { throw new Error('full_scan.excluded_boards must be a list of credential-free HTTPS board URLs.'); }
+  }));
 }
 
 function sortKeys(v) {
@@ -965,6 +991,7 @@ export async function runHistorySeedScan(seeds, providers, opts, ctx, processJob
     const provider = providers.get(seed.vendor);
     if (!provider) continue;
     const entry = { name: seed.company, careers_url: seed.careersUrl, provider: seed.vendor };
+    if (opts.excludedBoards?.has(canonicalBoardUrl(entry.careers_url))) { directoryCovered++; continue; }
     if (coverage?.registered(seed.vendor, boardKey(entry))) { directoryCovered++; continue; }
     try {
       // probeConfirmed: the host was verified as SuccessFactors from its page,
@@ -1265,7 +1292,13 @@ async function main() {
   }
   const domainFilter = buildDomainFilter(config?.domain_filter);
   const filters = filterFingerprints(config);
-  const coverageSignature = createHash('sha256').update(JSON.stringify({ filters, ats: [...opts.ats].sort(), sinceDays: opts.sinceDays,
+  const excludedBoards = configuredExcludedBoards(config);
+  opts.excludedBoards = excludedBoards;
+  const boardIncluded = entry => !excludedBoards.has(canonicalBoardUrl(boardKey(entry)));
+  // The ledger reconciles changed board sets. Legacy offset checkpoints need
+  // the exclusion fingerprint, while completed boards keep their valid work.
+  const coverageFilters = Object.fromEntries(Object.entries(filters).filter(([key]) => key !== 'full_scan_excluded_boards'));
+  const coverageSignature = createHash('sha256').update(JSON.stringify({ filters: coverageFilters, ats: [...opts.ats].sort(), sinceDays: opts.sinceDays,
       includeUndated: opts.includeUndated, includeBlacklisted: opts.includeBlacklisted, liveness: opts.liveness,
       blacklist: [...loadBlacklist()] })).digest('hex');
   const coverage = opts.coverageState ? await openScanCoverage(path.resolve(DATA_ROOT, opts.coverageState), coverageSignature) : null;
@@ -1282,7 +1315,7 @@ async function main() {
       companyLists.set(name, data);
       const stable = [...knownMissing.values()].filter(row => row.ats === name
         && (row.lastChecked >= cycleStart || shouldSkipDeadBoard(knownMissing, name, row.board))).map(row => row.board);
-      coverage.register(name, data.list.map(SOURCES[name].toEntry).filter(Boolean).map(boardKey), data.status,
+      coverage.register(name, data.list.map(SOURCES[name].toEntry).filter(Boolean).filter(boardIncluded).map(boardKey), data.status,
         name === 'workday' ? WORKDAY_COVERAGE_POLICY : undefined, stable);
     }
   }
@@ -1590,7 +1623,8 @@ async function main() {
     // source finished before the checkpoint was written still contributed its
     // companies to the sweep, so it must still count toward the availability /
     // cap figures the final report and --json output show.
-    const { list, status } = companyLists.get(name) ?? await loadCompanyList(name, source.dataset);
+    const { list: datasetList, status } = companyLists.get(name) ?? await loadCompanyList(name, source.dataset);
+    const list = datasetList.filter(item => { const entry = source.toEntry(item); return !entry || boardIncluded(entry); });
     datasetStatus[name] = status;
     if (!coverage) totalCompaniesAvailable += list.length;
     if (opts.limit < list.length) capHit = true;
@@ -2040,6 +2074,7 @@ async function main() {
       retiredBoardsSkipped: totalRetiredBoardsSkipped,
       cappedBoards,
       workdayQuerySnapshotsReused: workdaySnapshots?.stats.hits || 0,
+      boardsExcludedByConfig: excludedBoards.size,
       // `domainFilterActive` is not derivable from the two counts: zero skipped
       // boards is equally what an absent domain_filter and a permissive one
       // produce, and a caller comparing two sweeps needs to know which.
