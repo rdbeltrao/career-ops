@@ -416,6 +416,12 @@ Notes:
   successful partial read is never recorded as complete coverage.
   Changes to retrieval policy recheck live boards while retaining verified
   missing boards. The normal whole-run deadline still applies.
+- **Large Workday boards resume completed queries within a two-hour snapshot
+  window.** Query snapshots preserve the native posting dates captured on the
+  first read. Failed or interrupted queries are fetched again; a query stopped
+  by date cannot substitute for full count verification. Snapshots are scoped
+  to the coverage cycle and matching policy. They never mark a board complete,
+  and are cleared only after canonical persistence and the coverage-ledger save.
 - **Invalid values fail immediately** — `--since` with no number, `--since=`,
   zero, negative, and non-finite values all exit rather than silently scanning
   without a window.

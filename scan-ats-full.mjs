@@ -57,6 +57,7 @@ import { renameSyncWithRetry } from './tracker-utils.mjs';
 
 import { makeHttpCtx, fetchJson, fetchTextHead, fetchJsonWithRetry } from './providers/_http.mjs';
 import { openScanCoverage } from './lib/scan-coverage.mjs';
+import { createWorkdayQuerySnapshots } from './lib/workday-query-snapshots.mjs';
 import { createScanDeadline, withScanSignal } from './lib/scan-deadline.mjs';
 import { withConnectionScope, withAbortScope } from './providers/_connection-scope.mjs';
 import { isResolverFailure, dnsPacingStats } from './providers/_dns-cache.mjs';
@@ -1264,11 +1265,14 @@ async function main() {
   }
   const domainFilter = buildDomainFilter(config?.domain_filter);
   const filters = filterFingerprints(config);
-  const coverage = opts.coverageState ? await openScanCoverage(path.resolve(DATA_ROOT, opts.coverageState),
-    createHash('sha256').update(JSON.stringify({ filters, ats: [...opts.ats].sort(), sinceDays: opts.sinceDays,
+  const coverageSignature = createHash('sha256').update(JSON.stringify({ filters, ats: [...opts.ats].sort(), sinceDays: opts.sinceDays,
       includeUndated: opts.includeUndated, includeBlacklisted: opts.includeBlacklisted, liveness: opts.liveness,
-      blacklist: [...loadBlacklist()] })).digest('hex')) : null;
+      blacklist: [...loadBlacklist()] })).digest('hex');
+  const coverage = opts.coverageState ? await openScanCoverage(path.resolve(DATA_ROOT, opts.coverageState), coverageSignature) : null;
   if (coverage) process.once('exit', () => coverage.close());
+  const workdaySnapshots = coverage ? createWorkdayQuerySnapshots(`${path.resolve(DATA_ROOT, opts.coverageState)}.queries`,
+    JSON.stringify({ signature: coverageSignature, cycle: coverage.summary().startedAt, policy: WORKDAY_COVERAGE_POLICY }),
+    { onError: error => console.error(`Warning: Workday query snapshots unavailable: ${error.message}`) }) : null;
   const companyLists = new Map();
   if (coverage) {
     const knownMissing = loadDeadBoards(DEAD_BOARDS_PATH);
@@ -1430,7 +1434,10 @@ async function main() {
   let stopping = false;
   let coverageSaveError = null;
   const saveCoverage = () => {
-    try { coverage?.save(); }
+    try {
+      coverage?.save();
+      workdaySnapshots?.clearCompleted(board => !coverage.pending('workday', board));
+    }
     catch (error) {
       coverageSaveError = error.message;
       console.error(`Warning: Could not save coverage progress: ${error.message}`);
@@ -1660,7 +1667,8 @@ async function main() {
         // per-job detail-page requests via provider.enrichDate) — runs inside
         // one watchdog, so enrichment shares the company's fetch budget.
         await boardScope(source, `${name}/${entry.name}`, companyTimeoutMs, async () => {
-          const boardCtx = { ...sourceCtx, titleWanted: title => titleFilter(title, entry.name) };
+          const boardCtx = { ...sourceCtx, titleWanted: title => titleFilter(title, entry.name),
+            ...(name === 'workday' && workdaySnapshots ? { workdayQueryCache: workdaySnapshots.board(deadBoard) } : {}) };
           // Most boards in a public directory hold nothing the title filter
           // wants; where the provider can list a board cheaply, find that out
           // before downloading every posting body.
@@ -1786,6 +1794,7 @@ async function main() {
             retrySignal = signal;
             const jobs = await source.provider.fetch(entry, {
               ...sourceCtx, titleWanted: title => titleFilter(title, entry.name),
+              ...(name === 'workday' && workdaySnapshots ? { workdayQueryCache: workdaySnapshots.board(boardKey(entry)) } : {}),
             });
             recordBoardResult(deadBoards, name, boardKey(entry), 200);
             // Where a board deferred by the parallel sweep is actually decided.
@@ -2030,6 +2039,7 @@ async function main() {
       postingsKeptUndated: offers.filter(o => !o.postedAt).length,
       retiredBoardsSkipped: totalRetiredBoardsSkipped,
       cappedBoards,
+      workdayQuerySnapshotsReused: workdaySnapshots?.stats.hits || 0,
       // `domainFilterActive` is not derivable from the two counts: zero skipped
       // boards is equally what an absent domain_filter and a permissive one
       // produce, and a caller comparing two sweeps needs to know which.

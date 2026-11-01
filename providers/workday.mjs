@@ -901,6 +901,7 @@ export default {
     // below (pagesToFetch === maxPages) stays quiet. No effect on real scans,
     // which don't set ctx.maxPages.
     const ctxCap = Number.isInteger(ctx?.maxPages) && ctx.maxPages > 0 ? ctx.maxPages : Infinity;
+    const querySnapshots = fullCoverage && ctxCap === Infinity ? ctx.workdayQueryCache : null;
 
     // Shared across the unfaceted crawl and every slice, so one tenant's total
     // cost is bounded no matter how its facets fan out.
@@ -931,8 +932,15 @@ export default {
      * decide whether this query was clamped and, if so, what to split it on.
      */
     let verifyNativeCounts = false;
+    const reusedQueries = new WeakSet();
     const runQuery = async (appliedFacets, expectedTotal = null) => {
       checkStopped();
+      const queryKey = JSON.stringify({ api: ep.api, expectedTotal,
+        applied: Object.fromEntries(Object.entries(appliedFacets).sort(([a], [b]) => a.localeCompare(b))),
+        ...(entry.max_pages == null ? {} : { maxPages }) });
+      const snapshot = querySnapshots?.get(queryKey, sinceMs, verifyNativeCounts);
+      if (snapshot) { verifyNativeCounts ||= snapshot.verifyNativeCounts; reusedQueries.add(snapshot.result); return snapshot.result; }
+      const capturedAt = Date.now();
       pagesSpent++;
       const first = await fetchJsonWithRetry(ctx, ep.api, { ...postOpts, body: makeBody(0, appliedFacets) }, RETRY_POLICY);
       const jobs = parseWorkdayResponse(first, entry);
@@ -1054,7 +1062,13 @@ export default {
 
       // A later page can finish the date window after page 0 detected a
       // clamp. No facet split is needed once this query covered that window.
-      return { jobs, total, facets, expectedTotal, stopReason, clamped: clamped && stopReason !== STOP_REASON.EARLY_STOP };
+      const result = { jobs, total, facets, expectedTotal, stopReason, clamped: clamped && stopReason !== STOP_REASON.EARLY_STOP };
+      // Only fully fetched queries are reusable. A large board can continue
+      // across normal-budget passes without replaying its completed slices.
+      if (fullCoverage && (total >= WORKDAY_OFFSET_CEILING || Object.keys(appliedFacets).length)) {
+        querySnapshots?.set(queryKey, result, sinceMs, verifyNativeCounts, capturedAt);
+      }
+      return result;
     };
 
     let root;
@@ -1105,6 +1119,7 @@ export default {
     // only a transient one is worth scan-ats-full.mjs's sequential retry pass.
     let splitStructural = splitIncomplete;
     let slicesSpent = 0;
+    let slicesVisited = 0;
     let jobs = root.jobs;
 
     if (root.clamped) {
@@ -1220,6 +1235,7 @@ export default {
             if (slicesSpent >= maxSplitSlices) { splitIncomplete = true; splitStructural = true; break; }
             if (pagesSpent >= pageBudget) { splitIncomplete = true; splitStructural = true; break; }
             slicesSpent++;
+            slicesVisited++;
             await sleep(INTER_PAGE_DELAY_MS, ctx);
             const nextApplied = { ...applied, [nextFacet.facetParameter]: [value.id] };
             // runQuery()'s page-0 fetch is unguarded — fine for the one page-0 of
@@ -1232,6 +1248,7 @@ export default {
             let sliceResult;
             try {
               sliceResult = await runQuery(nextApplied, value.count);
+              if (reusedQueries.has(sliceResult)) slicesSpent--;
             } catch (err) {
               checkStopped();
               const attempts = err.attempts ?? RETRY_POLICY.retries + 1;
@@ -1270,7 +1287,7 @@ export default {
       // can be edited to fix it, and the count that matters is what the split
       // recovered on top of the ceiling.
       const short = splitIncomplete || budgetExhausted ? ' (still incomplete)' : '';
-      console.error(`⚠️  workday: ${entry.name} offset-clamped at ${WORKDAY_OFFSET_CEILING} — recovered ${jobs.length} jobs via ${slicesSpent} facet slices${short}`);
+      console.error(`⚠️  workday: ${entry.name} offset-clamped at ${WORKDAY_OFFSET_CEILING} — recovered ${jobs.length} jobs via ${slicesVisited} facet slices${short}`);
     }
 
     // "30+ Days Ago" has no exact date, but it is certainly outside a
