@@ -81,14 +81,14 @@ test('complementary partitions recover unclassified rows and verify counts befor
     if (!f.division) return { total: 2000, facets: [facet('division', [['large', 2203], ['small', 200]])], jobPostings: all.slice(offset, offset + 20) };
     if (f.division[0] === 'small') return { total: 200, jobPostings: c.slice(offset, offset + 20) };
     if (!f.team && !f.category) return { total: 2000,
-      facets: [facet('team', [['a', 1100], ['b', 1100]]), facet('category', [['x', 1100], ['y', 1100]])],
+      facets: [facet('team', [['a', 1100], ['b', 1100]]), facet('category', [['x', 2197], ['y', 3]])],
       jobPostings: child.slice(offset, offset + 20) };
     let page;
     if (f.team) page = f.team[0] === 'a' ? a : b;
-    else { complementaryRequests++; page = f.category[0] === 'x' ? alternate.slice(0, 1100) : alternate.slice(1100); }
+    else { complementaryRequests++; page = f.category[0] === 'x' ? alternate.slice(0, 2197) : alternate.slice(2197); }
     return { total: page.length, jobPostings: page.slice(offset, offset + 20) };
   }), sinceMs: Date.now() - 14 * 86400000 });
-  assert.ok(complementaryRequests > 0);
+  assert.equal(complementaryRequests, 1, 'the small complementary bucket resolves the gap without re-reading 2197 already-covered rows');
   assert.equal(jobs.length, 2303, 'native union covers all 2403 rows before the 100 provably stale rows are excluded');
   assert.equal(jobs.filter(job => job.url.includes('/missing_')).length, 3);
   assert.equal(jobs.workdayTruncated, undefined);
