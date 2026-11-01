@@ -5,7 +5,8 @@ import { load as loadYaml } from 'js-yaml';
 const VERDICTS = new Set(['apply', 'maybe', 'skip']);
 const SUMMARY = /^##[ \t]+Machine Summary[ \t]*\r?\n+```(?:yaml|yml)?[ \t]*\r?\n([\s\S]*?)\r?\n```[ \t]*$/gim;
 const JEV_HEADER = /^\*\*Jev:\*\*[ \t]*(.*)$/gim;
-const blank = text => text.replace(/[^\n]/g, ' ');
+// Preserve offsets for header edits without allocating a replacement per character.
+const blank = text => text.replace(/[^\n]+/g, run => ' '.repeat(run.length));
 
 function withoutArchivedJd(markdown) {
   return String(markdown ?? '').replace(/\r\n/g, '\n')
