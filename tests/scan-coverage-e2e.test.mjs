@@ -63,12 +63,13 @@ test('uncapped coverage retries failures, resumes only pending boards and keeps 
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
-test('Workday sequential recovery avoids detail requests for unrelated titles', () => {
+test('Workday recovery and history scans avoid detail requests for unrelated titles', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'scan-workday-retry-'));
   try {
     fs.mkdirSync(path.join(root, 'data/cache/ats-companies'), { recursive: true });
     fs.writeFileSync(path.join(root, 'data/cache/ats-companies/workday.json'), JSON.stringify(['acme|wd5|careers']));
     fs.writeFileSync(path.join(root, 'portals.yml'), 'title_filter:\n  positive: [Engineer]\n');
+    fs.writeFileSync(path.join(root, 'data/scan-history.tsv'), 'url\tfirst_seen\tportal\ttitle\tcompany\tstatus\tlocation\nhttps://acme.wd5.myworkdayjobs.com/careers/job/Remote/Old_R999\t2026-09-01\tworkday\tArchivist\tAcme\tadded\tRemote\n');
     const scanner = path.join(codeRoot, 'scan-ats-full.mjs');
     const log = path.join(root, 'details.json');
     const launcher = path.join(root, 'launch.mjs');
@@ -92,12 +93,12 @@ test('Workday sequential recovery avoids detail requests for unrelated titles', 
       process.argv[1] = ${JSON.stringify(scanner)};
       await import(${JSON.stringify(pathToFileURL(scanner).href)});
     `);
-    const result = spawnSync(process.execPath, [launcher, '--ats', 'workday', '--since', '14', '--coverage-state', 'data/cache/coverage.json', '--include-undated', '--json'], {
+    const result = spawnSync(process.execPath, [launcher, '--ats', 'workday', '--since', '14', '--coverage-state', 'data/cache/coverage.json', '--include-undated', '--history-seeds', '--json'], {
       encoding: 'utf8', timeout: 15_000,
       env: { ...process.env, CAREER_OPS_ROOT: root, CAREER_OPS_DATA_DIR: '', CAREER_OPS_PORTALS: '', CAREER_OPS_PIPELINE: '', CAREER_OPS_SCAN_HISTORY: '', CAREER_OPS_TRACKER: '', CAREER_OPS_NO_AUTO_JEV: '1' },
     });
     assert.equal(result.status, 0, result.stderr);
-    assert.deepEqual(JSON.parse(fs.readFileSync(log)), ['Engineer', 'Engineer'], 'both attempts should enrich only wanted titles');
+    assert.deepEqual(JSON.parse(fs.readFileSync(log)), ['Engineer', 'Engineer', 'Engineer'], 'initial, retry and history scans should enrich only wanted titles');
     const receipt = JSON.parse(result.stdout);
     assert.equal(receipt.coverage.remaining, 0);
     assert.equal(receipt.postingsKept, 1, 'retry retains the match without duplicating it');

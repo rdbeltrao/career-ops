@@ -1001,7 +1001,10 @@ export async function runHistorySeedScan(seeds, providers, opts, ctx, processJob
       }
       const operation = { active: true };
       const operationPromise = (async () => {
-        const jobs = await provider.fetch(entry, ctx);
+        const boardCtx = typeof opts.titleFilter === 'function'
+          ? { ...ctx, titleWanted: title => opts.titleFilter(title, entry.name) }
+          : ctx;
+        const jobs = await provider.fetch(entry, boardCtx);
         if (!operation.active) return;
         await processJobs(jobs, `${seed.vendor}-history`, provider, entry.name, () => operation.active);
       })();
