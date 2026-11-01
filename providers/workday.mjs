@@ -12,6 +12,7 @@
 // and omitted for the unbounded "30+ Days Ago" form.
 
 import { BROWSER_LIKE_USER_AGENT, fetchJsonWithRetry, sleep } from './_http.mjs';
+import { currentAbortSignal } from './_connection-scope.mjs';
 
 // Why one paginated pass (the unfaceted root crawl, or one facet-split slice)
 // stopped. COMPLETE covers both "ran out of pages" and "hit the offset
@@ -857,6 +858,15 @@ export default {
    * @returns {Promise<Array<{title: string, url: string, company: string, location: string, postedAt?: number}>>}
    */
   async fetch(entry, ctx) {
+    const checkStopped = () => {
+      ctx.signal?.throwIfAborted();
+      currentAbortSignal()?.throwIfAborted();
+    };
+    checkStopped();
+    const transport = ctx;
+    ctx = Object.create(transport);
+    ctx.fetchJson = (url, opts) => { checkStopped(); return transport.fetchJson(url, opts); };
+    ctx.sleep = async ms => { checkStopped(); await sleep(ms, transport); checkStopped(); };
     let ep = resolveEndpoint(entry);
     if (!ep) throw new Error(`workday: cannot derive CXS endpoint for ${entry.name}`);
     ep = canonicalEndpoints.get(ep.jobBase) || ep;
@@ -922,6 +932,7 @@ export default {
      */
     let verifyNativeCounts = false;
     const runQuery = async (appliedFacets, expectedTotal = null) => {
+      checkStopped();
       pagesSpent++;
       const first = await fetchJsonWithRetry(ctx, ep.api, { ...postOpts, body: makeBody(0, appliedFacets) }, RETRY_POLICY);
       const jobs = parseWorkdayResponse(first, entry);
@@ -980,6 +991,7 @@ export default {
       let page = 1;
       if (stopReason === STOP_REASON.COMPLETE && !splitChild) {
         for (; page < pagesToFetch; page++) {
+          checkStopped();
           if (pagesSpent >= pageBudget) { budgetExhausted = true; break; }
           if (canBatchPages && page + 1 < pagesToFetch && pagesSpent + 2 <= pageBudget) {
             // These queries must enumerate rows instead of stopping by date.
@@ -992,6 +1004,7 @@ export default {
               return fetchJsonWithRetry(ctx, ep.api,
                 { ...postOpts, body: makeBody((page + index) * PAGE_SIZE, appliedFacets) }, RETRY_POLICY);
             }));
+            checkStopped();
             let failed = false, shortPage = false;
             let lastPage = [];
             for (let index = 0; index < batch.length; index++) {
@@ -1202,6 +1215,7 @@ export default {
           const values = fullCoverage && tried.size > 1
             ? [...nextFacet.values].sort((a, b) => a.count - b.count) : nextFacet.values;
           for (const value of values) {
+            checkStopped();
             if (fullCoverage && scopeSeen.size >= trueTotal) break;
             if (slicesSpent >= maxSplitSlices) { splitIncomplete = true; splitStructural = true; break; }
             if (pagesSpent >= pageBudget) { splitIncomplete = true; splitStructural = true; break; }
@@ -1219,6 +1233,7 @@ export default {
             try {
               sliceResult = await runQuery(nextApplied, value.count);
             } catch (err) {
+              checkStopped();
               const attempts = err.attempts ?? RETRY_POLICY.retries + 1;
               console.error(`⚠️  workday: ${entry.name} slice ${nextFacet.facetParameter}=${value.id} failed on its first page after ${attempts} attempts: ${err.message}`);
               splitIncomplete = true;
@@ -1321,6 +1336,7 @@ export default {
       const meteredCtx = Object.create(ctx);
       meteredCtx.fetchJson = (url, opts) => { requests++; return ctx.fetchJson(url, opts); };
       for (const job of pending) {
+        checkStopped();
         if (requests >= MAX_DETAIL_REQUESTS) break;
         const externalPath = job.url.slice(ep.jobBase.length);
         attempted++;

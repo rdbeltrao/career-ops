@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import workday from '../../providers/workday.mjs';
+import { withAbortScope } from '../../providers/_connection-scope.mjs';
 
 const entry = { name: 'Acme', careers_url: 'https://acme.wd5.myworkdayjobs.com/careers' };
 const rows = (tag, count, dated = true) => Array.from({ length: count }, (_, i) => ({
@@ -135,3 +136,21 @@ test('undated pagination retains the other successful page when a parallel neigh
   assert.equal(jobs.length, 40);
   assert.equal(jobs.workdayTruncated, 'transient');
 });
+
+for (const scoped of [false, true]) {
+  test(`cancellation stops remaining facet attempts through the ${scoped ? 'board scope' : 'caller signal'}`, async () => {
+    const controller = new AbortController(), stopped = new Error('board stopped');
+    const all = rows('abort', 2001);
+    let requests = 0;
+    const ctx = context(async (_url, opts) => {
+      requests++;
+      const { appliedFacets, offset } = JSON.parse(opts.body);
+      if (Object.keys(appliedFacets).length) { controller.abort(stopped); throw stopped; }
+      return { total: 2000, facets: [facet('division', [['a', 2000], ['b', 1]])], jobPostings: all.slice(offset, offset + 20) };
+    });
+    if (!scoped) ctx.signal = controller.signal;
+    const run = () => workday.fetch(entry, ctx);
+    await assert.rejects(scoped ? withAbortScope(controller.signal, run) : run(), error => error === stopped);
+    assert.equal(requests, 101, 'the first interrupted slice must prevent every later attempt');
+  });
+}
