@@ -178,7 +178,9 @@ export type ApplicationJev = { fit: number | null; score: number | null; verdict
 
 /** Read all report evidence: Machine Summary and legacy Jev fields can follow a long JD. */
 function reportMarkdown(app: Application): string | null {
-  const file = findReportFile(app.n);
+  // The caller already read the tracker. Resolving through findReportFile()
+  // here reparsed the entire tracker once per row in the pipeline.
+  const file = reportFileFromLink(app.n, app.report);
   if (!file) return null;
   try {
     return fs.readFileSync(/* turbopackIgnore: true */ file, "utf8");
@@ -476,9 +478,17 @@ export type ReportData = { content: string; file: string };
 export function findReportFile(n: string): string | null {
   if (!/^\d+$/.test(n)) return null;
   const target = Number(n);
-  const root = careerOpsRoot();
   const app = readApplications().find((a) => parseInt(a.n, 10) === target);
-  const linked = firstMarkdownLinkTarget(app?.report);
+  return reportFileFromLink(n, app?.report);
+}
+
+/** Resolve an already-read row without rereading the tracker. Shared with the
+ * single-report lookup so fallback, reserved-file and containment rules agree. */
+function reportFileFromLink(n: string, report: string | undefined): string | null {
+  if (!/^\d+$/.test(n)) return null;
+  const target = Number(n);
+  const root = careerOpsRoot();
+  const linked = firstMarkdownLinkTarget(report);
   if (linked) {
     const p = path.resolve(root, "data", linked);
     // Containment: a hand-edited link must not resolve outside the project.

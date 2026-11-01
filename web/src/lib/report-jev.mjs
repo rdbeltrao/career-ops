@@ -4,9 +4,11 @@
  */
 
 import { parseJevField, readReportJev } from "./core/evaluation-report.mjs";
+import { createReportJevReader } from "./report-jev-cache.mjs";
 export { parseJevField };
 
 const VERDICTS = new Set(["apply", "maybe", "skip"]);
+const readSavedReportJev = createReportJevReader();
 
 /** Compatibility name; callers now pass the complete report. */
 export function readJevHead(markdown) {
@@ -34,7 +36,7 @@ export function attachJev(applications, inbox, readHead, key = (u) => u) {
   }
   return applications.map((app) => {
     const head = app.report && app.report !== "-" ? readHead(app) : null;
-    const { url, jev, status, reasons } = readReportJev(head);
+    const { url, jev, status, reasons } = readSavedReportJev(head);
     const trackerUrl = firstHttpUrl(app.url);
     // A linked report for another posting must never lend it a rating.
     const mismatched = Boolean(url && trackerUrl && key(url) !== key(trackerUrl));
