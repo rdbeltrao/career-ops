@@ -30,6 +30,7 @@ export type ScheduledJob = {
   updatedAt: string;
   lastRunAt?: string;
   lastError?: string;
+  lastRunState?: JobRun["state"];
   rolesFoundCount?: number;
   /** LinkedIn engine only: which searches run (empty = every search that is on) and whether each keeps its own date window. */
   linkedin?: LinkedInSchedule;

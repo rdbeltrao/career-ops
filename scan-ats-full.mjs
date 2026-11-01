@@ -57,6 +57,7 @@ import { renameSyncWithRetry } from './tracker-utils.mjs';
 
 import { makeHttpCtx, fetchJson, fetchTextHead, fetchJsonWithRetry } from './providers/_http.mjs';
 import { openScanCoverage } from './lib/scan-coverage.mjs';
+import { createScanDeadline, withScanSignal } from './lib/scan-deadline.mjs';
 import { withConnectionScope, withAbortScope } from './providers/_connection-scope.mjs';
 import { isResolverFailure, dnsPacingStats } from './providers/_dns-cache.mjs';
 import greenhouse from './providers/greenhouse.mjs';
@@ -970,6 +971,7 @@ export async function runHistorySeedScan(seeds, providers, opts, ctx, processJob
   }
   let errors = 0;
   let missing = 0;
+  let attempted = 0;
   const timeoutMs = opts.companyTimeoutMs ?? COMPANY_TIMEOUT_MS;
   const withHostSlot = createKeyedLimiter(SINGLE_HOST_CONCURRENCY);
   // An arbitrary provider may ignore cancellation or never settle. Once one
@@ -984,11 +986,14 @@ export async function runHistorySeedScan(seeds, providers, opts, ctx, processJob
       try { return new URL(entry.careers_url).hostname.toLowerCase(); } catch { return seed.vendor; }
     })();
     await withHostSlot(hostKey, () => {
+      if (ctx.signal?.aborted) return;
       // Give the history board its own abort signal so a timed-out board's
       // in-flight requests stop (#5570). The operation.active flag below only
       // gates work BETWEEN fetches; it can't stop the fetch already in flight.
       const controller = new AbortController();
+      const signal = ctx.signal ? AbortSignal.any([controller.signal, ctx.signal]) : controller.signal;
       return withConnectionScope(async () => {
+      attempted++;
       if (quarantinedHosts.has(hostKey)) {
         errors++;
         if (opts.verbose) console.error(`  ✗ ${seed.vendor}-history/${entry.name}: host skipped after an earlier timeout`);
@@ -1002,13 +1007,14 @@ export async function runHistorySeedScan(seeds, providers, opts, ctx, processJob
       })();
       let timedOut = false;
       try {
-        await withTimeout(operationPromise, timeoutMs, `${seed.vendor}-history/${entry.name}`, () => {
+        await withTimeout(withScanSignal(signal, () => operationPromise), timeoutMs, `${seed.vendor}-history/${entry.name}`, () => {
           timedOut = true;
           operation.active = false;
           controller.abort();
         });
       } catch (err) {
         operation.active = false;
+        if (ctx.signal?.aborted) return;
         if (timedOut) quarantinedHosts.add(hostKey);
         if ([404, 410].includes(err.status) && err.firstPage !== false) missing++;
         else errors++;
@@ -1019,12 +1025,12 @@ export async function runHistorySeedScan(seeds, providers, opts, ctx, processJob
         // quarantining prevents queued work from replacing it.
         operationPromise.catch(() => {});
       }
-      }, { signal: controller.signal });
+      }, { signal });
     });
-  });
+  }, null, () => ctx.signal?.aborted);
 
   return {
-    total: scannable.length,
+    total: attempted,
     derived: selected.length,
     unsupported: capped.length - scannable.length,
     errors,
@@ -1052,16 +1058,17 @@ const COMPANY_TIMEOUT_MS = 5 * 60_000;
 // of paginating on in the background until it finishes on its own — which kept
 // the process alive minutes past its own summary and burned a 4-attempt retry
 // on every abandoned request.
-export function boardScope(source, label, timeoutMs, fn) {
+export function boardScope(source, label, timeoutMs, fn, parentSignal) {
   const controller = new AbortController();
+  const signal = parentSignal ? AbortSignal.any([controller.signal, parentSignal]) : controller.signal;
   // The signal is handed to `fn` as well as carried in the scope, so a caller
   // can tell a timed-out board from a failed one and skip any post-timeout
   // fallback work (e.g. processing a deferred board's partial page outside the
   // scope, where it would run uncancelled, #5570).
-  const run = () => withTimeout(fn(controller.signal), timeoutMs, label, () => controller.abort());
+  const run = () => withTimeout(withScanSignal(signal, () => fn(signal)), timeoutMs, label, () => controller.abort());
   return source.singleHost
-    ? withAbortScope(controller.signal, run)
-    : withConnectionScope(run, { signal: controller.signal });
+    ? withAbortScope(signal, run)
+    : withConnectionScope(run, { signal });
 }
 
 export function createKeyedLimiter(limit) {
@@ -1379,6 +1386,8 @@ async function main() {
   let domainGatedBoards = cc.domainGatedBoards || 0;
   let domainGatedPostings = cc.domainGatedPostings || 0;
   const datasetStatus = {};
+  const scanDeadline = createScanDeadline(process.env.CAREER_OPS_SCAN_DEADLINE_MS);
+  ctx.signal = scanDeadline.signal;
 
   // Graceful stop for the web layer: it SIGTERMs us when its scan budget elapses
   // (see web/src/lib/core/scan-timeout.mjs). A full sweep only prints its result
@@ -1497,7 +1506,7 @@ async function main() {
   // counters so both passes update the same run totals.
   const processJobs = async (jobs, sourceName, provider, companySlug, shouldContinue = () => true) => {
     for (const job of jobs) {
-      if (stopping || !shouldContinue()) return;
+      if (stopping || scanDeadline.expired() || !shouldContinue()) return;
       if (!job.url || !job.title) continue;
       // Confirmed-stale postings are always dropped. Undated postings are
       // dropped by default (a reverse scan targets *fresh* roles) but
@@ -1519,7 +1528,7 @@ async function main() {
       if (dateClass === 'undated' && provider.enrichDate
           && titleFilter(job.title, companySlug) && locationFilter(job.location, job.url, job.title)) {
         try { await provider.enrichDate(job, ctx); } catch { /* stays undated */ }
-        if (stopping || !shouldContinue()) return;
+        if (stopping || scanDeadline.expired() || !shouldContinue()) return;
         dateClass = classifyPostingDate(job, cutoff);
       }
       if (dateClass === 'stale') continue;
@@ -1540,6 +1549,7 @@ async function main() {
   // Run-level, because resolverOutage below is per-source and long out of
   // scope by the time the checkpoint's fate is decided at the end of main().
   let stoppedByOutage = false;
+  let stoppedEarly = false;
 
   const sourceNames = opts.ats.filter(ats => SOURCES[ats]);
   if (coverage) sourceNames.sort((a, b) => coverage.fraction(a) - coverage.fraction(b));
@@ -1676,9 +1686,10 @@ async function main() {
           }
           if (jobs.workdayNoDateSkip) { noDateSkipCompanies++; noDateSkipJobs += jobs.length; }
           await processJobs(jobs, name, source.provider, entry.name);
-        });
-        if (!stopping && fullyScanned && !deferred.has(entry)) coverage?.done(name, deadBoard);
+        }, scanDeadline.signal);
+        if (!stopping && !scanDeadline.expired() && fullyScanned && !deferred.has(entry)) coverage?.done(name, deadBoard);
       } catch (err) {
+        if (scanDeadline.expired()) return;
         // Mostly defunct boards in the public dataset — expected noise, so the
         // default stays quiet; --verbose surfaces per-board failures.
         if ([404, 410].includes(err.status) && err.firstPage !== false) {
@@ -1727,7 +1738,7 @@ async function main() {
           },
         });
       }
-    }, () => resolverOutage);
+    }, () => resolverOutage || scanDeadline.expired());
     // parallelEach reports a completed callback even when a retired board was
     // skipped, so remove those entries from the live scan total after the
     // source pass. The retired count remains visible separately.
@@ -1739,9 +1750,10 @@ async function main() {
     // more of exactly the traffic the breaker just stopped. A board deferred by
     // the gate is then neither processed nor counted here; the checkpoint
     // carries its index, and the resumed run retries it.
-    if (truncated.length && !resolverOutage) {
+    if (truncated.length && !resolverOutage && !scanDeadline.expired()) {
       log(`\n  ↻ retrying ${truncated.length} truncated board(s) sequentially...`);
       for (const entry of truncated) {
+        if (scanDeadline.expired()) break;
         let retrySignal;
         try {
           await boardScope(source, `${name}/${entry.name} (retry)`, COMPANY_TIMEOUT_MS, async (signal) => {
@@ -1770,8 +1782,9 @@ async function main() {
                 console.error(`  ✗ ${name}/${entry.name}: ${why} after sequential retry`);
               }
             } else if (!stopping) coverage?.done(name, boardKey(entry));
-          });
+          }, scanDeadline.signal);
         } catch (err) {
+          if (scanDeadline.expired()) break;
           errors++;
           recordBoardFailure(deadBoards, name, boardKey(entry), err);
           if (opts.verbose) console.error(`  ✗ ${name}/${entry.name} (retry): ${err.message}`);
@@ -1790,10 +1803,11 @@ async function main() {
     totalErrors += errors;
     totalRetiredBoardsSkipped += deadBoardsSkipped;
     if (!opts.dryRun) saveDeadBoardsBestEffort(deadBoards);
-    if (resolverOutage) {
+    if (resolverOutage || scanDeadline.expired()) {
       // Deliberately before completedSources/checkpoint: this source did NOT
       // finish, and marking it done would make --resume skip the rest of it.
-      stoppedByOutage = true;
+      stoppedByOutage = resolverOutage;
+      stoppedEarly = scanDeadline.expired();
       // The counter was bumped by the FULL entries.length up front, but the
       // breaker left entries.length - lastDone boards unattempted. Correct the
       // live counter, not just the checkpoint payload: this run's own summary
@@ -1815,10 +1829,12 @@ async function main() {
           counters: snapshotCounters(),
         });
       }
-      log(`\n  ⛔ stopped ${name}/${resolverOutageCompany}: ${RESOLVER_FAILURE_LIMIT} consecutive DNS failures.`);
-      log(`     Your resolver is refusing queries — it may be rate-limiting this host.`);
-      log(`     Lower CONCURRENCY, raise the resolver's per-client limit, or set`);
-      log(`     CAREER_OPS_NO_DNS_CACHE=1 only if you know the cache is at fault.`);
+      if (resolverOutage) {
+        log(`\n  ⛔ stopped ${name}/${resolverOutageCompany}: ${RESOLVER_FAILURE_LIMIT} consecutive DNS failures.`);
+        log(`     Your resolver is refusing queries — it may be rate-limiting this host.`);
+        log(`     Lower CONCURRENCY, raise the resolver's per-client limit, or set`);
+        log(`     CAREER_OPS_NO_DNS_CACHE=1 only if you know the cache is at fault.`);
+      } else log('\nScan time budget reached; saving completed work for the next run.');
       // Only claim resumability when a checkpoint actually exists: --dry-run
       // writes none, and a failed write (ENOSPC, read-only volume) leaves at
       // best the last periodic checkpoint — nothing at the offset named here.
@@ -1836,18 +1852,20 @@ async function main() {
   }
 
   // ── User tracker + scan-history ATS seeds (#3697) ───────────────
-  if (historySeeds.length && !stoppedByOutage) {
+  if (historySeeds.length && !stoppedByOutage && !stoppedEarly) {
     const providers = await loadProviders(PROVIDERS_DIR);
     log(`\n🌱 Application history — ${historySeeds.length} unique ATS board(s) derived locally...`);
     const result = await runHistorySeedScan(historySeeds, providers, opts, ctx, processJobs);
     totalCompaniesScanned += result.total;
     totalErrors += result.errors;
     missingBoards += result.missing;
+    if (scanDeadline.expired()) stoppedEarly = true;
     log(`  done — ${result.total} board(s) probed, ${result.unsupported} without a scanner provider (${result.errors} errors)`);
   }
 
   // ── VC portfolio seed sources (--seeds flag) ───────────────────────
   for (const seedId of opts.seeds) {
+    if (scanDeadline.expired()) { stoppedEarly = true; break; }
     const seedSource = SEED_SOURCES[seedId];
     log(`\n🌱 ${seedSource.label} (${seedId}-seed) — fetching portfolio...`);
     const result = await runSeedScan(seedId, opts, ctx, seenUrls, seedSource.label);
@@ -1948,7 +1966,7 @@ async function main() {
   // Sweep completed — the checkpoint's job is done. A run the breaker stopped
   // did NOT complete: deleting here would destroy the resume point the outage
   // branch just wrote, which is the one case --resume exists for (#2283).
-  if (!opts.dryRun && !coverage && !stoppedByOutage && existsSync(CHECKPOINT_PATH)) unlinkSync(CHECKPOINT_PATH);
+  if (!opts.dryRun && !coverage && !stoppedByOutage && !stoppedEarly && existsSync(CHECKPOINT_PATH)) unlinkSync(CHECKPOINT_PATH);
 
   // The authoritative machine-readable result: lets a caller (e.g. the web)
   // tell a *degraded* scan (capped / stale dataset / undated dropped) apart
@@ -1967,6 +1985,7 @@ async function main() {
       // it a caller can't tell a stopped run from a complete one except by
       // stat'ing the checkpoint file itself.
       stoppedByOutage,
+      ...(stoppedEarly ? { stoppedEarly: true } : {}),
       datasetStatus,
       postingsKept: offers.length,
       postingsDroppedNoDate: droppedNoDate,
@@ -2001,6 +2020,7 @@ async function main() {
         source: o.source,
       })),
     }) + '\n');
+    scanDeadline.close();
     return;
   }
 

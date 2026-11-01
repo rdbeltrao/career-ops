@@ -37,6 +37,8 @@ export function scheduledScanResult(engine, stdout) {
     if (receipt.postingsDroppedNoDate > 0) warnings.push(`${receipt.postingsDroppedNoDate} posting${receipt.postingsDroppedNoDate === 1 ? "" : "s"} excluded because no posting date was available.`);
     if (receipt.postingsKeptUndated > 0) warnings.push(`${receipt.postingsKeptUndated} matching role${receipt.postingsKeptUndated === 1 ? "" : "s"} kept with unknown posting dates; freshness could not be verified.`);
   } else {
+    if (receipt.stoppedEarly) warnings.push("Scan time budget reached; collected jobs were saved and remaining searches will be revisited on the next run.");
+    if (receipt.incomplete_sources?.length) details.push(`${receipt.incomplete_sources.length} sources remain for the next run.`);
     if (Number.isSafeInteger(receipt.scanned)) {
       details.push(`Searched ${receipt.scanned} sources; ${receipt.found ?? 0} jobs read, ${receipt.filtered ?? 0} filtered out, ${receipt.duplicates ?? 0} already known.`);
       if (receipt.scanned === 0) failed = true;

@@ -178,9 +178,9 @@ export function JobCard({
         {/* Last Run & Status Message */}
         <div className="text-[12px]">
           {job.lastError ? (
-            <p className="flex items-start gap-1.5 text-rose-500">
+            <p className={cn("flex items-start gap-1.5", job.lastRunState === "partial" ? "text-amber-600 dark:text-amber-400" : "text-rose-500")}>
               <AlertCircle className="mt-0.5 size-3 shrink-0" />
-              <span className="truncate">Last error: {job.lastError}</span>
+              <span className="break-words">{job.lastRunState === "partial" ? "Last run: " : "Last error: "}{job.lastError}</span>
             </p>
           ) : job.lastRunAt ? (
             <p className="flex items-center gap-1.5 text-emerald-600 dark:text-emerald-400">

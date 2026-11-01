@@ -178,7 +178,7 @@ export function LinkedInView({ initial }: { initial: LinkedInState }) {
           {crawl ? (
             <p className={cn("mt-1", crawl.result === "ok" ? "text-muted" : "text-amber-700 dark:text-amber-400")}>
               {when(crawl.at)} · {crawl.search || "a LinkedIn search"} ·{" "}
-              {crawl.result === "ok" ? `${crawl.jobs ?? 0} new posting${crawl.jobs === 1 ? "" : "s"}` : crawl.result === "login-required" ? "LinkedIn asked for a login" : "failed"}
+              {crawl.result === "ok" ? `${crawl.jobs ?? 0} new posting${crawl.jobs === 1 ? "" : "s"}` : crawl.result === "partial" ? `${crawl.jobs ?? 0} postings read; time budget reached` : crawl.result === "login-required" ? "LinkedIn asked for a login" : "failed"}
               {crawl.result !== "ok" && crawl.message ? <span className="block text-xs text-faint">{crawl.message}</span> : null}
             </p>
           ) : (

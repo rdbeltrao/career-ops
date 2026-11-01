@@ -77,6 +77,7 @@ import { localToday } from './lib/local-today.mjs';
 import { startJevPass } from './lib/jev-auto.mjs';
 import { printScanSummaryHeader } from './lib/scan-summary-marker.mjs';
 import { isMainModule } from './lib/is-main-module.mjs';
+import { createScanDeadline } from './lib/scan-deadline.mjs';
 import { SCAN_HISTORY_COLUMNS, parseScanHistoryLine } from './lib/scan-history-columns.mjs';
 import { escapeFormulaCell } from './lib/tsv-formula-escape.mjs';
 import { sectionKind } from './lib/pipeline-sections.mjs';
@@ -4503,6 +4504,7 @@ async function main() {
   const newOffers = [];
   const verifyDedupKeys = new Map();
   const errors = [...resolveErrors];
+  const incompleteSources = [];
   const emptyTargets = [];
   const unverifiedZeroTargets = [];
 
@@ -4532,6 +4534,9 @@ async function main() {
     });
   }
 
+  const scanDeadline = createScanDeadline(process.env.CAREER_OPS_SCAN_DEADLINE_MS);
+  const stopForSignal = () => scanDeadline.stop();
+  if (jsonMode) process.once('SIGTERM', stopForSignal);
   const tasks = targets.map(company => async () => {
     let provider = company._provider;
     const observation = { requests: 0, successfulResponses: 0, lastStatus: null };
@@ -4563,7 +4568,8 @@ async function main() {
       // browser's seen-id store) must not consume postings a dry run never
       // writes to the pipeline.
       dryRun,
-      deadlineMs: Number(process.env.CAREER_OPS_SCAN_DEADLINE_MS) > 0 ? Number(process.env.CAREER_OPS_SCAN_DEADLINE_MS) : Infinity,
+      deadlineMs: scanDeadline.deadlineMs,
+      signal: scanDeadline.signal,
       locationHints: config.location_filter,
       // A provider that serves extra language versions of a posting at extra
       // cost fetches them only when the scan will keep them.
@@ -4600,10 +4606,11 @@ async function main() {
         throw new Error(`${provider.id}: fetch() did not return an array`);
       }
       if (jobs.incompleteReason) {
-        errors.push({ company: company.name, error: String(jobs.incompleteReason) });
+        if (jobs.incompleteKind === 'budget') incompleteSources.push({ company: company.name, reason: 'time-budget' });
+        else errors.push({ company: company.name, error: String(jobs.incompleteReason) });
       }
       totalFound += jobs.length;
-      if (!company._isBoard && jobs.length === 0) {
+      if (!company._isBoard && jobs.length === 0 && !jobs.incompleteReason) {
         if (emptyTargetStatus(observation) === 'empty') emptyTargets.push(company.name);
         else unverifiedZeroTargets.push(company.name);
       }
@@ -5259,8 +5266,12 @@ async function main() {
       errors: errors.map(({ company, error }) => ({ company, error })),
       unverified_zero: unverifiedZeroTargets,
       dry_run: dryRun,
-    }, errors.length > 0 ? 2 : 0);
+      ...(scanDeadline.expired() ? { stoppedEarly: true } : {}),
+      ...(incompleteSources.length ? { incomplete_sources: incompleteSources } : {}),
+    }, errors.length > 0 || incompleteSources.length > 0 ? 2 : 0);
   }
+  scanDeadline.close();
+  process.removeListener('SIGTERM', stopForSignal);
 
   // One-time-ever manifesto note: first successful REAL run only. The state
   // file keeps it from ever repeating; --dry-run must leave no trace, and a

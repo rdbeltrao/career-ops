@@ -14,6 +14,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import provider, {
   CARD_SELECTORS,
+  scrollResults,
   DEFAULT_MAX_PAGES,
   LoginRequiredError,
   SEEN_FILE,
@@ -70,6 +71,38 @@ function searchPage(html) {
     locator: () => locator,
   };
 }
+
+test('stable placeholder count does not stop scrolling before lazy card titles render', async () => {
+  let round = 0;
+  const html = () => Array.from({ length: 25 }, (_, i) => `<li data-occludable-job-id="${1000 + i}">${i >= round * 7 && i < (round + 1) * 7
+    ? `<a href="/jobs/view/${1000 + i}/"><strong>Engineer ${i}</strong></a><div class="artdeco-entity-lockup__subtitle">Company ${i}</div>` : ''}</li>`).join('');
+  const page = searchPage('');
+  page.locator = () => ({ first() { return this; }, count: async () => 1, innerHTML: async () => html() });
+  page.evaluate = async () => ++round * 600;
+  const cards = await scrollResults(page);
+  assert.equal(cards.length, 25);
+  assert.equal(cards.filter(card => card.title && card.company).length, 25);
+  assert.ok(round >= 3, 'constant card count cannot end lazy loading after two scrolls');
+});
+
+test('deadline cancels a hanging detail request and retains earlier captured jobs', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'linkedin-abort-'));
+  const controller = new AbortController();
+  let opened = 0;
+  try {
+    const jobs = await walkSearch(searchPage(fixture('list.html')), {
+      entry: { name: 'search', resolve_apply_url: false }, searchUrl: 'https://www.linkedin.com/jobs/search/', maxPages: 1,
+      seenPath: seenStorePath(root), dryRun: true, applyRoot: root, pause: async () => {}, signal: controller.signal,
+      readDetail: async (_page, id) => {
+        if (++opened === 1) return detailForCard(id);
+        setTimeout(() => controller.abort(new Error('budget expired')), 20);
+        return new Promise(() => {});
+      },
+    });
+    assert.equal(jobs.length, 1);
+    assert.match(jobs.incompleteReason, /time budget reached/);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
 
 test('search deadline keeps collected jobs and stops before another posting', async () => {
   const root = mkdtempSync(join(tmpdir(), 'linkedin-deadline-'));

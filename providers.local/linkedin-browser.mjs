@@ -53,6 +53,7 @@ import { decodeEntities } from '../providers/_html-entities.mjs';
 import { getCareerOpsRoot } from '../path-resolver.mjs';
 import { applyKindFromHtml, offsiteApplyUrlFromHtml, recordApply } from '../lib/linkedin-apply.mjs';
 import { profileDir as sessionProfileDir, recordCrawlStatus } from '../lib/linkedin-session.mjs';
+import { withScanSignal } from '../lib/scan-deadline.mjs';
 
 export const SOURCE = 'linkedin-browser';
 export const PAGE_SIZE = 25;
@@ -1088,11 +1089,21 @@ async function waitForCards(page, timeoutMs = 15_000) {
 }
 
 /** Scroll the results list container so LinkedIn renders every (lazy) card. */
-async function scrollResults(page, maxRounds = 12) {
+export async function scrollResults(page, maxRounds = 12, signal) {
   const selector = CARD_SELECTORS.join(', ');
-  let last = -1;
+  const collected = new Map();
+  const bound = operation => withScanSignal(signal, operation);
+  let lastPosition = -1;
   for (let round = 0; round < maxRounds; round++) {
-    const count = await page.evaluate((sel) => {
+    const html = await bound(() => firstInnerHtml(page, RESULTS_LIST_SELECTORS));
+    for (const card of parseCards(html)) {
+      const previous = collected.get(card.id) || {};
+      collected.set(card.id, { ...previous, ...Object.fromEntries(Object.entries(card).filter(([, value]) => value !== '')) });
+    }
+    // LinkedIn inserts placeholder nodes before their titles render. A stable
+    // node count does not prove the lazy-loaded cards have been read.
+    if (collected.size >= PAGE_SIZE && [...collected.values()].every(card => card.title && card.company)) break;
+    const position = await bound(() => page.evaluate((sel) => {
       const cards = document.querySelectorAll(sel);
       if (!cards.length) return 0;
       const el = cards[cards.length - 1];
@@ -1102,14 +1113,26 @@ async function scrollResults(page, maxRounds = 12) {
         if (scroller.scrollHeight > scroller.clientHeight + 10 && /(auto|scroll)/.test(s.overflowY)) break;
         scroller = scroller.parentElement;
       }
-      if (scroller && scroller !== document.body) scroller.scrollTop += 600; else window.scrollBy(0, 600);
-      el.scrollIntoView({ block: 'end' });
-      return cards.length;
-    }, selector);
-    await page.waitForTimeout(Math.round(randomBetween(500, 1100)));
-    if (count === last) break;
-    last = count;
+      if (scroller && scroller !== document.body) {
+        scroller.scrollTop += 600;
+        return scroller.scrollTop;
+      }
+      window.scrollBy(0, 600);
+      return window.scrollY;
+    }, selector));
+    await bound(() => page.waitForTimeout(Math.round(randomBetween(500, 1100))));
+    if (position === lastPosition) {
+      // Read the last viewport after its lazy content has rendered.
+      const tail = parseCards(await bound(() => firstInnerHtml(page, RESULTS_LIST_SELECTORS)));
+      for (const card of tail) {
+        const previous = collected.get(card.id) || {};
+        collected.set(card.id, { ...previous, ...Object.fromEntries(Object.entries(card).filter(([, value]) => value !== '')) });
+      }
+      break;
+    }
+    lastPosition = position;
   }
+  return [...collected.values()];
 }
 
 async function firstInnerHtml(page, selectors) {
@@ -1195,7 +1218,7 @@ function dump(name, html) {
  * durable dedup. Legacy seen ids without a payload are visited again: a
  * previous scan may have died before saving them to the pipeline.
  */
-export async function walkSearch(page, { entry, searchUrl, maxPages, seenPath, dryRun, applyRoot = getCareerOpsRoot(), titleWanted, pause = sleepRandom, readDetail = openDetail, deadlineMs = Infinity, now = Date.now }) {
+export async function walkSearch(page, { entry, searchUrl, maxPages, seenPath, dryRun, applyRoot = getCareerOpsRoot(), titleWanted, pause = sleepRandom, readDetail = openDetail, deadlineMs = Infinity, now = Date.now, signal }) {
   const name = String(entry.name ?? '');
   // Posting-page visits that read an offsite employer URL, per search.
   let applyLookupsLeft = resolveApplyLookups(entry);
@@ -1203,32 +1226,36 @@ export async function walkSearch(page, { entry, searchUrl, maxPages, seenPath, d
   const seenThisRun = new Set();
   /** @type {Job[]} */
   const jobs = [];
+  const bound = operation => withScanSignal(signal, operation);
   const budgetReached = () => {
-    if (now() < deadlineMs) return false;
+    if (!signal?.aborted && now() < deadlineMs) return false;
     jobs.incompleteReason = 'Scan time budget reached; remaining LinkedIn results were not searched. Collected jobs were kept.';
+    jobs.incompleteKind = 'budget';
     return true;
   };
   for (let pageNo = 1; pageNo <= maxPages; pageNo++) {
     if (budgetReached()) return jobs;
     const url = pagedUrl(searchUrl, pageNo);
-    if (pageNo > 1) await pause(PAGE_WAIT_MS);
     let listHtml;
+    let cards;
     try {
-      await page.goto(url, { waitUntil: 'domcontentloaded' });
-      await page.waitForTimeout(1000);
-      await assertLoggedIn(page);
-      await waitForCards(page);
-      await scrollResults(page);
-      listHtml = await firstInnerHtml(page, RESULTS_LIST_SELECTORS);
+      if (pageNo > 1) await bound(() => pause(PAGE_WAIT_MS));
+      await bound(() => page.goto(url, { waitUntil: 'domcontentloaded' }));
+      await bound(() => page.waitForTimeout(1000));
+      await bound(() => assertLoggedIn(page));
+      await bound(() => waitForCards(page));
+      cards = await scrollResults(page, 12, signal);
+      listHtml = await bound(() => firstInnerHtml(page, RESULTS_LIST_SELECTORS));
     } catch (err) {
       if (err instanceof LoginRequiredError) throw err;
+      if (budgetReached()) return jobs;
       if (pageNo === 1 || jobs.length === 0) throw err;
       // A later page that fails to load must not discard the jobs already collected.
       log(`${name} page ${pageNo} failed, keeping ${jobs.length} jobs: ${err.message}`);
+      jobs.incompleteReason = `${name}: page ${pageNo} failed; collected jobs were kept.`;
       break;
     }
     dump(`${name}-page${pageNo}-list.html`, listHtml);
-    const cards = parseCards(listHtml);
     const fresh = filterUnseen(cards, seenThisRun);
     for (const c of cards) seenThisRun.add(c.id);
     log(`${name} page ${pageNo}/${maxPages}: ${cards.length} cards, ${fresh.length} unique in this search`);
@@ -1249,11 +1276,16 @@ export async function walkSearch(page, { entry, searchUrl, maxPages, seenPath, d
         jobs.push({ ...cached, note: `${SOURCE} ${name}`.trim() });
         continue;
       }
-      await pause(CARD_WAIT_MS);
       let detail = null;
       let apply = { applyUrl: null, applyKind: '' };
       try {
-        const detailHtml = await readDetail(page, card.id);
+        await bound(() => pause(CARD_WAIT_MS));
+      } catch (err) {
+        if (budgetReached()) return jobs;
+        throw err;
+      }
+      try {
+        const detailHtml = await bound(() => readDetail(page, card.id));
         const candidate = parseDetail(detailHtml);
         validateDetail(card, candidate);
         dump(`${name}-${card.id}-detail.json`, JSON.stringify(candidate));
@@ -1261,21 +1293,26 @@ export async function walkSearch(page, { entry, searchUrl, maxPages, seenPath, d
         apply.applyKind = postingApply(detailHtml).applyKind;
       } catch (err) {
         if (err instanceof LoginRequiredError) throw err;
+        if (budgetReached()) return jobs;
         log(`detail for ${card.id} failed: ${err.message}`);
       }
       // The pane says "on company website" but carries no URL; the posting page
       // does. One more page, paced like the cards, only for offsite postings.
       if (apply.applyKind === 'offsite' && applyLookupsLeft > 0 && now() < deadlineMs) {
         applyLookupsLeft -= 1;
-        await pause(CARD_WAIT_MS);
         try {
-          const read = await readPostingApply(page.context(), card.id);
+          await bound(() => pause(CARD_WAIT_MS));
+          const read = await bound(() => readPostingApply(page.context(), card.id));
           // The pane's kind wins: it describes this posting alone, while the
           // posting page also lists other jobs and their apply buttons.
           apply = { applyUrl: read.applyUrl, applyKind: apply.applyKind || read.applyKind };
           if (!read.applyUrl) log(`no employer apply link found for ${card.id}`);
         } catch (err) {
           if (err instanceof LoginRequiredError) throw err;
+          if (budgetReached()) {
+            jobs.push(buildJob(card, detail, entry, apply));
+            return jobs;
+          }
           log(`apply link for ${card.id} failed: ${err.message}`);
         }
       }
@@ -1318,14 +1355,17 @@ export default {
     if (halted) throw halted;
     return withBrowserLock(async () => {
       if (halted) throw halted;
-      if (Date.now() >= (ctx.deadlineMs ?? Infinity)) {
-        return Object.assign([], { incompleteReason: 'Scan time budget reached; this LinkedIn search was not started.' });
+      if (ctx.signal?.aborted || Date.now() >= (ctx.deadlineMs ?? Infinity)) {
+        return Object.assign([], { incompleteKind: 'budget', incompleteReason: 'Scan time budget reached; this LinkedIn search was not started.' });
       }
       // Launched inside the try: a launch that fails (profile in use, browser
       // missing) is recorded as this search's result like any other failure.
       let context;
+      const abortBrowser = () => { context?.close().catch(() => {}); };
       try {
         context = await openProfile({ headed: process.env.LINKEDIN_HEADED === '1' });
+        ctx.signal?.addEventListener('abort', abortBrowser, { once: true });
+        if (ctx.signal?.aborted) abortBrowser();
         const page = context.pages()[0] ?? await context.newPage();
         const jobs = await walkSearch(page, {
           entry,
@@ -1335,8 +1375,9 @@ export default {
           dryRun: ctx?.dryRun === true,
           titleWanted: ctx?.titleWanted,
           deadlineMs: ctx.deadlineMs,
+          signal: ctx.signal,
         });
-        noteCrawl(ctx, { result: jobs.incompleteReason ? 'error' : 'ok', search: String(entry.name ?? ''), jobs: jobs.length,
+        noteCrawl(ctx, { result: jobs.incompleteKind === 'budget' ? 'partial' : jobs.incompleteReason ? 'error' : 'ok', search: String(entry.name ?? ''), jobs: jobs.length,
           message: jobs.incompleteReason || '' });
         return jobs;
       } catch (err) {
@@ -1347,6 +1388,7 @@ export default {
         });
         throw err;
       } finally {
+        ctx.signal?.removeEventListener('abort', abortBrowser);
         await context?.close().catch(() => {});
       }
     });

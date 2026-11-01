@@ -98,6 +98,43 @@ test("signed-out LinkedIn schedules stop before launching a browser", async () =
   assert.match(result.message, /LinkedIn sign-in required/);
 });
 
+test("zero-match timeout receipts preserve completed work without requiring a nonexistent save", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "scan-zero-timeout-"));
+  try {
+    fs.writeFileSync(path.join(root, "portals.yml"), "title_filter:\n  positive: [engineer]\n");
+    const result = await executeJob(root, { id: "11111111-1111-4111-8111-111111111111", engine: "full" }, {
+      spawnFn: () => ({ error: { code: "ETIMEDOUT" }, status: 0, stdout: JSON.stringify({ saved: false, stoppedEarly: true, postingsKept: 0, companiesScanned: 126,
+        coverage: { companiesTotal: 1000, companiesCompleted: 126, remaining: 874 } }) }),
+    });
+    assert.equal(result.state, "partial");
+    assert.equal(result.rolesFound, 0);
+    assert.equal(result.diagnostics.receiptPresent, true);
+    assert.match(result.message, /126 of 1000 boards checked/);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test("a saved portal receipt survives a process timeout without another scan", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "scan-portal-timeout-"));
+  try {
+    fs.writeFileSync(path.join(root, "portals.yml"), "title_filter:\n  positive: [engineer]\n");
+    let attempts = 0;
+    const result = await executeJob(root, { id: "11111111-1111-4111-8111-111111111111", engine: "portals" }, {
+      spawnFn: () => { attempts++; return { error: { code: "ETIMEDOUT" }, status: 2, stdout: JSON.stringify({ version: "careerops.scan.receipt@1", stoppedEarly: true, dry_run: false, added: 2, found: 10, scanned: 1, errors: [] }) }; },
+    });
+    assert.equal(attempts, 1);
+    assert.equal(result.state, "partial");
+    assert.equal(result.rolesFound, 2);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test("planned incomplete searches do not appear as source errors", () => {
+  const result = scheduledScanResult("linkedin", JSON.stringify({ version: "careerops.scan.receipt@1", stoppedEarly: true, dry_run: false,
+    added: 0, found: 121, scanned: 9, errors: [], incomplete_sources: [{ company: "Fixture", reason: "time-budget" }] }));
+  assert.equal(result.state, "partial");
+  assert.match(result.message, /1 sources remain/);
+  assert.doesNotMatch(result.message, /source errors/);
+});
+
 test("runner does not retry saved partial results or pretend malformed output means zero jobs", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "career-ops-scan-result-"));
   const job = { id: "11111111-1111-4111-8111-111111111111", engine: "portals", filters: {} };

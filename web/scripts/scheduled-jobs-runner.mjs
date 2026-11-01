@@ -17,6 +17,7 @@ import { getCareerOpsRoot } from "../../path-resolver.mjs";
 import { getProfilePath } from "../src/lib/core/profile-path.mjs";
 import { scanFailureMessage } from "../src/lib/scheduled-scan-error.mjs";
 import { scheduledScanResult } from "../src/lib/scheduled-scan-result.mjs";
+import { extractJsonObject } from "../src/lib/extract-json-object.mjs";
 import { runScheduledScanner } from "../src/lib/scheduled-scan-process.mjs";
 import { sessionStatus, readCrawlStatus } from "../../lib/linkedin-session.mjs";
 import { jevAutoLogPath, startJevPass } from "../../lib/jev-auto.mjs";
@@ -27,6 +28,12 @@ const CODE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..
 export const MAX_RUNS = 100;
 export const MAX_ATTEMPTS = 3;
 export const SCAN_TIMEOUT_MS = 25 * 60 * 1_000;
+// A shorter operational budget also exercises the real deadline path without
+// waiting 25 minutes. Invalid/longer overrides retain the normal hard limit.
+export function scheduledTimeoutMs(raw = process.env.CAREER_OPS_SCHEDULED_TIMEOUT_MS) {
+  const value = Number(raw);
+  return Number.isFinite(value) && value >= 1 && value <= SCAN_TIMEOUT_MS ? Math.floor(value) : SCAN_TIMEOUT_MS;
+}
 const MAX_OUTPUT_BYTES = 10 * 1024 * 1024;
 export const QUEUE_CLAIM_STALE_MS = 30 * 1_000;
 
@@ -276,8 +283,10 @@ function childEnv(root) {
 export async function executeJob(root, job, options = {}) {
   const spawnFn = options.spawnFn || runScheduledScanner;
   const startedAt = Date.now();
+  const timeoutMs = scheduledTimeoutMs(options.timeoutMs ?? process.env.CAREER_OPS_SCHEDULED_TIMEOUT_MS);
   let lastError = "Scan failed";
   let finalAttempt = MAX_ATTEMPTS;
+  let lastDiagnostics;
 
   if (job.engine === "linkedin") {
     const session = (options.sessionFn || (() => sessionStatus({ crawl: readCrawlStatus(root) })))();
@@ -300,8 +309,8 @@ export async function executeJob(root, job, options = {}) {
           env: { ...childEnv(root), CAREER_OPS_PORTALS: tempPortals,
             // Browser scans finish their current posting, then let scan.mjs
             // filter and persist results before the outer process deadline.
-            CAREER_OPS_SCAN_DEADLINE_MS: String(Date.now() + SCAN_TIMEOUT_MS - 120_000) },
-          timeout: SCAN_TIMEOUT_MS,
+            CAREER_OPS_SCAN_DEADLINE_MS: String(Date.now() + Math.floor(timeoutMs * 0.8)) },
+          timeout: timeoutMs,
           maxBuffer: MAX_OUTPUT_BYTES,
           windowsHide: true,
         },
@@ -309,14 +318,25 @@ export async function executeJob(root, job, options = {}) {
 
       // SIGTERM can produce a complete, persisted partial receipt. Keep its
       // count; retrying would lose it to dedup. An unsaved preview is not enough.
-      if (result.error?.code === "ETIMEDOUT" && job.engine === "full") {
+      const { obj: receipt, truncated } = extractJsonObject(String(result.stdout || ""));
+      // Keep bounded, non-sensitive process diagnostics for future failures.
+      const diagnostics = {
+        exitCode: result.status ?? null, signal: result.signal ?? null, errorCode: result.error?.code ?? null,
+        timeoutMs, receiptPresent: Boolean(receipt && !truncated), stoppedEarly: receipt?.stoppedEarly === true,
+        companiesScanned: receipt?.companiesScanned ?? null, jobsRead: receipt?.found ?? null,
+        stdoutBytes: Buffer.byteLength(String(result.stdout || "")), stderrBytes: Buffer.byteLength(String(result.stderr || "")),
+      };
+      lastDiagnostics = diagnostics;
+      if (result.error?.code === "ETIMEDOUT") {
         try {
-          const receipt = JSON.parse(result.stdout || "");
-          if (receipt.stoppedEarly === true && receipt.saved === true) {
-            const outcome = scheduledScanResult("full", result.stdout);
+          const persisted = job.engine === "full"
+            ? receipt?.saved === true || receipt?.postingsKept === 0
+            : receipt?.version === "careerops.scan.receipt@1" && receipt?.dry_run === false;
+          if (!truncated && receipt && persisted) {
+            const outcome = scheduledScanResult(job.engine || "full", result.stdout);
             return { ...outcome, state: outcome.state === "failed" ? "failed" : "partial", attempt,
-              durationMs: Date.now() - startedAt,
-              message: `${scanFailureMessage(result, { timeoutMs: SCAN_TIMEOUT_MS })} ${outcome.message}` };
+              durationMs: Date.now() - startedAt, diagnostics,
+              message: `${scanFailureMessage(result, { timeoutMs })} ${outcome.message}` };
           }
         } catch { /* No usable persisted result: report the timeout below. */ }
       }
@@ -326,14 +346,14 @@ export async function executeJob(root, job, options = {}) {
       if (!result.error && (result.status === 0 || (result.status === 2 && command.script === "scan.mjs"))) {
         try {
           const outcome = scheduledScanResult(job.engine || "full", result.stdout || "");
-          return { ...outcome, attempt, durationMs: Date.now() - startedAt };
+          return { ...outcome, attempt, durationMs: Date.now() - startedAt, diagnostics };
         } catch (error) {
           lastError = error.message;
           finalAttempt = attempt;
           break;
         }
       }
-      lastError = scanFailureMessage(result, { timeoutMs: SCAN_TIMEOUT_MS });
+      lastError = scanFailureMessage(result, { timeoutMs });
       if (result.error?.code === "ETIMEDOUT") {
         finalAttempt = attempt;
         break;
@@ -357,6 +377,7 @@ export async function executeJob(root, job, options = {}) {
     rolesFound: 0,
     durationMs: Date.now() - startedAt,
     message: lastError,
+    diagnostics: lastDiagnostics,
   };
 }
 
@@ -414,11 +435,12 @@ export async function recordCompletion(storePath, claim, result, inMemoryStore =
       current.updatedAt = at;
       if (result.state === "failed" || result.state === "partial") current.lastError = result.message;
       else delete current.lastError;
+      current.lastRunState = result.state;
     }
 
     const run = store.runs.find((item) => item.id === claim.runId && item.jobId === job.id);
-    if (run) Object.assign(run, { at, durationMs: result.durationMs, state: result.state, attempt: result.attempt, message: result.message, rolesFound: result.rolesFound, engine: job.engine || "full" });
-    else store.runs.unshift({ id: claim.runId || randomUUID(), jobId: job.id, at, durationMs: result.durationMs, state: result.state, attempt: result.attempt, message: result.message, rolesFound: result.rolesFound, engine: job.engine || "full" });
+    if (run) Object.assign(run, { at, durationMs: result.durationMs, state: result.state, attempt: result.attempt, message: result.message, rolesFound: result.rolesFound, engine: job.engine || "full", diagnostics: result.diagnostics });
+    else store.runs.unshift({ id: claim.runId || randomUUID(), jobId: job.id, at, durationMs: result.durationMs, state: result.state, attempt: result.attempt, message: result.message, rolesFound: result.rolesFound, engine: job.engine || "full", diagnostics: result.diagnostics });
     store.queue = store.queue.filter((item) => !(item.id === claim.queueId && item.claimToken === claim.claimToken));
     if (store.runs.length > MAX_RUNS) store.runs = store.runs.slice(0, MAX_RUNS);
   };

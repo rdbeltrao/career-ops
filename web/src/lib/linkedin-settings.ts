@@ -17,7 +17,7 @@ import { applySearchOp, describeSearchUrl, listLinkedInSearches, type LinkedInSe
 
 export type SessionState = "signed-in" | "sign-in-needed" | "expired" | "signed-out" | "no-profile" | "unknown";
 export type Session = { state: SessionState; busy: boolean; signedInAt: string; expiresAt: string; message: string };
-export type CrawlStatus = { result: "ok" | "login-required" | "error"; search: string; jobs?: number; message: string; at: string };
+export type CrawlStatus = { result: "ok" | "partial" | "login-required" | "error"; search: string; jobs?: number; message: string; at: string };
 export type SearchView = LinkedInSearch & { description: ReturnType<typeof describeSearchUrl> };
 export type ScheduleView = { id: string; name: string; engine: ScanEngine; every: number; unit: string; status: string; nextRunAt?: string; lastRunAt?: string };
 /** The portals.yml filters a LinkedIn schedule keeps unless it sets its own. */
