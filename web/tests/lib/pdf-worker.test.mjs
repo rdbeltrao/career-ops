@@ -56,6 +56,44 @@ test("missing or malformed PDF inputs fail instead of sending an incomplete prom
   await assert.rejects(() => readPdfWorkerInputs({ codeRoot, dataRoot, reportFile: "reports/001-example.md", hasContext: true }));
 });
 
+test("linked JD archives are preloaded and paraphrased signals are not offered as quotes", async t => {
+  const dataRoot = fixture(t);
+  fs.mkdirSync(path.join(dataRoot, "jds"));
+  const archive = "Führe ein Engineering-Team. Verbessere die Zuverlässigkeit. Arbeite mit dem Produktteam zusammen.";
+  fs.writeFileSync(path.join(dataRoot, "jds/example.md"), archive);
+  const report = `# Evaluation: Example
+## Job Description (archived verbatim)
+See jds/example.md for the full archive.
+## Machine Summary
+\`\`\`yaml
+requirement_importance:
+  - requirement: Team leadership
+    jd_signal: Lead an engineering team
+    importance: critical
+  - requirement: Reliability
+    jd_signal: Verbessere die Zuverlässigkeit
+    importance: high
+  - requirement: Product partnership
+    jd_signal: Collaborate with Product
+    importance: high
+\`\`\`
+`;
+  fs.writeFileSync(path.join(dataRoot, "reports/001-example.md"), report);
+  const inputs = await readPdfWorkerInputs({ codeRoot, dataRoot, reportFile: "reports/001-example.md", hasContext: true });
+  assert.ok(inputs.includes(archive));
+  const match = /BEGIN INPUT Publication brief[^\n]*\n([^]*?)\nEND INPUT/.exec(inputs);
+  const brief = JSON.parse(match[1]);
+  assert.equal(brief.criticalRequirements[0].jdSignal, "Lead an engineering team");
+  assert.equal(brief.criticalRequirements[0].jdQuote, null);
+  assert.equal(brief.criticalRequirements[1].jdQuote, "Verbessere die Zuverlässigkeit");
+  assert.equal(brief.criticalRequirements[2].jdQuote, null);
+  const prompt = buildPrompt({ kind: "pdf", input: "001", memory: "", today: "2026-11-01", pdfInputs: inputs });
+  assert.match(prompt, /keeping its original language/);
+  assert.match(prompt, /When jdQuote is null, find the corresponding exact passage/);
+  fs.rmSync(path.join(dataRoot, "jds/example.md"));
+  await assert.rejects(() => readPdfWorkerInputs({ codeRoot, dataRoot, reportFile: "reports/001-example.md", hasContext: true }), /archived job description is empty or unavailable/);
+});
+
 test("legacy PDF inputs read each fallback source from the runtime data root", async t => {
   const dataRoot = fixture(t);
   const files = ["modes/_context.md", "cv.md", "article-digest.md", "modes/_profile.md", "voice-dna.md"];
@@ -138,7 +176,19 @@ test("real web publication checks the rendered PDF before readiness and refuses 
   fs.writeFileSync(path.join(root, 'cv.md'), `# Ada Example\n\n## Experience\n\n### Example — Berlin\n\n**Engineer**\n${dates}\n\n- ${text}\n`);
   fs.writeFileSync(path.join(root, 'modes/_context.md'), `# Career facts\n\nExample: Engineer. ${text}`);
   const requirements = ['Lead engineering delivery', 'Coach engineers with clear expectations', 'Improve production reliability'];
-  fs.writeFileSync(path.join(root, 'reports/001-example.md'), `# Evaluation: Example\n\n## Job Description\n\n${requirements.join('. ')}.\n`);
+  const { chromium } = await import('playwright');
+  const browser = await chromium.launch({ headless: true });
+  fs.mkdirSync(path.join(root, 'jds'));
+  const archive = path.join(root, 'jds/example.pdf');
+  try {
+    const page = await browser.newPage();
+    await page.setContent(requirements.map(requirement => `<p>${requirement}.</p>`).join(''));
+    await page.pdf({ path: archive });
+  } finally { await browser.close(); }
+  fs.writeFileSync(path.join(root, 'reports/001-example.md'), '# Evaluation: Example\n\n## Job Description\n\nSee jds/example.pdf for the full archive.\n');
+  const inputs = await readPdfWorkerInputs({ codeRoot, dataRoot: root, reportFile: 'reports/001-example.md', hasContext: true });
+  for (const requirement of requirements) assert.ok(inputs.includes(requirement));
+  assert.doesNotMatch(inputs, /%PDF-/);
   fs.mkdirSync(path.join(root, 'data'));
   fs.mkdirSync(path.join(root, 'output'));
   fs.writeFileSync(path.join(root, 'data/applications.md'), '| # | Date | Company | Role | Score | Status | PDF | Report | Notes |\n|---|---|---|---|---|---|---|---|---|\n| 1 | 2026-11-01 | Example | Engineer | 4/5 | Evaluated | ❌ | [001](../reports/001-example.md) | |\n');
@@ -163,4 +213,6 @@ test("real web publication checks the rendered PDF before readiness and refuses 
   });
   assert.equal(mark.code, 1);
   assert.match(mark.output, /review-required/);
+  fs.writeFileSync(archive, '%PDF-1.4\ncorrupt');
+  await assert.rejects(() => readPdfWorkerInputs({ codeRoot, dataRoot: root, reportFile: 'reports/001-example.md', hasContext: true }), /Could not extract the archived PDF job description/);
 });

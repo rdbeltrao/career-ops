@@ -49,6 +49,17 @@ test('real gaps remain explicit without claiming the missing skill',()=>{
  delete p.tailoring.requirements[0].gap;assert.throws(()=>validateCvPublication(p,{dataRoot:'unused',report:job,brief}),/remaining gap/);
 });
 
+test('publication requires archive quotes even when analysis contains translated signals',t=>{
+ const root=fixture(t);fs.mkdirSync(path.join(root,'jds'));
+ fs.writeFileSync(path.join(root,'jds/example.md'),job);
+ const report=`## Job Description (archived verbatim)\nSee jds/example.md for the full archive.\n## Machine Summary\n\`\`\`yaml\nrequirement_importance:\n${quotes.map((requirement,i)=>`  - requirement: ${requirement}\n    jd_signal: Translated analysis signal number ${i}\n    importance: critical`).join('\n')}\n\`\`\``;
+ assert.doesNotThrow(()=>validateCvPublication(payload,{dataRoot:root,report,brief}));
+ const p=structuredClone(payload);p.tailoring.requirements.forEach((entry,i)=>{entry.jdQuote=`Translated analysis signal number ${i}`;});
+ assert.throws(()=>validateCvPublication(p,{dataRoot:root,report,brief}),error=>{
+  for(let i=1;i<=3;i++)assert.ok(error.message.includes(`Requirement ${i}: quote must occur in the archived job description.`));return true;
+ });
+});
+
 test('readiness rejects missing review, changed PDF, report and career context',t=>{
  const root=fixture(t);fs.mkdirSync(path.join(root,'data'));const pdf=path.join(root,'output/1.pdf');
  fs.writeFileSync(path.join(root,'data/pdf-index.tsv'),'1\toutput/1.pdf\t\ta4\t2026-11-01\tcv\n');
