@@ -34,7 +34,7 @@ export const WORKDAY_TRUNCATED_REASON = {
   TRANSIENT: 'transient',
   STRUCTURAL: 'structural',
 };
-export const WORKDAY_COVERAGE_POLICY = 'complete-partition-full-page-window-v1';
+export const WORKDAY_COVERAGE_POLICY = 'complete-partition-full-pagination-v2';
 
 const PAGE_SIZE = 20;
 
@@ -875,7 +875,10 @@ export default {
     };
     const makeBody = (offset, appliedFacets) => JSON.stringify({ limit: PAGE_SIZE, offset, searchText: '', appliedFacets });
     const sinceMs = typeof ctx?.sinceMs === 'number' ? ctx.sinceMs : null;
-    const maxPages = resolveMaxPages(entry);
+    const fullCoverage = ctx?.syntheticEntries === true;
+    const maxPages = fullCoverage && entry.max_pages == null ? MAX_PAGES_CAP : resolveMaxPages(entry);
+    const maxSplitDepth = fullCoverage ? 4 : MAX_SPLIT_DEPTH;
+    const maxSplitSlices = fullCoverage ? 256 : MAX_SPLIT_SLICES;
 
     // Honor a context page cap — verify-portals' liveness probe sets
     // `ctx.maxPages: 1` so it only needs to know a board is live, not its full
@@ -891,7 +894,8 @@ export default {
 
     // Shared across the unfaceted crawl and every slice, so one tenant's total
     // cost is bounded no matter how its facets fan out.
-    const pageBudget = maxPages * SPLIT_PAGE_BUDGET_FACTOR;
+    const pageBudget = fullCoverage ? Math.min(4000, maxPages * SPLIT_PAGE_BUDGET_FACTOR)
+      : maxPages * SPLIT_PAGE_BUDGET_FACTOR;
     let pagesSpent = 0;
     let budgetExhausted = false;
 
@@ -901,10 +905,11 @@ export default {
      * ceiling while the facet counts — which are not clamped — describe a
      * bigger board. A probe (ctx.maxPages) never splits: it asked for one page.
      */
-    const isClamped = (total, facets) => {
+    const isClamped = (total, facets, appliedFacets, expectedTotal) => {
       if (ctxCap !== Infinity) return false;
       if (total !== WORKDAY_OFFSET_CEILING) return false;
-      const trueTotal = trueTotalFromFacets(facets);
+      const applicable = fullCoverage ? facets.filter(f => !Object.hasOwn(appliedFacets, f.facetParameter)) : facets;
+      const trueTotal = Math.max(trueTotalFromFacets(applicable) || 0, expectedTotal || 0);
       return trueTotal !== null && trueTotal > WORKDAY_OFFSET_CEILING;
     };
 
@@ -915,7 +920,7 @@ export default {
      * Returns the facets alongside the jobs because the caller needs them to
      * decide whether this query was clamped and, if so, what to split it on.
      */
-    const runQuery = async (appliedFacets) => {
+    const runQuery = async (appliedFacets, expectedTotal = null) => {
       pagesSpent++;
       const first = await fetchJsonWithRetry(ctx, ep.api, { ...postOpts, body: makeBody(0, appliedFacets) }, RETRY_POLICY);
       const jobs = parseWorkdayResponse(first, entry);
@@ -942,6 +947,8 @@ export default {
       // adventhealth, on every page). Early-stop can't apply then — there's
       // no dated posting to recognize as "past the window".
       const sawAnyDatedPosting = jobs.some((j) => typeof j.postedAt === 'number');
+      const canBatchPages = fullCoverage && ctx?.includeUndated === true
+        && !jobs.some(job => Number.isFinite(job.postedAt) || Number.isFinite(job.postedAtUpperBound));
 
       // Zero dated postings on page 0, --include-undated off, --since-bounded
       // scan: further pagination is pure waste — every posting from this
@@ -957,17 +964,49 @@ export default {
       // is real and distinct, and it is the coverage floor the split builds on.
       // Only the pages *past* the ceiling are duplicates, and `total` being
       // clamped to the ceiling already stops pagination there.
-      const clamped = stopReason === STOP_REASON.COMPLETE && isClamped(total, facets);
+      const clamped = stopReason === STOP_REASON.COMPLETE && isClamped(total, facets, appliedFacets, expectedTotal);
+      // The root crawl retains its useful coverage floor. Clamped child
+      // queries are recovered through finer slices instead of paying to
+      // download the same first 2,000 rows at every level of the tree.
+      const splitChild = fullCoverage && clamped && Object.keys(appliedFacets).length > 0;
 
-      // Sequential, not concurrent (mirrors providers/4dayweek.mjs, thehub.mjs,
-      // arbeitnow.mjs, jibeapply.mjs) — a single tenant's API has no reason to
-      // receive a burst of parallel requests, and a mid-run failure stops
-      // cleanly with whatever pages were already gathered instead of
-      // discarding them (Promise.all would fail the whole batch on one error).
+      // Dated pages stay sequential so the window stop can avoid later work.
+      // Undated full sweeps use at most two staggered requests. Either path
+      // retains successful pages when a neighbour fails.
       let page = 1;
-      if (stopReason === STOP_REASON.COMPLETE) {
+      if (stopReason === STOP_REASON.COMPLETE && !splitChild) {
         for (; page < pagesToFetch; page++) {
           if (pagesSpent >= pageBudget) { budgetExhausted = true; break; }
+          if (canBatchPages && page + 1 < pagesToFetch && pagesSpent + 2 <= pageBudget) {
+            // Undated boards cannot use a chronological early stop. Keep two
+            // requests in flight, staggered by the existing per-tenant delay.
+            // Observe both outcomes immediately and retain either successful
+            // page even if its neighbour fails.
+            pagesSpent += 2;
+            const batch = await Promise.allSettled([0, 1].map(async index => {
+              await sleep(INTER_PAGE_DELAY_MS * (index + 1), ctx);
+              return fetchJsonWithRetry(ctx, ep.api,
+                { ...postOpts, body: makeBody((page + index) * PAGE_SIZE, appliedFacets) }, RETRY_POLICY);
+            }));
+            let failed = false, shortPage = false;
+            let lastPage = [];
+            for (let index = 0; index < batch.length; index++) {
+              const result = batch[index];
+              if (result.status === 'rejected') {
+                failed = true;
+                console.error(`⚠️  workday: ${entry.name} page ${page + index + 1} failed: ${result.reason.message}`);
+              } else {
+                lastPage = parseWorkdayResponse(result.value, entry);
+                jobs.push(...lastPage);
+                if (total === null && (result.value.jobPostings || []).length < PAGE_SIZE) shortPage = true;
+              }
+            }
+            page++;
+            if (failed) { stopReason = STOP_REASON.FETCH_ERROR; break; }
+            if (shortPage) break;
+            if (pageIsPastWindow(lastPage, sinceMs)) { stopReason = STOP_REASON.EARLY_STOP; break; }
+            continue;
+          }
           await sleep(INTER_PAGE_DELAY_MS, ctx);
           pagesSpent++;
           let json;
@@ -998,7 +1037,7 @@ export default {
 
       // A later page can finish the date window after page 0 detected a
       // clamp. No facet split is needed once this query covered that window.
-      return { jobs, total, facets, stopReason, clamped: clamped && stopReason !== STOP_REASON.EARLY_STOP };
+      return { jobs, total, facets, expectedTotal, stopReason, clamped: clamped && stopReason !== STOP_REASON.EARLY_STOP };
     };
 
     let root;
@@ -1016,17 +1055,38 @@ export default {
         throw notFound;
       } else throw err;
     }
+    if (fullCoverage && ctxCap === Infinity && root.total === WORKDAY_OFFSET_CEILING
+      && !root.clamped && [STOP_REASON.COMPLETE, STOP_REASON.CAP].includes(root.stopReason)
+      && root.jobs.length >= root.total) {
+      root.unverifiedOffsetCap = true;
+      if (entry.max_pages == null) {
+        try {
+          const probe = await fetchJsonWithRetry(ctx, ep.api,
+            { ...postOpts, body: makeBody(WORKDAY_OFFSET_CEILING, {}) }, RETRY_POLICY);
+          const extra = parseWorkdayResponse(probe, entry);
+          root.unverifiedOffsetCap = (probe.jobPostings || []).length > 0;
+          const known = new Set(root.jobs.map(job => job.url));
+          root.jobs.push(...extra.filter(job => !known.has(job.url)));
+        } catch (error) {
+          if (ctx.signal?.aborted) throw error;
+        }
+      }
+      if (root.unverifiedOffsetCap) {
+        console.error(`⚠️  workday: ${entry.name} cannot verify postings beyond offset ${WORKDAY_OFFSET_CEILING} (total may be Workday-capped, not real)`);
+      }
+    }
     const { total, stopReason } = root;
 
     // Set when the split ran out of depth, slices, or splittable facets with
     // part of the board still unreached — the difference between "this is the
     // whole board" and "this is as much of it as we could get".
-    let splitIncomplete = false;
+    let splitIncomplete = fullCoverage && (root.unverifiedOffsetCap
+      || (root.stopReason === STOP_REASON.CAP && !root.clamped && (root.total === null || root.jobs.length < root.total)));
     // Distinguishes the two ways a split can stay incomplete: a fixed bound
     // (slice/depth/facet budget) versus a transient fetch failure. Retrying a
     // structural exhaustion just re-runs the same slices into the same wall —
     // only a transient one is worth scan-ats-full.mjs's sequential retry pass.
-    let splitStructural = false;
+    let splitStructural = splitIncomplete;
     let slicesSpent = 0;
     let jobs = root.jobs;
 
@@ -1075,8 +1135,11 @@ export default {
         }
         if (!result.clamped) return;
 
-        if (depth >= MAX_SPLIT_DEPTH) { splitIncomplete = true; splitStructural = true; return; }
-        const facet = chooseSplitFacet(result.facets, {
+        if (depth >= maxSplitDepth) { splitIncomplete = true; splitStructural = true; return; }
+        // Workday leaves selected-facet counts at the broader parent scope.
+        // They cannot describe the size or completeness of this child query.
+        const scopeFacets = fullCoverage ? result.facets.filter(f => !excluded.includes(f.facetParameter)) : result.facets;
+        const facet = chooseSplitFacet(scopeFacets, {
           exclude: excluded,
           locationHints: ctx?.locationHints,
           completePartition: ctx?.syntheticEntries === true,
@@ -1090,7 +1153,10 @@ export default {
         // cleanly and still leave the board short — reported recovered, which
         // is the failure this path exists to avoid.
         //
-        // Materiality matters here, and the bar comes from the response. Real
+        // Legacy curated scans allow normal facet-count disagreement. Full
+        // directory coverage instead requires the final unique union to reach
+        // the native count before clearing even a small partition gap.
+        // The legacy materiality bar comes from the response. Real
         // facets disagree by a point or two (a posting missing a facet value is
         // absent from that facet's counts), so the chosen facet sits just under
         // the max on essentially every board — DSG: trueTotal 8367, chosen
@@ -1102,20 +1168,24 @@ export default {
         // badly under-covering facet is itself the minimum, and leaving it in
         // would inflate the bar to exactly the gap it should be judged against.
         const chosenCoverage = facet.values.reduce((sum, v) => sum + v.count, 0);
-        const trueTotal = trueTotalFromFacets(result.facets);
+        const trueTotal = fullCoverage
+          ? Math.max(result.expectedTotal || 0, trueTotalFromFacets(scopeFacets) || 0)
+          : trueTotalFromFacets(result.facets);
         if (trueTotal !== null) {
           const others = [];
-          for (const f of Array.isArray(result.facets) ? result.facets : []) {
+          for (const f of scopeFacets) {
             if (f?.facetParameter === facet.facetParameter) continue;
             const coverage = facetCoverage(f);
             if (coverage !== null) others.push(coverage);
           }
           const spread = others.length > 0 ? Math.max(...others) - Math.min(...others) : 0;
-          if (trueTotal - chosenCoverage > spread) { splitIncomplete = true; splitStructural = true; }
+          if (fullCoverage ? chosenCoverage < trueTotal : trueTotal - chosenCoverage > spread) {
+            splitIncomplete = true; splitStructural = true;
+          }
         }
 
         for (const value of facet.values) {
-          if (slicesSpent >= MAX_SPLIT_SLICES) { splitIncomplete = true; splitStructural = true; break; }
+          if (slicesSpent >= maxSplitSlices) { splitIncomplete = true; splitStructural = true; break; }
           if (pagesSpent >= pageBudget) { splitIncomplete = true; splitStructural = true; break; }
           slicesSpent++;
           await sleep(INTER_PAGE_DELAY_MS, ctx);
@@ -1129,7 +1199,7 @@ export default {
           // tried. Same accounting as a slice that died mid-pagination.
           let sliceResult;
           try {
-            sliceResult = await runQuery(nextApplied);
+            sliceResult = await runQuery(nextApplied, value.count);
           } catch (err) {
             const attempts = err.attempts ?? RETRY_POLICY.retries + 1;
             console.error(`⚠️  workday: ${entry.name} slice ${facet.facetParameter}=${value.id} failed on its first page after ${attempts} attempts: ${err.message}`);
@@ -1147,6 +1217,12 @@ export default {
 
       await split(root, {}, 0, []);
       jobs = out;
+      const reportedTotal = Math.max(root.total || 0, trueTotalFromFacets(root.facets) || 0);
+      if (fullCoverage && reportedTotal > 0 && jobs.length >= reportedTotal) {
+        splitIncomplete = false;
+        splitStructural = false;
+        budgetExhausted = false;
+      }
 
       // Distinct from the cap warning below: nothing about this tenant's entry
       // can be edited to fix it, and the count that matters is what the split

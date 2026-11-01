@@ -69,7 +69,7 @@ test('Workday recovery and history scans avoid detail requests for unrelated tit
     fs.mkdirSync(path.join(root, 'data/cache/ats-companies'), { recursive: true });
     fs.writeFileSync(path.join(root, 'data/cache/ats-companies/workday.json'), JSON.stringify(['acme|wd5|careers']));
     fs.writeFileSync(path.join(root, 'portals.yml'), 'title_filter:\n  positive: [Engineer]\n');
-    fs.writeFileSync(path.join(root, 'data/scan-history.tsv'), 'url\tfirst_seen\tportal\ttitle\tcompany\tstatus\tlocation\nhttps://acme.wd5.myworkdayjobs.com/careers/job/Remote/Old_R999\t2026-09-01\tworkday\tArchivist\tAcme\tadded\tRemote\n');
+    fs.writeFileSync(path.join(root, 'data/scan-history.tsv'), 'url\tfirst_seen\tportal\ttitle\tcompany\tstatus\tlocation\nhttps://acme.wd5.myworkdayjobs.com/careers/job/Remote/Old_R999\t2026-09-01\tworkday\tArchivist\tAcme\tadded\tRemote\nhttps://acme.wd5.myworkdayjobs.com/other-careers/job/Remote/Old_R998\t2026-09-01\tworkday\tArchivist\tAcme\tadded\tRemote\n');
     const scanner = path.join(codeRoot, 'scan-ats-full.mjs');
     const log = path.join(root, 'details.json');
     const launcher = path.join(root, 'launch.mjs');
@@ -98,7 +98,7 @@ test('Workday recovery and history scans avoid detail requests for unrelated tit
       env: { ...process.env, CAREER_OPS_ROOT: root, CAREER_OPS_DATA_DIR: '', CAREER_OPS_PORTALS: '', CAREER_OPS_PIPELINE: '', CAREER_OPS_SCAN_HISTORY: '', CAREER_OPS_TRACKER: '', CAREER_OPS_NO_AUTO_JEV: '1' },
     });
     assert.equal(result.status, 0, result.stderr);
-    assert.deepEqual(JSON.parse(fs.readFileSync(log)), ['Engineer', 'Engineer', 'Engineer'], 'initial, retry and history scans should enrich only wanted titles');
+    assert.deepEqual(JSON.parse(fs.readFileSync(log)), ['Engineer', 'Engineer', 'Engineer'], 'initial/retry scans and only the non-directory history board should enrich wanted titles');
     const receipt = JSON.parse(result.stdout);
     assert.equal(receipt.coverage.remaining, 0);
     assert.equal(receipt.postingsKept, 1, 'retry retains the match without duplicating it');

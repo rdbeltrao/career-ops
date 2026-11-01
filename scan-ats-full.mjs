@@ -948,7 +948,7 @@ export async function runSeedScan(seedId, opts, ctx, seenUrls, label) {
  * request. Known labels begin feeding the sweep automatically when a provider
  * with the same id is added later, without a tracker migration.
  */
-export async function runHistorySeedScan(seeds, providers, opts, ctx, processJobs) {
+export async function runHistorySeedScan(seeds, providers, opts, ctx, processJobs, coverage = null) {
   const selected = opts.atsExplicit
     ? seeds.filter((seed) => opts.ats.includes(seed.vendor))
     : seeds;
@@ -959,10 +959,12 @@ export async function runHistorySeedScan(seeds, providers, opts, ctx, processJob
   }
   const capped = [...grouped.values()].flatMap((group) => sampleCompanies(group, opts.limit, opts.shuffle));
   const scannable = [];
+  let directoryCovered = 0;
   for (const seed of capped) {
     const provider = providers.get(seed.vendor);
     if (!provider) continue;
     const entry = { name: seed.company, careers_url: seed.careersUrl, provider: seed.vendor };
+    if (coverage?.registered(seed.vendor, boardKey(entry))) { directoryCovered++; continue; }
     try {
       // probeConfirmed: the host was verified as SuccessFactors from its page,
       // equivalent to an explicit `provider:` in portals.yml (bypasses URL detect).
@@ -1036,7 +1038,7 @@ export async function runHistorySeedScan(seeds, providers, opts, ctx, processJob
   return {
     total: attempted,
     derived: selected.length,
-    unsupported: capped.length - scannable.length,
+    unsupported: capped.length - scannable.length - directoryCovered,
     errors,
     missing,
   };
@@ -1049,12 +1051,13 @@ export async function runHistorySeedScan(seeds, providers, opts, ctx, processJob
 // one company, not freeze a worker slot for the rest of a 12k-company sweep.
 const COMPANY_TIMEOUT_MS = 5 * 60_000;
 
-export function coverageBoardTimeoutMs(sourceName, pendingCount, coverageEnabled) {
+export function coverageBoardTimeoutMs(sourceName, pendingCount, coverageEnabled, completedFraction = 0) {
   // Small final Workday batches contain the large boards that could not finish
   // the broad sweep's five-minute guard. The shared scan deadline still limits
   // the entire run, including these longer fetches, to its normal work budget.
-  return coverageEnabled && sourceName === 'workday' && pendingCount > 0 && pendingCount <= CONCURRENCY * 5
-    ? 15 * 60_000 : COMPANY_TIMEOUT_MS;
+  return coverageEnabled && sourceName === 'workday' && pendingCount > 0
+    && (pendingCount <= CONCURRENCY * 5 || completedFraction >= 0.95)
+    ? 18 * 60_000 : COMPANY_TIMEOUT_MS;
 }
 
 // Run one board's unit of work. For a source that gives every tenant its own
@@ -1264,11 +1267,15 @@ async function main() {
   if (coverage) process.once('exit', () => coverage.close());
   const companyLists = new Map();
   if (coverage) {
+    const knownMissing = loadDeadBoards(DEAD_BOARDS_PATH);
+    const cycleStart = Date.parse(coverage.summary().startedAt);
     for (const name of opts.ats.filter(ats => SOURCES[ats])) {
       const data = await loadCompanyList(name, SOURCES[name].dataset);
       companyLists.set(name, data);
+      const stable = [...knownMissing.values()].filter(row => row.ats === name
+        && (row.lastChecked >= cycleStart || shouldSkipDeadBoard(knownMissing, name, row.board))).map(row => row.board);
       coverage.register(name, data.list.map(SOURCES[name].toEntry).filter(Boolean).map(boardKey), data.status,
-        name === 'workday' ? WORKDAY_COVERAGE_POLICY : undefined);
+        name === 'workday' ? WORKDAY_COVERAGE_POLICY : undefined, stable);
     }
   }
   const changedFilters = changedFilterKeys(checkpoint, filters);
@@ -1602,7 +1609,7 @@ async function main() {
       startAt = checkpoint.current.resumeAt;
     }
     const entries = entriesAll.slice(startAt);
-    const companyTimeoutMs = coverageBoardTimeoutMs(name, entries.length, Boolean(coverage));
+    const companyTimeoutMs = coverageBoardTimeoutMs(name, entries.length, Boolean(coverage), coverage?.fraction(name));
     totalCompaniesScanned += entries.length;
     curEntries = entries.length; curDone = 0; curErrors = 0; curDeadSkipped = 0;
     log(`\n⚙  ${name} — ${entriesAll.length} companies${status !== 'ok' ? ` (dataset: ${status})` : ''}${startAt ? ` — resuming at ${startAt}` : ''}`);
@@ -1871,7 +1878,7 @@ async function main() {
   if (historySeeds.length && !stoppedByOutage && !stoppedEarly) {
     const providers = await loadProviders(PROVIDERS_DIR);
     log(`\n🌱 Application history — ${historySeeds.length} unique ATS board(s) derived locally...`);
-    const result = await runHistorySeedScan(historySeeds, providers, opts, ctx, processJobs);
+    const result = await runHistorySeedScan(historySeeds, providers, opts, ctx, processJobs, coverage);
     totalCompaniesScanned += result.total;
     totalErrors += result.errors;
     missingBoards += result.missing;

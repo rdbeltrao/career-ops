@@ -55,6 +55,27 @@ test('coverage resumes pending boards and reconciles directory changes without r
   } finally { coverage?.close(); fs.rmSync(root, { recursive: true, force: true }); }
 });
 
+test('policy changes retain verified missing boards without retaining old live-board coverage', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'scan-coverage-stable-'));
+  const file = path.join(root, 'coverage.json');
+  let coverage;
+  try {
+    coverage = await openScanCoverage(file, 'filters');
+    coverage.register('workday', ['missing', 'live', 'pending'], 'ok', 'old');
+    coverage.done('workday', 'missing'); coverage.done('workday', 'live');
+    coverage.save(); coverage.close();
+    coverage = await openScanCoverage(file, 'filters');
+    coverage.register('workday', ['missing', 'live', 'pending'], 'ok', 'new', ['missing', 'pending']);
+    assert.equal(coverage.pending('workday', 'missing'), false);
+    assert.equal(coverage.pending('workday', 'live'), true);
+    assert.equal(coverage.pending('workday', 'pending'), true, 'an unverified key cannot be made complete by a policy exemption');
+    assert.equal(coverage.registered('workday', 'live'), true);
+    assert.equal(coverage.registered('workday', 'unknown'), false);
+    coverage.done('workday', 'live'); coverage.save();
+    assert.equal(JSON.parse(fs.readFileSync(file)).stalledRuns, 0);
+  } finally { coverage?.close(); fs.rmSync(root, { recursive: true, force: true }); }
+});
+
 test('filter changes reset progress and unavailable datasets cannot complete a cycle', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'scan-coverage-'));
   const file = path.join(root, 'coverage.json');

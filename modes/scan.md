@@ -407,6 +407,13 @@ Notes:
   cannot hide fresh or undated roles on later pages. Native "30+ Days Ago"
   labels prove that a posting is outside a narrow window such as 14 days;
   they never supply an invented exact posting date.
+- **Full-directory Workday sweeps refine large boards into bounded facet
+  slices.** Selected-facet counts belong to the broader parent query and are
+  excluded when sizing a child slice. Undated boards can fetch two staggered
+  pages at a time. A page cap or unresolved posting-count gap keeps the board
+  pending; a successful partial read is never recorded as complete coverage.
+  Changes to retrieval policy recheck live boards while retaining verified
+  missing boards. The normal whole-run deadline still applies.
 - **Invalid values fail immediately** — `--since` with no number, `--since=`,
   zero, negative, and non-finite values all exit rather than silently scanning
   without a window.
