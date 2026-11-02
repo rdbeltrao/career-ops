@@ -28,7 +28,7 @@
 
 import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { delimiter, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { hasFlag, validateFlags } from './lib/cli-flags.mjs';
 import { isMainModule } from './lib/is-main-module.mjs';
@@ -76,6 +76,19 @@ function defaultBatchRunning(codeRoot) {
   }
 }
 
+/**
+ * The environment for the batch steps. The batch runner is a shell script that
+ * calls `node` by name, and a scheduler such as launchd starts this script with
+ * a PATH that has no Node on it, so the directory of the Node running this
+ * script goes first on PATH.
+ */
+export function batchEnv(baseEnv, dataRoot, execPath = process.execPath) {
+  const nodeDir = dirname(execPath);
+  const entries = String(baseEnv.PATH ?? '').split(delimiter).filter(Boolean);
+  const path = [nodeDir, ...entries.filter((entry) => entry !== nodeDir)].join(delimiter);
+  return { ...baseEnv, PATH: path, CAREER_OPS_ROOT: dataRoot };
+}
+
 const defaultSleep = (ms) => new Promise((resolveSleep) => setTimeout(resolveSleep, ms));
 
 /**
@@ -86,7 +99,7 @@ const defaultSleep = (ms) => new Promise((resolveSleep) => setTimeout(resolveSle
 export async function main(args, deps = {}) {
   const dataRoot = deps.dataRoot ?? getCareerOpsRoot();
   const codeRoot = deps.codeRoot ?? CODE_ROOT;
-  const env = { ...(deps.env ?? process.env), CAREER_OPS_ROOT: dataRoot };
+  const env = batchEnv(deps.env ?? process.env, dataRoot, deps.execPath);
   const run = deps.run ?? defaultRun;
   const batchRunning = deps.batchRunning ?? defaultBatchRunning;
   const sleep = deps.sleep ?? defaultSleep;
