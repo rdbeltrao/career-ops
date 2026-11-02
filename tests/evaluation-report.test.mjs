@@ -51,7 +51,7 @@ test('contradictory, malformed and missing Jev cannot be persisted', () => {
 
 test('explicit not-run requires a reason and does not become a zero or older rating', () => {
   assert.match(prepareEvaluationReport(report('null')).error, /not-run reason/);
-  const markdown = report('null', '**Scoring note:** no Jev gate\nnot run: provider unavailable');
+  const markdown = report('null', '**Jev:** not run: provider unavailable');
   assert.equal(prepareEvaluationReport(markdown).ok, true);
   assert.equal(readReportJev(markdown).status, 'not-run');
   assert.equal(readReportJev(markdown).jev, null);
@@ -92,4 +92,13 @@ test('redacting long archived postings preserves UTF-16 offsets and newlines', (
 test('canonicalizing a late header does not modify archived JD text', () => {
   const markdown = report(undefined, '**Jev:** 4.1/5 (fit 78, apply)').replace('## Machine Summary', '## Job Description (archived verbatim)\n**Jev:** 1/5 (fit 1, skip)\n\n## Machine Summary');
   assert.match(withJevHeader(markdown, '4.1/5 (fit 78, apply)'), /## Job Description \(archived verbatim\)\n\*\*Jev:\*\* 1\/5 \(fit 1, skip\)/);
+});
+
+
+test('unrelated not-run text cannot excuse missing JEV evidence', () => {
+  const markdown = report('null', '**Jev:** not run\n**Scoring note:** no Jev gate') + '\n## Keyword Coverage\nnot run: no tailored CV\n';
+  assert.match(prepareEvaluationReport(markdown).error, /not-run reason/);
+  const gate = report('null') + '\n## Calibrated pre-screen (Jev)\n\nnot run: provider unavailable\n';
+  assert.equal(prepareEvaluationReport(gate).ok, true);
+  assert.equal(prepareEvaluationReport(report('null').replace('jev: null', 'jev: null\njev_not_run_reason: provider unavailable')).ok, true);
 });

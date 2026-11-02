@@ -90,7 +90,7 @@ test('batch/batch-prompt.md loads _context.md, carries jev: in the schema and ne
 // ── B4: the loaders ────────────────────────────────────────────────────────
 
 import { spawnSync } from 'node:child_process';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, symlinkSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { delimiter } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -263,7 +263,7 @@ test('batch-runner.sh parses (bash -n) and documents --min-jev and --skip-jev-ve
  * system prompt, exits 1), a fake curl (writes a 120-word JD) and, on request,
  * a fake jev-score.mjs driven by JEV_STUB_MODE.
  */
-function batchFixture(t, { jevStub = true, context = false } = {}) {
+function batchFixture(t, { jevStub = true, context = false, workerReport = null } = {}) {
   const base = mkdtempSync(join(tmpdir(), 'batch-jev-'));
   t.after(() => rmSync(base, { recursive: true, force: true, maxRetries: 10 }));
   const dir = join(base, 'checkout');
@@ -278,6 +278,9 @@ function batchFixture(t, { jevStub = true, context = false } = {}) {
   mkdirSync(join(dir, 'lib'), { recursive: true });
   for (const rel of ['lib/is-main-module.mjs', 'lib/context-evidence.mjs', 'lib/context-library.mjs']) writeFileSync(join(dir, rel), read(rel));
   writeFileSync(join(dir, 'context-evidence.mjs'), read('context-evidence.mjs'));
+  for (const rel of ['finalize-report-jev.mjs', 'url-key.mjs', 'lib/report-jev-write.mjs', 'lib/evaluation-report.mjs', 'lib/yaml-document.mjs', 'lib/linkedin-url.mjs']) writeFileSync(join(dir, rel), read(rel));
+  mkdirSync(join(dir, 'node_modules'), { recursive: true });
+  symlinkSync(join(ROOT, 'node_modules', 'js-yaml'), join(dir, 'node_modules', 'js-yaml'), 'junction');
   writeFileSync(join(dir, 'reserve-report-num.mjs'), "if (!process.argv.includes('--release')) console.log('001');\n");
   for (const name of ['merge-tracker.mjs', 'reconcile-pipeline.mjs', 'verify-pipeline.mjs']) writeFileSync(join(dir, name), '// Not under test here.\n');
   if (context) writeFileSync(join(dir, 'modes', '_context.md'), '# Fit profile\n\nCONTEXT_SENTINEL_TARGETING across five teams of 20.\n');
@@ -300,12 +303,14 @@ function batchFixture(t, { jevStub = true, context = false } = {}) {
       "      confidences: { seniority_match: 0.91, location_ok: 0.88, language_blocker: 0.95, team_type: 0.7, stack_fit: 0.66 },",
       "      probabilities: {}, blocking: skip ? ['location_ok=no'] : [], fallback: false, error: null,",
       '    };',
+      "    if (mode === 'invalid') result.fit = 101;",
       '    process.stdout.write(JSON.stringify(result));',
       '  }',
       '}',
       '',
     ].join('\n'));
   }
+  if (workerReport !== null) writeFileSync(join(captureDir, 'worker-report.md'), workerReport);
   const words = Array.from({ length: 120 }, (_, i) => `word${i}`).join(' ');
   writeFileSync(join(binDir, 'curl'), [
     '#!/usr/bin/env bash',
@@ -327,6 +332,11 @@ function batchFixture(t, { jevStub = true, context = false } = {}) {
     '  [[ "$prev" == "--append-system-prompt-file" ]] && cp "$arg" "$CAPTURE_DIR/prompt.md"',
     '  prev="$arg"',
     'done',
+    'if [[ -f "$CAPTURE_DIR/worker-report.md" ]]; then',
+    '  cp "$CAPTURE_DIR/worker-report.md" reports/001-acme.md',
+    "  printf '\\n```json\\n{\"status\":\"completed\",\"score\":3.4}\\n```\\n'",
+    '  exit 0',
+    'fi',
     'exit 1',
     '',
   ].join('\n'));
@@ -493,4 +503,59 @@ test('paidModelRefusal lets free models and the explicit opt-in through, refuses
   assert.equal(or.paidModelRefusal('meta-llama/llama-3.3-70b-instruct:free', {}), null);
   assert.match(or.paidModelRefusal('anthropic/claude-sonnet-5.5', {}), /Refusing to evaluate with the paid model anthropic\/claude-sonnet-5\.5/);
   assert.equal(or.paidModelRefusal('anthropic/claude-sonnet-5.5', { CAREER_OPS_ALLOW_PAID_OPENROUTER: '1' }), null);
+});
+
+
+const omittedJevReport = `# Evaluation: Acme — Manager
+**Score:** 3.4/5
+**URL:** https://example.com/jobs/one
+**Scoring note:** no Jev gate
+## Machine Summary
+\`\`\`yaml
+company: Acme
+role: Manager
+score: 3.4
+final_decision: Consider
+jev: null
+\`\`\`
+
+${[...'ABCDEFG'].map(l => `## ${l}) Evaluation\nEvidence.`).join('\n\n')}
+`;
+
+test('batch completion persists scorer result even when worker writes jev:null', { skip: !bash && 'no bash' }, async t => {
+  const fx = batchFixture(t, { workerReport: omittedJevReport });
+  const run = runBatch(fx, []);
+  assert.match(run.state, /\tcompleted\t/, run.out);
+  const { readReportJev, machineSummary } = await import('../lib/evaluation-report.mjs');
+  const saved = readFileSync(join(fx.dir, 'reports', '001-acme.md'), 'utf8');
+  assert.deepEqual(readReportJev(saved).jev, { fit: 79, score: 4.2, verdict: 'apply' });
+  assert.equal(machineSummary(saved).data.jev.model, 'typesafe/jev-1.13');
+  const receipt = JSON.parse(readFileSync(join(fx.dir, 'batch', 'logs', '001-1.jev.json'), 'utf8'));
+  assert.equal(receipt.url, 'https://example.com/jobs/one');
+  assert.equal(receipt.result.fit, 79);
+});
+
+test('batch records real not-run reason and rejects wrong-posting reports before completion', { skip: !bash && 'no bash' }, async t => {
+  const fx = batchFixture(t, { workerReport: omittedJevReport });
+  const run = runBatch(fx, [], { JEV_STUB_MODE: 'exit2' });
+  assert.match(run.state, /\tcompleted\t/, run.out);
+  const saved = readFileSync(join(fx.dir, 'reports', '001-acme.md'), 'utf8');
+  assert.match(saved, /not run: no OpenRouter key available/);
+  const wrong = batchFixture(t, { workerReport: omittedJevReport.replace('https://example.com/jobs/one', 'https://example.com/jobs/other') });
+  const failed = runBatch(wrong, []);
+  assert.match(failed.state, /\tfailed\t/);
+  assert.match(failed.state, /JEV report finalization failed/);
+  assert.ok(!/\tcompleted\t/.test(failed.state));
+  assert.equal(readFileSync(join(wrong.dir, 'reports', '001-acme.md'), 'utf8'), omittedJevReport.replace('https://example.com/jobs/one', 'https://example.com/jobs/other'));
+});
+
+
+test('invalid scorer output fails before launch and spends bounded retry allowance', { skip: !bash && 'no bash' }, t => {
+  const fx = batchFixture(t, { workerReport: omittedJevReport });
+  const run = runBatch(fx, ['--max-retries', '2'], { JEV_STUB_MODE: 'invalid' });
+  assert.match(run.state, /\tfailed\t/);
+  assert.match(run.state, /could not persist trusted JEV receipt\t1\s*$/m);
+  assert.equal(run.prompt, null, 'invalid trusted result must not launch worker');
+  const retry = runBatch(fx, ['--max-retries', '2', '--retry-failed'], { JEV_STUB_MODE: 'invalid' });
+  assert.match(retry.state, /could not persist trusted JEV receipt\t2\s*$/m);
 });

@@ -155,7 +155,10 @@ export function prepareEvaluationReport(markdown) {
   const header = headers[0]?.[1];
   if (data.jev === null) {
     if (parseJevField(header)) return { ok: false, error: 'The Jev header disagrees with jev: null in Machine Summary.' };
-    if (!/\bnot run:\s*\S|\*\*Scoring note:\*\*[^\n]*\bno Jev gate\b/i.test(evidence)) {
+    const reason = typeof data.jev_not_run_reason === 'string' ? data.jev_not_run_reason.trim() : '';
+    const gate = evidence.match(/^##[ \t]+Calibrated pre-screen \(Jev\)[^\n]*\n([\s\S]*?)(?=^##[ \t]+|$(?![\s\S]))/im)?.[1] ?? '';
+    if ((!reason || /^(?:no Jev gate|not run|none|unknown)$/i.test(reason))
+      && !/^not run:[ \t]*\S/i.test(header ?? '') && !/^[ \t]*not run:[ \t]*\S/im.test(gate)) {
       return { ok: false, error: 'Jev was not run; the report must state the not-run reason.' };
     }
     return { ok: true, markdown: withJevHeader(markdown, 'not run') };
