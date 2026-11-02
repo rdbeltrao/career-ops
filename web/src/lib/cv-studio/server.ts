@@ -42,9 +42,9 @@ function originalOf(htmlPath: string) {
  * report's company. An edited copy is never a source, because edits are always
  * made against the original the tailor wrote.
  */
-async function findTailoredHtml(n: string, slug: string): Promise<string | null> {
+async function findTailoredHtml(reportNum: string, slug: string): Promise<string | null> {
   const dir = path.join(careerOpsRoot(), "output");
-  const indexed = await pdfPathStatusForReport(n);
+  const indexed = await pdfPathStatusForReport(reportNum);
   if (indexed.status === "found") {
     const sibling = originalOf(indexed.path.replace(/\.pdf$/i, ".html"));
     if (isRegularContainedFile(sibling, dir)) return sibling;
@@ -79,7 +79,9 @@ export async function loadStudio(n: string): Promise<StudioLoad> {
   if (!/^\d+$/.test(n)) return { ok: false, reason: "no-report" };
   const id = reportIdentity(n);
   if (!id) return { ok: false, reason: "no-report" };
-  const file = await findTailoredHtml(n, id.slug);
+  // The route uses a tracker row, but the PDF index uses its report number.
+  // These differ when tracker rows are deleted or reports are renumbered.
+  const file = await findTailoredHtml(id.reportNum, id.slug);
   if (!file) return { ok: false, reason: "no-tailored-cv" };
 
   // EVIDENCE: validated tailored output is runtime user data, not a build asset.

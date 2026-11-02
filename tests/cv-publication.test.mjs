@@ -1,6 +1,6 @@
 import test from 'node:test';import assert from 'node:assert/strict';
 import fs from 'node:fs';import path from 'node:path';import os from 'node:os';
-import { parseCareerPeriod, careerChronology, validateCvPublication, validateCvChronology, reviewedCvForReport, reviewFinalPdf } from '../lib/cv-publication.mjs';
+import { parseCareerPeriod, careerChronology, criticalRequirements, validateCvPublication, validateCvChronology, reviewedCvForReport, reviewFinalPdf } from '../lib/cv-publication.mjs';
 import { reviewedCvFixture } from './fixtures/reviewed-cv.mjs';
 import { chromium } from 'playwright';
 
@@ -10,6 +10,15 @@ const job='Lead an engineering team. Improve production reliability. Partner wit
 const quotes=['Lead an engineering team','Improve production reliability','Partner with Product on priorities'];
 const payload={candidate:{name:'Ada Example'},summary:source,experience:[{company:'Example',role:'Manager',dates:'Jan 2020 – Present',bullets:[source]}],tailoring:{requirements:quotes.map(requirement=>({requirement,jdQuote:requirement,match:'supported',evidence:[{source:'facts.md',quote:source}],placements:[{section:'summary',claim:source}]}))}};
 const brief={chronology:[{company:'Example',dates:'January 2020 – Present',period:parseCareerPeriod('January 2020 – Present'),source:'facts.md'}],criticalRequirements:[],evidence:[{source:'facts.md',text:source}]};
+
+test('critical requirements tolerate empty YAML summaries and reject malformed content', () => {
+ const report = yaml => `## Machine Summary\n\n\`\`\`yaml\n${yaml}\n\`\`\``;
+ for (const yaml of ['', '# No requirements recorded yet']) assert.deepEqual(criticalRequirements(report(yaml)), []);
+ assert.deepEqual(criticalRequirements(report('requirement_importance:\n  - requirement: Lead delivery\n    jd_signal: Lead an engineering team\n    importance: critical'), job), [
+  { requirement: 'Lead delivery', jdSignal: 'Lead an engineering team', jdQuote: 'Lead an engineering team', importance: 'critical' },
+ ]);
+ assert.throws(() => criticalRequirements(report('requirement_importance: [unclosed')), { name: 'YAMLException' });
+});
 
 test('dates require a complete valid period and preserve source precision',()=>{
  for(const x of['','Present','2025','2025-13 – Present','May 2025 – March 2024'])assert.equal(parseCareerPeriod(x),null,x);
