@@ -407,6 +407,26 @@ Notes:
   cannot hide fresh or undated roles on later pages. Native "30+ Days Ago"
   labels prove that a posting is outside a narrow window such as 14 days;
   they never supply an invented exact posting date.
+- **Full-directory Workday sweeps refine large boards into bounded facet
+  slices.** Selected-facet counts belong to the broader parent query and are
+  excluded when sizing a child slice. Undated boards can fetch two staggered
+  pages at a time. Measured count gaps trigger complementary partitions and
+  enumeration against native counts before old postings are filtered out.
+  A page cap or unresolved posting-count gap keeps the board pending; a
+  successful partial read is never recorded as complete coverage.
+  Changes to retrieval policy recheck live boards while retaining verified
+  missing boards. The normal whole-run deadline still applies.
+- **Large Workday boards resume completed queries within a two-hour snapshot
+  window.** Query snapshots preserve the native posting dates captured on the
+  first read. Failed or interrupted queries are fetched again; a query stopped
+  by date cannot substitute for full count verification. Snapshots are scoped
+  to the coverage cycle and matching policy. They never mark a board complete,
+  and are cleared only after canonical persistence and the coverage-ledger save.
+- **Explicit board exclusions** belong in `portals.yml` under
+  `full_scan.excluded_boards`, a list of exact HTTPS board URLs. They apply to
+  both directory and history-derived scans and are counted in the receipt.
+  Changing this list reconciles the directory scope without discarding other
+  completed boards; legacy offset checkpoints require a restart.
 - **Invalid values fail immediately** — `--since` with no number, `--since=`,
   zero, negative, and non-finite values all exit rather than silently scanning
   without a window.

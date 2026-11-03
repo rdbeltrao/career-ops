@@ -12,8 +12,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-import { main, BATCH_ARGS } from '../auto-evaluate.mjs';
+import { delimiter, dirname, join } from 'node:path';
+import { main, BATCH_ARGS, batchEnv } from '../auto-evaluate.mjs';
 import { autoEvaluateDisabled, evaluateLockDir, evaluateLogPath, evaluateRerunMarker, startEvaluatePass } from '../lib/auto-evaluate.mjs';
 import { tryAcquireDirLockSync } from '../lib/dir-lock.mjs';
 import { main as jevRank } from '../jev-rank.mjs';
@@ -139,6 +139,25 @@ test('an automatic Jev pass hands the rows to automatic evaluation', async () =>
     const manual = [];
     await jevRank([], { dataRoot: root, out: () => {}, log: () => {}, startEvaluate: (opts) => { manual.push(opts); } });
     assert.equal(manual.length, 0, 'a manual or daily jev-rank leaves evaluation to its caller');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('the batch steps find node on PATH even when the scheduler gives no Node on PATH', async () => {
+  const env = batchEnv({ PATH: '/usr/bin:/bin', HOME: '/home/x' }, '/data', '/opt/node/bin/node');
+  assert.equal(env.PATH.split(delimiter)[0], '/opt/node/bin');
+  assert.deepEqual(env.PATH.split(delimiter).slice(1), ['/usr/bin', '/bin']);
+  assert.equal(env.CAREER_OPS_ROOT, '/data');
+  assert.equal(env.HOME, '/home/x');
+  assert.equal(batchEnv({}, '/data', '/opt/node/bin/node').PATH, '/opt/node/bin');
+  assert.equal(batchEnv({ PATH: '/opt/node/bin:/bin' }, '/data', '/opt/node/bin/node').PATH, '/opt/node/bin:/bin', 'no duplicate entry');
+
+  const root = dataRoot();
+  try {
+    const r = recorder();
+    assert.equal(await main([], { dataRoot: root, codeRoot: '/checkout', env: { PATH: '/usr/bin:/bin' }, batchRunning: () => false, ...r }), 0);
+    for (const step of r.runs) assert.equal(step.options.env.PATH.split(delimiter)[0], dirname(process.execPath));
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

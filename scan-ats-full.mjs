@@ -57,6 +57,7 @@ import { renameSyncWithRetry } from './tracker-utils.mjs';
 
 import { makeHttpCtx, fetchJson, fetchTextHead, fetchJsonWithRetry } from './providers/_http.mjs';
 import { openScanCoverage } from './lib/scan-coverage.mjs';
+import { createWorkdayQuerySnapshots } from './lib/workday-query-snapshots.mjs';
 import { createScanDeadline, withScanSignal } from './lib/scan-deadline.mjs';
 import { withConnectionScope, withAbortScope } from './providers/_connection-scope.mjs';
 import { isResolverFailure, dnsPacingStats } from './providers/_dns-cache.mjs';
@@ -185,13 +186,39 @@ export function checkpointCompatible(cp, opts) {
 export function filterFingerprints(config) {
   const titleKey = config?.title_filter_full ? 'title_filter_full' : 'title_filter';
   const fp = (v) => datasetFingerprint(sortKeys(v ?? null));
-  return {
+  const result = {
     [titleKey]: fp(resolveTitleFilterConfig(config)),
     title_filter_overrides: fp(config?.title_filter_overrides),
     location_filter: fp(config?.location_filter),
     content_filter: fp(config?.content_filter),
     domain_filter: fp(config?.domain_filter),
   };
+  const excluded = configuredExcludedBoards(config);
+  if (excluded.size) result.full_scan_excluded_boards = fp([...excluded].sort());
+  return result;
+}
+
+function canonicalBoardUrl(value) {
+  try {
+    const url = new URL(value);
+    url.search = ''; url.hash = '';
+    return url.href.replace(/\/+$/, '');
+  } catch { return String(value || '').trim(); }
+}
+
+/** Explicit board exclusions change the directory scope, never inferred identities. */
+export function configuredExcludedBoards(config) {
+  const raw = config?.full_scan?.excluded_boards;
+  if (raw === undefined) return new Set();
+  if (!Array.isArray(raw)) throw new Error('full_scan.excluded_boards must be a list of credential-free HTTPS board URLs.');
+  return new Set(raw.map(value => {
+    try {
+      if (typeof value !== 'string') throw new Error();
+      const url = new URL(value);
+      if (url.protocol !== 'https:' || url.username || url.password) throw new Error();
+      return canonicalBoardUrl(value);
+    } catch { throw new Error('full_scan.excluded_boards must be a list of credential-free HTTPS board URLs.'); }
+  }));
 }
 
 function sortKeys(v) {
@@ -948,7 +975,7 @@ export async function runSeedScan(seedId, opts, ctx, seenUrls, label) {
  * request. Known labels begin feeding the sweep automatically when a provider
  * with the same id is added later, without a tracker migration.
  */
-export async function runHistorySeedScan(seeds, providers, opts, ctx, processJobs) {
+export async function runHistorySeedScan(seeds, providers, opts, ctx, processJobs, coverage = null) {
   const selected = opts.atsExplicit
     ? seeds.filter((seed) => opts.ats.includes(seed.vendor))
     : seeds;
@@ -959,10 +986,13 @@ export async function runHistorySeedScan(seeds, providers, opts, ctx, processJob
   }
   const capped = [...grouped.values()].flatMap((group) => sampleCompanies(group, opts.limit, opts.shuffle));
   const scannable = [];
+  let directoryCovered = 0;
   for (const seed of capped) {
     const provider = providers.get(seed.vendor);
     if (!provider) continue;
     const entry = { name: seed.company, careers_url: seed.careersUrl, provider: seed.vendor };
+    if (opts.excludedBoards?.has(canonicalBoardUrl(entry.careers_url))) { directoryCovered++; continue; }
+    if (coverage?.registered(seed.vendor, boardKey(entry))) { directoryCovered++; continue; }
     try {
       // probeConfirmed: the host was verified as SuccessFactors from its page,
       // equivalent to an explicit `provider:` in portals.yml (bypasses URL detect).
@@ -971,6 +1001,7 @@ export async function runHistorySeedScan(seeds, providers, opts, ctx, processJob
   }
   let errors = 0;
   let missing = 0;
+  let pageCapped = 0;
   let attempted = 0;
   const withHostSlot = createKeyedLimiter(SINGLE_HOST_CONCURRENCY);
   // An arbitrary provider may ignore cancellation or never settle. Once one
@@ -1007,6 +1038,8 @@ export async function runHistorySeedScan(seeds, providers, opts, ctx, processJob
           : ctx;
         const jobs = await provider.fetch(entry, boardCtx);
         if (!operation.active) return;
+        if (jobs.workdayTruncated === WORKDAY_TRUNCATED_REASON.STRUCTURAL || jobs.icimsTruncated) pageCapped++;
+        else if (jobs.workdayTruncated) errors++;
         await processJobs(jobs, `${seed.vendor}-history`, provider, entry.name, () => operation.active);
       })();
       let timedOut = false;
@@ -1036,9 +1069,10 @@ export async function runHistorySeedScan(seeds, providers, opts, ctx, processJob
   return {
     total: attempted,
     derived: selected.length,
-    unsupported: capped.length - scannable.length,
+    unsupported: capped.length - scannable.length - directoryCovered,
     errors,
     missing,
+    capped: pageCapped,
   };
 }
 
@@ -1049,12 +1083,13 @@ export async function runHistorySeedScan(seeds, providers, opts, ctx, processJob
 // one company, not freeze a worker slot for the rest of a 12k-company sweep.
 const COMPANY_TIMEOUT_MS = 5 * 60_000;
 
-export function coverageBoardTimeoutMs(sourceName, pendingCount, coverageEnabled) {
+export function coverageBoardTimeoutMs(sourceName, pendingCount, coverageEnabled, completedFraction = 0) {
   // Small final Workday batches contain the large boards that could not finish
   // the broad sweep's five-minute guard. The shared scan deadline still limits
   // the entire run, including these longer fetches, to its normal work budget.
-  return coverageEnabled && sourceName === 'workday' && pendingCount > 0 && pendingCount <= CONCURRENCY * 5
-    ? 15 * 60_000 : COMPANY_TIMEOUT_MS;
+  return coverageEnabled && sourceName === 'workday' && pendingCount > 0
+    && (pendingCount <= CONCURRENCY * 5 || completedFraction >= 0.95)
+    ? 18 * 60_000 : COMPANY_TIMEOUT_MS;
 }
 
 // Run one board's unit of work. For a source that gives every tenant its own
@@ -1257,18 +1292,31 @@ async function main() {
   }
   const domainFilter = buildDomainFilter(config?.domain_filter);
   const filters = filterFingerprints(config);
-  const coverage = opts.coverageState ? await openScanCoverage(path.resolve(DATA_ROOT, opts.coverageState),
-    createHash('sha256').update(JSON.stringify({ filters, ats: [...opts.ats].sort(), sinceDays: opts.sinceDays,
+  const excludedBoards = configuredExcludedBoards(config);
+  opts.excludedBoards = excludedBoards;
+  const boardIncluded = entry => !excludedBoards.has(canonicalBoardUrl(boardKey(entry)));
+  // The ledger reconciles changed board sets. Legacy offset checkpoints need
+  // the exclusion fingerprint, while completed boards keep their valid work.
+  const coverageFilters = Object.fromEntries(Object.entries(filters).filter(([key]) => key !== 'full_scan_excluded_boards'));
+  const coverageSignature = createHash('sha256').update(JSON.stringify({ filters: coverageFilters, ats: [...opts.ats].sort(), sinceDays: opts.sinceDays,
       includeUndated: opts.includeUndated, includeBlacklisted: opts.includeBlacklisted, liveness: opts.liveness,
-      blacklist: [...loadBlacklist()] })).digest('hex')) : null;
+      blacklist: [...loadBlacklist()] })).digest('hex');
+  const coverage = opts.coverageState ? await openScanCoverage(path.resolve(DATA_ROOT, opts.coverageState), coverageSignature) : null;
   if (coverage) process.once('exit', () => coverage.close());
+  const workdaySnapshots = coverage ? createWorkdayQuerySnapshots(`${path.resolve(DATA_ROOT, opts.coverageState)}.queries`,
+    JSON.stringify({ signature: coverageSignature, cycle: coverage.summary().startedAt, policy: WORKDAY_COVERAGE_POLICY }),
+    { onError: error => console.error(`Warning: Workday query snapshots unavailable: ${error.message}`) }) : null;
   const companyLists = new Map();
   if (coverage) {
+    const knownMissing = loadDeadBoards(DEAD_BOARDS_PATH);
+    const cycleStart = Date.parse(coverage.summary().startedAt);
     for (const name of opts.ats.filter(ats => SOURCES[ats])) {
       const data = await loadCompanyList(name, SOURCES[name].dataset);
       companyLists.set(name, data);
-      coverage.register(name, data.list.map(SOURCES[name].toEntry).filter(Boolean).map(boardKey), data.status,
-        name === 'workday' ? WORKDAY_COVERAGE_POLICY : undefined);
+      const stable = [...knownMissing.values()].filter(row => row.ats === name
+        && (row.lastChecked >= cycleStart || shouldSkipDeadBoard(knownMissing, name, row.board))).map(row => row.board);
+      coverage.register(name, data.list.map(SOURCES[name].toEntry).filter(Boolean).filter(boardIncluded).map(boardKey), data.status,
+        name === 'workday' ? WORKDAY_COVERAGE_POLICY : undefined, stable);
     }
   }
   const changedFilters = changedFilterKeys(checkpoint, filters);
@@ -1419,7 +1467,10 @@ async function main() {
   let stopping = false;
   let coverageSaveError = null;
   const saveCoverage = () => {
-    try { coverage?.save(); }
+    try {
+      coverage?.save();
+      workdaySnapshots?.clearCompleted(board => !coverage.pending('workday', board));
+    }
     catch (error) {
       coverageSaveError = error.message;
       console.error(`Warning: Could not save coverage progress: ${error.message}`);
@@ -1572,7 +1623,8 @@ async function main() {
     // source finished before the checkpoint was written still contributed its
     // companies to the sweep, so it must still count toward the availability /
     // cap figures the final report and --json output show.
-    const { list, status } = companyLists.get(name) ?? await loadCompanyList(name, source.dataset);
+    const { list: datasetList, status } = companyLists.get(name) ?? await loadCompanyList(name, source.dataset);
+    const list = datasetList.filter(item => { const entry = source.toEntry(item); return !entry || boardIncluded(entry); });
     datasetStatus[name] = status;
     if (!coverage) totalCompaniesAvailable += list.length;
     if (opts.limit < list.length) capHit = true;
@@ -1602,7 +1654,7 @@ async function main() {
       startAt = checkpoint.current.resumeAt;
     }
     const entries = entriesAll.slice(startAt);
-    const companyTimeoutMs = coverageBoardTimeoutMs(name, entries.length, Boolean(coverage));
+    const companyTimeoutMs = coverageBoardTimeoutMs(name, entries.length, Boolean(coverage), coverage?.fraction(name));
     totalCompaniesScanned += entries.length;
     curEntries = entries.length; curDone = 0; curErrors = 0; curDeadSkipped = 0;
     log(`\n⚙  ${name} — ${entriesAll.length} companies${status !== 'ok' ? ` (dataset: ${status})` : ''}${startAt ? ` — resuming at ${startAt}` : ''}`);
@@ -1649,7 +1701,8 @@ async function main() {
         // per-job detail-page requests via provider.enrichDate) — runs inside
         // one watchdog, so enrichment shares the company's fetch budget.
         await boardScope(source, `${name}/${entry.name}`, companyTimeoutMs, async () => {
-          const boardCtx = { ...sourceCtx, titleWanted: title => titleFilter(title, entry.name) };
+          const boardCtx = { ...sourceCtx, titleWanted: title => titleFilter(title, entry.name),
+            ...(name === 'workday' && workdaySnapshots ? { workdayQueryCache: workdaySnapshots.board(deadBoard) } : {}) };
           // Most boards in a public directory hold nothing the title filter
           // wants; where the provider can list a board cheaply, find that out
           // before downloading every posting body.
@@ -1672,6 +1725,7 @@ async function main() {
           // (facet-split slice/depth/page budget) that a repeat run reaches
           // again, paying the same expensive split for the same result.
           if (jobs.workdayTruncated === WORKDAY_TRUNCATED_REASON.TRANSIENT) truncated.push(entry);
+          if (jobs.workdayTruncated === WORKDAY_TRUNCATED_REASON.STRUCTURAL) cappedBoards++;
           if (jobs.workdayTruncated || jobs.icimsTruncated) fullyScanned = false;
           // Ahead of processJobs, deliberately: a gated board is not merely
           // quieter but CHEAPER, since provider.enrichDate() issues a per-job
@@ -1774,6 +1828,7 @@ async function main() {
             retrySignal = signal;
             const jobs = await source.provider.fetch(entry, {
               ...sourceCtx, titleWanted: title => titleFilter(title, entry.name),
+              ...(name === 'workday' && workdaySnapshots ? { workdayQueryCache: workdaySnapshots.board(boardKey(entry)) } : {}),
             });
             recordBoardResult(deadBoards, name, boardKey(entry), 200);
             // Where a board deferred by the parallel sweep is actually decided.
@@ -1787,7 +1842,8 @@ async function main() {
               await processJobs(jobs, name, source.provider, entry.name);
             }
             if (jobs.workdayTruncated) {
-              errors++; // still not fully covered — move on
+              if (jobs.workdayTruncated === WORKDAY_TRUNCATED_REASON.STRUCTURAL) cappedBoards++;
+              else errors++; // transport remains unresolved after retry
               // A board pushed here as 'transient' can legitimately come back
               // 'structural': the retry's root crawl succeeded, the clamp got
               // detected for the first time, and the split then hit its own
@@ -1871,10 +1927,11 @@ async function main() {
   if (historySeeds.length && !stoppedByOutage && !stoppedEarly) {
     const providers = await loadProviders(PROVIDERS_DIR);
     log(`\n🌱 Application history — ${historySeeds.length} unique ATS board(s) derived locally...`);
-    const result = await runHistorySeedScan(historySeeds, providers, opts, ctx, processJobs);
+    const result = await runHistorySeedScan(historySeeds, providers, opts, ctx, processJobs, coverage);
     totalCompaniesScanned += result.total;
     totalErrors += result.errors;
     missingBoards += result.missing;
+    cappedBoards += result.capped;
     if (scanDeadline.expired()) stoppedEarly = true;
     log(`  done — ${result.total} board(s) probed, ${result.unsupported} without a scanner provider (${result.errors} errors)`);
   }
@@ -1902,7 +1959,7 @@ async function main() {
   printScanSummaryHeader('Reverse ATS Scan', date, log);
   log(`Companies scanned:  ${totalCompaniesScanned}${capHit ? ` of ${totalCompaniesAvailable} (capped)` : ''}`);
   log(`Unreachable boards: ${totalErrors}`);
-  if (cappedBoards) log(`Page-capped boards: ${cappedBoards} (partial coverage — later postings not scanned)`);
+  if (cappedBoards) log(`Incomplete boards: ${cappedBoards} (pagination limits or native posting-count gaps)`);
   // Reported whenever the gate RAN, including when it skipped nothing: a zero
   // there is the useful reading that the domain list admitted every board, and
   // silence would be indistinguishable from the gate being off.
@@ -2016,6 +2073,8 @@ async function main() {
       postingsKeptUndated: offers.filter(o => !o.postedAt).length,
       retiredBoardsSkipped: totalRetiredBoardsSkipped,
       cappedBoards,
+      workdayQuerySnapshotsReused: workdaySnapshots?.stats.hits || 0,
+      boardsExcludedByConfig: excludedBoards.size,
       // `domainFilterActive` is not derivable from the two counts: zero skipped
       // boards is equally what an absent domain_filter and a permissive one
       // produce, and a caller comparing two sweeps needs to know which.

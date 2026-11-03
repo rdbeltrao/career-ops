@@ -1419,9 +1419,11 @@ process_offer() {
   # `jev: null`. Only a scored result can skip a worker, and only when
   # --min-jev or --skip-jev-verdict asked for it.
   local jev_block="" jev_fit="" jev_verdict="" jev_blocking=""
+  local jev_result_file="" jev_receipt="" jev_reason="jev-score.mjs is not installed"
   if [[ ! -f "$PROJECT_DIR/jev-score.mjs" ]]; then
     echo "    ℹ️  jev: jev-score.mjs not found — spawning the worker without a pre-screen"
   elif [[ ! -s "$jd_file" ]]; then
+    jev_reason="no prefetched JD text"
     echo "    ℹ️  jev: no prefetched JD text — spawning the worker without a pre-screen"
   else
     local jev_job jev_out jev_err jev_status=0
@@ -1454,6 +1456,7 @@ process_offer() {
       node "$PROJECT_DIR/jev-score.mjs" --job "$jev_job" --format json > "$jev_out" 2> "$jev_err" || jev_status=$?
       case "$jev_status" in
         0)
+          jev_result_file="$jev_out"
           # fit, verdict and the blocking list on three lines; empty when unusable.
           local jev_parsed
           jev_parsed=$(node -e '
@@ -1502,17 +1505,36 @@ process_offer() {
           fi
           ;;
         2)
+          jev_reason="no OpenRouter key available"
           echo "    ℹ️  jev: no OPENROUTER_API_KEY — spawning the worker without a pre-screen"
           ;;
         *)
+          jev_reason="jev-score.mjs failed (exit $jev_status)"
           echo "    ℹ️  jev: jev-score.mjs failed (exit $jev_status: $(head -c 160 "$jev_err" 2>/dev/null | tr '\n\t' '  ')) — spawning the worker without a pre-screen"
           ;;
       esac
     else
+      jev_reason="could not build the job JSON"
       echo "    ℹ️  jev: could not build the job JSON — spawning the worker without a pre-screen"
     fi
-    rm -f "$jev_job" "$jev_out" "$jev_err"
   fi
+
+  # Keep the scorer's original JSON bound to this posting before the agent
+  # starts. The finalizer owns report JEV fields; model output is not trusted
+  # to copy (or truthfully declare the absence of) a computed result.
+  if [[ -n "$jev_result_file" || -f "$PROJECT_DIR/finalize-report-jev.mjs" ]]; then
+    jev_receipt="$LOGS_DIR/${report_num}-${id}.jev.json"
+    if ! node "$PROJECT_DIR/finalize-report-jev.mjs" record "$jev_receipt" "$url" "${jev_result_file:--}" "$jev_reason"; then
+      local jev_failed_at
+      jev_failed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+      if (( retries < MAX_RETRIES )); then retries=$((retries + 1)); fi
+      update_state_retrying "$id" "$url" "failed" "$started_at" "$jev_failed_at" "$report_num" "-" "could not persist trusted JEV receipt" "$retries" || true
+      release_report_num "$report_num"
+      rm -f "$jd_file" "${jev_job:-}" "${jev_out:-}" "${jev_err:-}"
+      return 0
+    fi
+  fi
+  rm -f "${jev_job:-}" "${jev_out:-}" "${jev_err:-}"
 
   # The batch form of the hard stop. Both gates default off, both need a
   # scored result: a pre-screen that did not run never skips anything.
@@ -2019,6 +2041,18 @@ process_offer() {
       release_report_num "$report_num"
       echo "    ❌ Failed (no report file on disk, attempt $retries)"
       return 0
+    fi
+
+    # Verify report identity and persist trusted JEV before accepting completion.
+    # A failed finalization leaves the job retryable, never silently completed.
+    if [[ -n "$jev_receipt" ]]; then
+      if ! node "$PROJECT_DIR/finalize-report-jev.mjs" finalize "$REPORTS_DIR" "$report_num" "$url" "$jev_receipt"; then
+        if (( retries < MAX_RETRIES )); then retries=$((retries + 1)); fi
+        update_state_retrying "$id" "$url" "failed" "$started_at" "$completed_at" "$report_num" "-" "JEV report finalization failed" "$retries" || true
+        release_report_num "$report_num"
+        echo "    ❌ Failed (JEV report finalization)"
+        return 0
+      fi
     fi
 
     # Check min-score gate

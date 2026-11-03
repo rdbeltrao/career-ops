@@ -109,6 +109,7 @@ score: 4.2
 via: null
 final_decision: Apply
 jev: null
+jev_not_run_reason: provider unavailable
 \`\`\`
 
 ${['A', 'B', 'C', 'D', 'E', 'F', 'G'].map(letter => `## ${letter}) Evaluation\nEvidence.`).join('\n\n')}`;

@@ -1056,7 +1056,7 @@ try {
       total: 1_000_000,
       jobPostings: Array.from({ length: 20 }, (_, i) => ({ title: `Fresh ${i}`, externalPath: `/job/board/fresh-${i}`, postedOn: 'Posted Today' })),
     }), { sinceMs: datedCapSinceMs, syntheticEntries: true })));
-  if (datedCapWarnings.some(w => /truncated at \d+ pages \(2000 of 1000000 jobs\)/.test(w))) {
+  if (datedCapWarnings.some(w => /truncated at \d+ pages \(30000 of 1000000 jobs\)/.test(w))) {
     pass('workday.fetch() cap-hit warning reports the short "truncated at N pages" form');
   } else {
     fail(`workday dated cap-hit warning mismatch: ${JSON.stringify(datedCapWarnings)}`);

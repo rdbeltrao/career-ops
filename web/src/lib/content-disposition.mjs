@@ -12,3 +12,13 @@ export function inlineDisposition(filename) {
   const encoded = encodeURIComponent(filename).replace(/['()*]/g, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`);
   return `inline; filename="${ascii}"; filename*=UTF-8''${encoded}`;
 }
+
+/** Read the Unicode filename emitted by inlineDisposition, with a safe fallback. */
+export function downloadFilename(disposition, fallback = "download.pdf") {
+  const header = disposition ?? "";
+  const encoded = /filename\*=UTF-8''([^;]+)/i.exec(header)?.[1];
+  if (encoded) {
+    try { return decodeURIComponent(encoded); } catch { /* try the plain filename */ }
+  }
+  return /filename="((?:\\.|[^"\\])*)"/i.exec(header)?.[1]?.replace(/\\(.)/g, "$1") || fallback;
+}

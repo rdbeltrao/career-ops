@@ -188,8 +188,22 @@ try {
   );
   assert.equal(calls.length, 1);
   assert.equal(processed[0].source, 'lever-history');
-  assert.deepEqual(run, { total: 1, derived: 2, unsupported: 1, errors: 0, missing: 0 });
+  assert.deepEqual(run, { total: 1, derived: 2, unsupported: 1, errors: 0, missing: 0, capped: 0 });
   pass('history scan fetches only locally installed providers and keeps unsupported host labels inert');
+
+  for (const reason of ['structural', 'transient']) {
+    let processedPartial = false;
+    const partial = await runHistorySeedScan(
+      [{ company: 'Acme', vendor: 'workday', careersUrl: 'https://acme.wd5.myworkdayjobs.com/careers' }],
+      new Map([['workday', { detect: () => ({}), fetch: async () => Object.assign([], { workdayTruncated: reason }) }]]),
+      { atsExplicit: false, ats: [], limit: Infinity, shuffle: false }, {},
+      async () => { processedPartial = true; },
+    );
+    assert.equal(partial.capped, reason === 'structural' ? 1 : 0);
+    assert.equal(partial.errors, reason === 'transient' ? 1 : 0);
+    assert.equal(processedPartial, true);
+  }
+  pass('history scans retain partial results and distinguish count gaps from transport failures');
 
   let lateProcessCalls = 0;
   const slowProvider = {

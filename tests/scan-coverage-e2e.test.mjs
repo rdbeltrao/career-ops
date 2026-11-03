@@ -69,7 +69,7 @@ test('Workday recovery and history scans avoid detail requests for unrelated tit
     fs.mkdirSync(path.join(root, 'data/cache/ats-companies'), { recursive: true });
     fs.writeFileSync(path.join(root, 'data/cache/ats-companies/workday.json'), JSON.stringify(['acme|wd5|careers']));
     fs.writeFileSync(path.join(root, 'portals.yml'), 'title_filter:\n  positive: [Engineer]\n');
-    fs.writeFileSync(path.join(root, 'data/scan-history.tsv'), 'url\tfirst_seen\tportal\ttitle\tcompany\tstatus\tlocation\nhttps://acme.wd5.myworkdayjobs.com/careers/job/Remote/Old_R999\t2026-09-01\tworkday\tArchivist\tAcme\tadded\tRemote\n');
+    fs.writeFileSync(path.join(root, 'data/scan-history.tsv'), 'url\tfirst_seen\tportal\ttitle\tcompany\tstatus\tlocation\nhttps://acme.wd5.myworkdayjobs.com/careers/job/Remote/Old_R999\t2026-09-01\tworkday\tArchivist\tAcme\tadded\tRemote\nhttps://acme.wd5.myworkdayjobs.com/other-careers/job/Remote/Old_R998\t2026-09-01\tworkday\tArchivist\tAcme\tadded\tRemote\n');
     const scanner = path.join(codeRoot, 'scan-ats-full.mjs');
     const log = path.join(root, 'details.json');
     const launcher = path.join(root, 'launch.mjs');
@@ -98,9 +98,40 @@ test('Workday recovery and history scans avoid detail requests for unrelated tit
       env: { ...process.env, CAREER_OPS_ROOT: root, CAREER_OPS_DATA_DIR: '', CAREER_OPS_PORTALS: '', CAREER_OPS_PIPELINE: '', CAREER_OPS_SCAN_HISTORY: '', CAREER_OPS_TRACKER: '', CAREER_OPS_NO_AUTO_JEV: '1' },
     });
     assert.equal(result.status, 0, result.stderr);
-    assert.deepEqual(JSON.parse(fs.readFileSync(log)), ['Engineer', 'Engineer', 'Engineer'], 'initial, retry and history scans should enrich only wanted titles');
+    assert.deepEqual(JSON.parse(fs.readFileSync(log)), ['Engineer', 'Engineer', 'Engineer'], 'initial/retry scans and only the non-directory history board should enrich wanted titles');
     const receipt = JSON.parse(result.stdout);
     assert.equal(receipt.coverage.remaining, 0);
     assert.equal(receipt.postingsKept, 1, 'retry retains the match without duplicating it');
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test('Workday count gaps remain pending and are reported as caps rather than unreachable boards', () => {
+  for (const retryFirst of [false, true]) {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'scan-workday-count-gap-'));
+    try {
+      fs.mkdirSync(path.join(root, 'data/cache/ats-companies'), { recursive: true });
+      fs.writeFileSync(path.join(root, 'data/cache/ats-companies/workday.json'), JSON.stringify(['acme|wd5|careers']));
+      fs.writeFileSync(path.join(root, 'portals.yml'), 'title_filter:\n  positive: [Engineer]\n');
+      const scanner = path.join(codeRoot, 'scan-ats-full.mjs');
+      const launcher = path.join(root, 'launch.mjs');
+      fs.writeFileSync(launcher, `
+        import workday from ${JSON.stringify(pathToFileURL(path.join(codeRoot, 'providers/workday.mjs')).href)};
+        let calls = 0;
+        workday.fetch = async () => Object.assign([], {
+          workdayTruncated: ${retryFirst} && ++calls === 1 ? 'transient' : 'structural',
+        });
+        process.argv[1] = ${JSON.stringify(scanner)};
+        await import(${JSON.stringify(pathToFileURL(scanner).href)});
+      `);
+      const result = spawnSync(process.execPath, [launcher, '--ats', 'workday', '--since', '14', '--coverage-state', 'data/cache/coverage.json', '--include-undated', '--json'], {
+        encoding: 'utf8', timeout: 15_000,
+        env: { ...process.env, CAREER_OPS_ROOT: root, CAREER_OPS_DATA_DIR: '', CAREER_OPS_PORTALS: '', CAREER_OPS_PIPELINE: '', CAREER_OPS_SCAN_HISTORY: '', CAREER_OPS_TRACKER: '', CAREER_OPS_NO_AUTO_JEV: '1' },
+      });
+      assert.equal(result.status, 0, result.stderr);
+      const receipt = JSON.parse(result.stdout);
+      assert.equal(receipt.coverage.remaining, 1);
+      assert.equal(receipt.cappedBoards, 1, 'both initial and recovered structural caps must be visible');
+      assert.equal(receipt.unreachableBoards, 0, 'a readable board with a count gap is not unreachable');
+    } finally { fs.rmSync(root, { recursive: true, force: true }); }
+  }
 });

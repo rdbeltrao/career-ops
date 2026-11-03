@@ -56,7 +56,7 @@ ${functionCode('has_report_file')}
 release_report_num() { printf '%s' "$1" > released; }
 is_decimal_number() { [[ "$1" =~ ^[0-9]+([.][0-9]+)?$ ]]; }
 handle_result() {
-  local id=1 url=https://jobs.example.test/1 started_at=start completed_at=end report_num=042 retries=0
+  local id=1 url=https://jobs.example.test/1 started_at=start completed_at=end report_num=042 retries=0 jev_receipt=""
 ${resultCode}
 }
 handle_result

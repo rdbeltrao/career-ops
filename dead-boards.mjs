@@ -1,5 +1,5 @@
 // Persistent board-existence memory for reverse ATS sweeps (#2840).
-// Only a real HTTP 404 may advance a miss counter. Throttles, transport
+// Only HTTP 404 or 410 may advance a miss counter. Throttles, transport
 // failures and DNS errors mean "unknown", never "dead".
 
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
@@ -40,7 +40,7 @@ export function recordBoardResult(rows, ats, board, status, now = Date.now()) {
     return;
   }
   const previous = rows.get(rowKey);
-  if (status !== 404) {
+  if (status !== 404 && status !== 410) {
     if (!previous || previous.misses < DEAD_BOARD_MISSES) {
       rows.delete(rowKey);
     } else {

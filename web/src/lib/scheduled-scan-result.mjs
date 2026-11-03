@@ -27,13 +27,15 @@ export function scheduledScanResult(engine, stdout) {
     if (datasets.length && datasets.every(([, status]) => status === "empty")) failed = true;
     if (receipt.unreachableBoards > 0) warnings.push(`${receipt.unreachableBoards} boards unreachable.`);
     if (receipt.missingBoards > 0) details.push(`${receipt.missingBoards} boards returned HTTP 404 or 410 (not found or removed).`);
+    if (receipt.retiredBoardsSkipped > 0) details.push(`${receipt.retiredBoardsSkipped} quarantined board${receipt.retiredBoardsSkipped === 1 ? '' : 's'} skipped pending periodic recheck.`);
+    if (receipt.boardsExcludedByConfig > 0) details.push(`${receipt.boardsExcludedByConfig} board exclusion${receipt.boardsExcludedByConfig === 1 ? '' : 's'} configured in saved scan settings.`);
     if (receipt.coverage) {
       const { companiesCompleted, companiesTotal, remaining } = receipt.coverage;
       details.push(`Directory coverage: ${companiesCompleted} of ${companiesTotal} boards checked in this cycle.`);
       if (remaining > 0) warnings.push(`${remaining} boards remain; the next run continues saved progress and retries unresolved boards.`);
     }
     if (receipt.coverageSaveError) warnings.push("Coverage progress could not be saved; the next run will revisit boards. Saved matches were retained.");
-    if (receipt.cappedBoards > 0) warnings.push(`${receipt.cappedBoards} boards reached their page limit.`);
+    if (receipt.cappedBoards > 0) warnings.push(`${receipt.cappedBoards} boards have incomplete pagination or native posting-count gaps.`);
     if (receipt.postingsDroppedNoDate > 0) warnings.push(`${receipt.postingsDroppedNoDate} posting${receipt.postingsDroppedNoDate === 1 ? "" : "s"} excluded because no posting date was available.`);
     if (receipt.postingsKeptUndated > 0) warnings.push(`${receipt.postingsKeptUndated} matching role${receipt.postingsKeptUndated === 1 ? "" : "s"} kept with unknown posting dates; freshness could not be verified.`);
   } else {

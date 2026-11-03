@@ -30,8 +30,9 @@ test('history-derived boards honor the same cancellation signal', async () => {
 
 test('final Workday recovery still obeys the normal scan deadline', async () => {
   const timeout = coverageBoardTimeoutMs('workday', 57, true);
-  assert.equal(timeout, 15 * 60_000);
+  assert.equal(timeout, 18 * 60_000);
   assert.equal(coverageBoardTimeoutMs('workday', 101, true), 5 * 60_000);
+  assert.equal(coverageBoardTimeoutMs('workday', 135, true, 0.98), 18 * 60_000);
   assert.equal(coverageBoardTimeoutMs('lever', 57, true), 5 * 60_000);
   assert.equal(coverageBoardTimeoutMs('workday', 57, false), 5 * 60_000);
   const deadline = createScanDeadline(Date.now() + 20);

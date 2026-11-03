@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { evaluationReportState, readReportJev, prepareEvaluationReport, withJevHeader } from '../lib/evaluation-report.mjs';
+import { evaluationReportState, readReportJev, prepareEvaluationReport, reportEvidence, withJevHeader } from '../lib/evaluation-report.mjs';
 
 const report = (jev = '  fit: 78\n  score: 4.1\n  verdict: apply', extra = '') => `# Evaluation: Acme — Manager
 
@@ -51,7 +51,7 @@ test('contradictory, malformed and missing Jev cannot be persisted', () => {
 
 test('explicit not-run requires a reason and does not become a zero or older rating', () => {
   assert.match(prepareEvaluationReport(report('null')).error, /not-run reason/);
-  const markdown = report('null', '**Scoring note:** no Jev gate\nnot run: provider unavailable');
+  const markdown = report('null', '**Jev:** not run: provider unavailable');
   assert.equal(prepareEvaluationReport(markdown).ok, true);
   assert.equal(readReportJev(markdown).status, 'not-run');
   assert.equal(readReportJev(markdown).jev, null);
@@ -76,7 +76,29 @@ test('archived JD and unrelated fenced examples cannot supply a Jev rating', () 
   assert.equal(readReportJev('Jev fit 60 maybe\nJev fit 90 apply').status, 'invalid');
 });
 
+test('redacting long archived postings preserves UTF-16 offsets and newlines', () => {
+  const archived = `## Job Description (archived verbatim)\n${'Résumé 😀 candidate text. '.repeat(10000)}\n\n`;
+  const fenced = '```text\n**Jev:** 5/5 (fit 100, apply)\n```';
+  const tail = '\n\n**Jev:** 2/5 (fit 40, maybe)\n';
+  const markdown = `# Report\n${archived}## A) Role Summary\n${fenced}${tail}`;
+  const evidence = reportEvidence(markdown.replace(/\n/g, '\r\n'));
+  const blanked = text => text.replace(/[^\n]/g, ' ');
+  assert.equal(evidence, `# Report\n${blanked(archived)}## A) Role Summary\n${blanked(fenced)}${tail}`);
+  assert.equal(evidence.indexOf('**Jev:**'), markdown.lastIndexOf('**Jev:**'));
+  assert.deepEqual(readReportJev(markdown).jev, { fit: 40, score: 2, verdict: 'maybe' });
+  assert.ok(withJevHeader(markdown, '3/5 (fit 60, maybe)').includes(archived));
+});
+
 test('canonicalizing a late header does not modify archived JD text', () => {
   const markdown = report(undefined, '**Jev:** 4.1/5 (fit 78, apply)').replace('## Machine Summary', '## Job Description (archived verbatim)\n**Jev:** 1/5 (fit 1, skip)\n\n## Machine Summary');
   assert.match(withJevHeader(markdown, '4.1/5 (fit 78, apply)'), /## Job Description \(archived verbatim\)\n\*\*Jev:\*\* 1\/5 \(fit 1, skip\)/);
+});
+
+
+test('unrelated not-run text cannot excuse missing JEV evidence', () => {
+  const markdown = report('null', '**Jev:** not run\n**Scoring note:** no Jev gate') + '\n## Keyword Coverage\nnot run: no tailored CV\n';
+  assert.match(prepareEvaluationReport(markdown).error, /not-run reason/);
+  const gate = report('null') + '\n## Calibrated pre-screen (Jev)\n\nnot run: provider unavailable\n';
+  assert.equal(prepareEvaluationReport(gate).ok, true);
+  assert.equal(prepareEvaluationReport(report('null').replace('jev: null', 'jev: null\njev_not_run_reason: provider unavailable')).ok, true);
 });

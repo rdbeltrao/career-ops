@@ -37,16 +37,18 @@ test("no company coverage is a failed scan", () => {
 
 test("directory progress, missing boards and unknown dates are reported separately", () => {
   const result = scheduledScanResult("full", JSON.stringify({ postingsKept: 2, companiesScanned: 60, companiesAvailable: 160,
-    missingBoards: 4, unreachableBoards: 1, postingsKeptUndated: 1, coverage: { companiesTotal: 160, companiesCompleted: 159, remaining: 1 } }));
+    missingBoards: 4, unreachableBoards: 1, cappedBoards: 2, postingsKeptUndated: 1, coverage: { companiesTotal: 160, companiesCompleted: 159, remaining: 1 } }));
   assert.equal(result.state, "partial");
   assert.match(result.message, /4 boards returned HTTP 404 or 410/);
   assert.match(result.message, /1 boards unreachable/);
+  assert.match(result.message, /2 boards have incomplete pagination or native posting-count gaps/);
   assert.match(result.message, /159 of 160 boards checked/);
   assert.match(result.message, /next run continues saved progress/);
   assert.match(result.message, /1 matching role kept with unknown posting dates/);
   const complete = scheduledScanResult("full", JSON.stringify({ postingsKept: 0, companiesScanned: 0, missingBoards: 4,
-    coverage: { companiesTotal: 4, companiesCompleted: 4, remaining: 0 } }));
+    boardsExcludedByConfig: 1, coverage: { companiesTotal: 4, companiesCompleted: 4, remaining: 0 } }));
   assert.equal(complete.state, "success", 'confirmed obsolete boards are not a transient outage');
+  assert.match(complete.message, /1 board exclusion configured/);
   const unsaved = scheduledScanResult("full", JSON.stringify({ postingsKept: 2, coverageSaveError: "EACCES" }));
   assert.equal(unsaved.state, "partial");
   assert.equal(unsaved.rolesFound, 2);
@@ -59,6 +61,19 @@ test("portal receipt explains zero matches and preserves saved jobs when some so
   assert.equal(result.rolesFound, 2);
   assert.match(result.message, /104 jobs read, 99 filtered out, 3 already known/);
   assert.match(result.message, /LinkedIn sign-in required/);
+});
+
+test("quarantined boards are reported separately without making a completed scan partial", () => {
+  for (const count of [1, 3]) {
+    const result = scheduledScanResult("full", JSON.stringify({ postingsKept: 0, companiesScanned: 2,
+      companiesAvailable: count + 2, retiredBoardsSkipped: count,
+      coverage: { companiesTotal: count + 2, companiesCompleted: count + 2, remaining: 0 } }));
+    assert.equal(result.state, "success");
+    assert.match(result.message, new RegExp(`${count} quarantined board${count === 1 ? '' : 's'} skipped pending periodic recheck`));
+    assert.doesNotMatch(result.message, /unreachable|returned HTTP|board exclusions/);
+  }
+  const olderReceipt = scheduledScanResult("full", JSON.stringify({ postingsKept: 0, companiesScanned: 2 }));
+  assert.doesNotMatch(olderReceipt.message, /quarantined/);
 });
 
 test("LinkedIn login failures provide recovery without authwall tracking URLs", () => {
