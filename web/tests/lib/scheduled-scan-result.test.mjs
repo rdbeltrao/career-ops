@@ -63,6 +63,19 @@ test("portal receipt explains zero matches and preserves saved jobs when some so
   assert.match(result.message, /LinkedIn sign-in required/);
 });
 
+test("quarantined boards are reported separately without making a completed scan partial", () => {
+  for (const count of [1, 3]) {
+    const result = scheduledScanResult("full", JSON.stringify({ postingsKept: 0, companiesScanned: 2,
+      companiesAvailable: count + 2, retiredBoardsSkipped: count,
+      coverage: { companiesTotal: count + 2, companiesCompleted: count + 2, remaining: 0 } }));
+    assert.equal(result.state, "success");
+    assert.match(result.message, new RegExp(`${count} quarantined board${count === 1 ? '' : 's'} skipped pending periodic recheck`));
+    assert.doesNotMatch(result.message, /unreachable|returned HTTP|board exclusions/);
+  }
+  const olderReceipt = scheduledScanResult("full", JSON.stringify({ postingsKept: 0, companiesScanned: 2 }));
+  assert.doesNotMatch(olderReceipt.message, /quarantined/);
+});
+
 test("LinkedIn login failures provide recovery without authwall tracking URLs", () => {
   const result = scheduledScanResult("linkedin", JSON.stringify({ version: "careerops.scan.receipt@1", scanned: 1, found: 0, added: 0,
     errors: [{ error: "LinkedIn asked for a login or a checkpoint at https://www.linkedin.com/authwall?trk=private" }] }));
