@@ -90,11 +90,11 @@ test('batch/batch-prompt.md loads _context.md, carries jev: in the schema and ne
 // ── B4: the loaders ────────────────────────────────────────────────────────
 
 import { spawnSync } from 'node:child_process';
-import { chmodSync, symlinkSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { delimiter } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { getBash, toBashPath } from './helpers.mjs';
+import { getBash, toBashPath, linkNodeModules } from './helpers.mjs';
 
 const or = await import(pathToFileURL(join(ROOT, 'openrouter-runner.mjs')).href);
 // The updater never ships web/; a CLI-only checkout has no machine-summary.mjs (#3269).
@@ -279,8 +279,7 @@ function batchFixture(t, { jevStub = true, context = false, workerReport = null 
   for (const rel of ['lib/is-main-module.mjs', 'lib/context-evidence.mjs', 'lib/context-library.mjs']) writeFileSync(join(dir, rel), read(rel));
   writeFileSync(join(dir, 'context-evidence.mjs'), read('context-evidence.mjs'));
   for (const rel of ['finalize-report-jev.mjs', 'url-key.mjs', 'lib/report-jev-write.mjs', 'lib/evaluation-report.mjs', 'lib/yaml-document.mjs', 'lib/linkedin-url.mjs']) writeFileSync(join(dir, rel), read(rel));
-  mkdirSync(join(dir, 'node_modules'), { recursive: true });
-  symlinkSync(join(ROOT, 'node_modules', 'js-yaml'), join(dir, 'node_modules', 'js-yaml'), 'junction');
+  assert.equal(linkNodeModules(dir), null);
   writeFileSync(join(dir, 'reserve-report-num.mjs'), "if (!process.argv.includes('--release')) console.log('001');\n");
   for (const name of ['merge-tracker.mjs', 'reconcile-pipeline.mjs', 'verify-pipeline.mjs']) writeFileSync(join(dir, name), '// Not under test here.\n');
   if (context) writeFileSync(join(dir, 'modes', '_context.md'), '# Fit profile\n\nCONTEXT_SENTINEL_TARGETING across five teams of 20.\n');

@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { execFileSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { stampReportJev } from '../lib/report-jev-write.mjs';
 import { machineSummary, readReportJev, prepareEvaluationReport } from '../lib/evaluation-report.mjs';
 import { recordJevReceipt, finalizeReportJev } from '../finalize-report-jev.mjs';
@@ -11,6 +13,17 @@ import { SYSTEM_PATHS } from '../lib/update-manifest.mjs';
 const url = 'https://example.test/jobs/1';
 const result = { model: 'typesafe/jev-test', fit: 56, score: 3.2, verdict: 'maybe', blocking: ['location_ok=no'], reasons: { location_ok: 'no', team_type: 'product' } };
 const receipt = { url, result };
+
+test('finalizer help exits successfully without creating a receipt', t => {
+  const root = mkdtempSync(join(tmpdir(), 'jev-help-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const receiptFile = join(root, 'receipt.json');
+  for (const flag of ['--help', '-h']) {
+    const output = execFileSync(process.execPath, [fileURLToPath(new URL('../finalize-report-jev.mjs', import.meta.url)), flag, receiptFile, url, '-', 'provider unavailable'], { cwd: root, encoding: 'utf8' });
+    assert.match(output, /^Usage:/);
+    assert.equal(existsSync(receiptFile), false);
+  }
+});
 const report = (jev = 'null') => `# Evaluation: Acme — Manager
 **Score:** 3.4/5
 **URL:** ${url}

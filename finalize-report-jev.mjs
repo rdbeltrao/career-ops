@@ -38,7 +38,8 @@ export function finalizeReportJev(reportsDir, reportNum, url, receiptFile) {
 if (isMainModule(import.meta.url)) {
   try {
     const [command, ...args] = process.argv.slice(2);
-    if (command === 'record' && args.length === 4) recordJevReceipt(args[0], args[1], args[2], args[3]);
+    if (command === '--help' || command === '-h') console.log('Usage: finalize-report-jev.mjs record <receipt> <url> <result-json|-> <reason> | finalize <reports-dir> <number> <url> <receipt>');
+    else if (command === 'record' && args.length === 4) recordJevReceipt(args[0], args[1], args[2], args[3]);
     else if (command === 'finalize' && args.length === 4) finalizeReportJev(...args);
     else throw new Error('Usage: finalize-report-jev.mjs record <receipt> <url> <result-json|-> <reason> | finalize <reports-dir> <number> <url> <receipt>');
   } catch (error) { console.error(error.message); process.exitCode = 1; }
