@@ -441,12 +441,18 @@ function datetimeFirst(root) {
   return /^\d{4}-\d{2}-\d{2}/.test(value) ? value.slice(0, 10) : '';
 }
 
+// A LinkedIn job id is digits only. An id attribute that is not (seen live:
+// data-job-id="search") would otherwise become the posting URL
+// /jobs/view/search/, so every candidate is checked and a card with no numeric
+// id anywhere is skipped.
+const NUMERIC_ID_RE = /^\d+$/;
+
 function cardId(node) {
-  for (const attr of ['data-occludable-job-id', 'data-job-id']) {
-    if (node.attrs[attr]) return node.attrs[attr].trim();
+  const candidates = [node.attrs['data-occludable-job-id'], node.attrs['data-job-id'], selectOne(node, '[data-job-id]')?.attrs['data-job-id']];
+  for (const value of candidates) {
+    const id = value?.trim();
+    if (id && NUMERIC_ID_RE.test(id)) return id;
   }
-  const inner = selectOne(node, '[data-job-id]');
-  if (inner?.attrs['data-job-id']) return inner.attrs['data-job-id'].trim();
   const link = selectOne(node, 'a[href*="/jobs/view/"]');
   const m = link ? JOB_ID_RE.exec(link.attrs.href ?? '') : null;
   return m ? m[1] : '';

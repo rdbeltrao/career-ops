@@ -226,6 +226,18 @@ test('parseCards reads id, title, company, location and date from the synthetic 
   assert.equal(cards[2].postedDate, '');
 });
 
+test('parseCards drops a card whose id attribute is not a numeric job id', () => {
+  // Seen once in a live run: LinkedIn rendered a card with data-job-id="search",
+  // which became the posting URL https://www.linkedin.com/jobs/view/search/.
+  const html = `<ul>
+    <div class="job-card-container" data-job-id="search"><a class="job-card-list__title--link" href="/jobs/search/">Senior Manager</a></div>
+    <div class="job-card-container" data-job-id="4486000001"><a class="job-card-list__title--link" href="/jobs/view/4486000001/">Engineering Manager</a></div>
+    <li data-occludable-job-id="urn:li:job:1"><a href="/jobs/view/4486000002/">Head of Engineering</a></li>
+  </ul>`;
+  assert.deepEqual(parseCards(html).map((c) => c.id), ['4486000001', '4486000002'],
+    'a non-numeric attribute falls through to the href; a card with no numeric id anywhere is skipped');
+});
+
 test('parseCards on real markup reads the time tag and leaves promoted cards undated', () => {
   const cards = parseCards(fixture('list-real.html'));
   assert.deepEqual(cards.map((c) => c.id), ['4480393707', '4479350977']);
