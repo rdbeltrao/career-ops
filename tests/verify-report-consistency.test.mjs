@@ -16,7 +16,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import {
-  checkReport, clauseEvidenced, countryOf, headerWorkAuth, isAuthorized, readProfileLocation, verdictText, verifyReportConsistency, withoutClauses,
+  checkReport, clauseEvidenced, countryOf, daysBetween, headerDate, headerWorkAuth, isAuthorized, readProfileLocation, verdictText, verifyReportConsistency, withoutClauses,
 } from '../verify-report-consistency.mjs';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -395,4 +395,60 @@ test('without-clause: "people" and "hiring" in an Evidence cell no longer eviden
   assert.equal(clauseEvidenced({ nouns: ['headcount'] }, table), false);
   const evidenced = { cols: { evidence: 2 }, rows: [['Req', 'Strong', 'Throughput up 2.6x at constant team size (_context.md:12)']] };
   assert.equal(clauseEvidenced({ nouns: ['headcount'] }, evidenced), true);
+});
+
+// The report fixture's header is dated 2026-11-01; posting-age findings count from it.
+const AGE_ENTRY = 'Evergreen or re-listed requisition (posting-age.mjs): first posted 2026-07-01 (scan-history title identity), 123 days before 2026-11-01; re-listed 3 times between 2026-07-01 and 2026-09-20 (detect-reposts.mjs). Verdict capped at Consider; Block G at most Proceed with Caution.';
+
+test('posting-age-hard-stop-missing: an old posting_first_seen or a repost_count of 3 without the evergreen entry', () => {
+  const old = checkReport(report({ yaml: { final_decision: 'Consider', posting_first_seen: '2026-07-01', repost_count: 1 } }));
+  assert.deepEqual(kinds(old), ['posting-age-hard-stop-missing']);
+  assert.match(old.findings[0].detail, /123 days before the report date 2026-11-01/);
+  assert.match(old.findings[0].detail, /posting-age\.mjs/);
+  const reposted = checkReport(report({ yaml: { final_decision: 'Consider', posting_first_seen: '2026-10-20', repost_count: 3 } }));
+  assert.deepEqual(kinds(reposted), ['posting-age-hard-stop-missing']);
+  assert.match(reposted.findings[0].detail, /repost_count 3 reaches 3/);
+  const otherStop = checkReport(report({ yaml: { final_decision: 'Research first', posting_first_seen: '2026-07-01', repost_count: 3, hard_stops: ['JD requires 18 direct reports; context records 9'] } }));
+  assert.deepEqual(kinds(otherStop), ['posting-age-hard-stop-missing'], 'a stack or span hard stop does not stand in for the evergreen one');
+});
+
+test('posting-age: the evergreen entry with Consider and Proceed with Caution is consistent; recent, unknown and overridden postings pass', () => {
+  const capped = checkReport(report({ yaml: { final_decision: 'Consider', legitimacy_tier: 'Proceed with Caution', posting_first_seen: '2026-07-01', repost_count: 3, hard_stops: [AGE_ENTRY] } }));
+  assert.deepEqual(kinds(capped), []);
+  const recent = checkReport(report({ yaml: { final_decision: 'Apply', posting_first_seen: '2026-10-20', repost_count: 1 } }));
+  assert.deepEqual(kinds(recent), []);
+  const edge = checkReport(report({ yaml: { final_decision: 'Apply', posting_first_seen: '2026-09-02', repost_count: 2 } }));
+  assert.deepEqual(kinds(edge), [], 'exactly 60 days and two listings are the Medium signal, not the hard stop');
+  const unknown = checkReport(report({ yaml: { final_decision: 'Apply', posting_first_seen: null, repost_count: 0 } }));
+  assert.deepEqual(kinds(unknown), []);
+  const legacy = checkReport(report({ yaml: { final_decision: 'Apply' } }));
+  assert.deepEqual(kinds(legacy), [], 'a report written before the fields existed is not flagged');
+  const overridden = checkReport(report({ yaml: { final_decision: 'Apply', posting_first_seen: '2026-07-01', repost_count: 3, soft_gaps: [`overridden: ${AGE_ENTRY}`] } }));
+  assert.deepEqual(kinds(overridden), [], 'after "apply anyway" the entry lives in soft_gaps with the overridden: prefix');
+});
+
+test('posting-age-cap and posting-age-legitimacy: the evergreen entry caps the verdict at Consider and Block G at Proceed with Caution', () => {
+  const apply = checkReport(report({ yaml: { final_decision: 'Apply', legitimacy_tier: 'Proceed with Caution', posting_first_seen: '2026-07-01', repost_count: 3, hard_stops: [AGE_ENTRY] } }));
+  assert.deepEqual(kinds(apply), ['apply-with-hard-stops', 'posting-age-cap']);
+  assert.match(apply.findings.find((f) => f.kind === 'posting-age-cap').detail, /caps the verdict at Consider/);
+  const high = checkReport(report({ yaml: { final_decision: 'Consider', legitimacy_tier: 'High Confidence', posting_first_seen: '2026-07-01', repost_count: 3, hard_stops: [AGE_ENTRY] } }));
+  assert.deepEqual(kinds(high), ['posting-age-legitimacy']);
+  assert.match(high.findings[0].detail, /Proceed with Caution/);
+  const handWritten = checkReport(report({ yaml: { final_decision: 'Apply', legitimacy_tier: 'Proceed with Caution', hard_stops: ['Role re-listed 3 times since July'] } }));
+  assert.ok(kinds(handWritten).includes('posting-age-cap'), 'the pre-script wording is recognised too');
+});
+
+test('posting-age-value: a malformed date or count is a finding; the header date and today stand in for each other', () => {
+  const badDate = checkReport(report({ yaml: { final_decision: 'Consider', posting_first_seen: 'July 2026', repost_count: 0 } }));
+  assert.deepEqual(kinds(badDate), ['posting-age-value']);
+  const badCount = checkReport(report({ yaml: { final_decision: 'Consider', posting_first_seen: '2026-10-20', repost_count: 'three' } }));
+  assert.deepEqual(kinds(badCount), ['posting-age-value']);
+  assert.equal(headerDate('**Date:** 2026-11-01\n'), '2026-11-01');
+  assert.equal(headerDate('**Date:** 1 Nov 2026\n'), null);
+  assert.equal(headerDate('no header'), null);
+  assert.equal(daysBetween('2026-07-01', '2026-11-01'), 123);
+  assert.equal(daysBetween('x', '2026-11-01'), null);
+  const noHeader = report({ yaml: { final_decision: 'Consider', posting_first_seen: '2026-07-01', repost_count: 1 } }).replace(/^\*\*Date:\*\*.*$/m, '');
+  assert.deepEqual(kinds(checkReport(noHeader, { today: '2026-08-15' })), [], '45 days by today');
+  assert.deepEqual(kinds(checkReport(noHeader, { today: '2026-09-15' })), ['posting-age-hard-stop-missing'], '76 days by today');
 });

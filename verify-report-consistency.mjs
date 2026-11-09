@@ -24,6 +24,20 @@
  *   apply-with-permit-question `final_decision: Apply` while `work_auth` is
  *                             `permit_question` (the application waits for the
  *                             recruiter's answer)
+ *   posting-age-hard-stop-missing `posting_first_seen` is more than 60 days before
+ *                             the report's `**Date:**` (today when the header
+ *                             has none), or `repost_count` is 3 or more, and
+ *                             no `hard_stops` entry names the evergreen /
+ *                             re-listed requisition (an `overridden:` entry in
+ *                             `soft_gaps` after "apply anyway" also satisfies it)
+ *   posting-age-cap           an evergreen / re-listed `hard_stops` entry beside
+ *                             `final_decision: Apply`: hard stop 4 caps the
+ *                             verdict at Consider
+ *   posting-age-legitimacy    an evergreen / re-listed `hard_stops` entry beside
+ *                             `legitimacy_tier: High Confidence`: hard stop 4
+ *                             caps Block G at Proceed with Caution
+ *   posting-age-value         `posting_first_seen` is not a `YYYY-MM-DD` date, or
+ *                             `repost_count` is not a non-negative integer
  *   without-clause-unsupported a `top_strengths` entry or the `## Verdict
  *                             (lead)` block says "without {noun}" ("without
  *                             headcount growth", "without adding people") and
@@ -55,6 +69,9 @@ import { basename, join, resolve } from 'node:path';
 import { isMainModule } from './lib/is-main-module.mjs';
 import { getProfilePath } from './path-resolver.mjs';
 import { loadYaml } from './lib/yaml-document.mjs';
+import { localToday } from './lib/local-today.mjs';
+import { parseDate } from './lib/parse-date.mjs';
+import { MAX_POSTING_AGE_DAYS, REPOST_HARD_STOP_COUNT } from './posting-age.mjs';
 import { machineSummary } from './lib/evaluation-report.mjs';
 import { findBlockB, findMatchTable } from './verify-block-b-context.mjs';
 import { colIndex } from './web/src/lib/report-tables.mjs';
@@ -392,13 +409,47 @@ export function clauseEvidenced(clause, table) {
 const lower = (v) => String(v ?? '').trim().toLowerCase();
 
 /**
+ * Words an evergreen / re-listed `hard_stops` entry carries, in the wording
+ * `posting-age.mjs` prints and in the hand-written forms the mode text used
+ * before the script existed. A hard stop about a stack, a span or a language
+ * never names any of them, so the two cannot be confused.
+ */
+const POSTING_AGE_ENTRY_RE = /evergreen|re-?listed|repost|posting-age|posting age|first (?:posted|seen)/i;
+
+/** @param {unknown} value @returns {string|null} */
+function dateOnly(value) {
+  const text = String(value ?? '').trim().slice(0, 10);
+  return parseDate(text) ? text : null;
+}
+
+/** The report's `**Date:**` header, when it is a plain date. */
+export function headerDate(markdown) {
+  const m = /^\*\*Date:\*\*[ \t]*(.+)$/im.exec(String(markdown ?? ''));
+  return m ? dateOnly(m[1]) : null;
+}
+
+/**
+ * Days from `fromIso` to `toIso`, both `YYYY-MM-DD`; null when either is not.
+ * @param {string} fromIso
+ * @param {string} toIso
+ * @returns {number|null}
+ */
+export function daysBetween(fromIso, toIso) {
+  const from = parseDate(fromIso);
+  const to = parseDate(toIso);
+  if (!from || !to) return null;
+  return Math.round((to.getTime() - from.getTime()) / 86_400_000);
+}
+
+/**
  * Run every check over one report's text.
  *
  * @param {string} markdown the report file's contents
- * @param {{profile?: {authorizedIn: string[], needsSponsorship: boolean|null}|null}} [options]
+ * @param {{profile?: {authorizedIn: string[], needsSponsorship: boolean|null}|null, today?: string}} [options]
+ *   `today` (YYYY-MM-DD) stands in for the report date when the header has none.
  * @returns {{status: 'ok'|'findings'|'unverified', reason?: string, findings: Array<{kind: string, detail: string}>}}
  */
-export function checkReport(markdown, { profile = null } = {}) {
+export function checkReport(markdown, { profile = null, today = localToday() } = {}) {
   const { data: ms, error } = machineSummary(markdown);
   if (!ms) return { status: 'unverified', reason: error ?? 'no Machine Summary', findings: [] };
   const findings = [];
@@ -455,6 +506,35 @@ export function checkReport(markdown, { profile = null } = {}) {
   }
   if (decision === 'apply' && workAuth === 'permit_question') {
     findings.push({ kind: 'apply-with-permit-question', detail: 'final_decision is Apply while work_auth is permit_question; the application waits for the recruiter\'s answer, so the verdict is at most Consider' });
+  }
+
+  // 4b. Posting age and repost count against the evergreen hard stop (hard stop 4).
+  const softGaps = Array.isArray(ms.soft_gaps) ? ms.soft_gaps.filter((x) => String(x ?? '').trim()) : [];
+  const ageEntries = hardStops.filter((x) => POSTING_AGE_ENTRY_RE.test(String(x)));
+  const ageOverridden = softGaps.some((x) => /^\s*overridden:/i.test(String(x)) && POSTING_AGE_ENTRY_RE.test(String(x)));
+  const firstSeenRaw = ms.posting_first_seen;
+  const firstSeen = firstSeenRaw === null || firstSeenRaw === undefined || firstSeenRaw === '' ? null : dateOnly(firstSeenRaw);
+  if (firstSeenRaw !== null && firstSeenRaw !== undefined && firstSeenRaw !== '' && !firstSeen) {
+    findings.push({ kind: 'posting-age-value', detail: `posting_first_seen "${firstSeenRaw}" is not a YYYY-MM-DD date; copy the value node posting-age.mjs printed, or null when it did not run` });
+  }
+  const repostRaw = ms.repost_count;
+  const repostCount = Number.isInteger(repostRaw) && repostRaw >= 0 ? repostRaw : null;
+  if (repostRaw !== null && repostRaw !== undefined && repostCount === null) {
+    findings.push({ kind: 'posting-age-value', detail: `repost_count "${repostRaw}" is not a non-negative integer; copy the value node posting-age.mjs printed, or 0 when it did not run` });
+  }
+  const reportDate = headerDate(markdown) ?? today;
+  const ageDays = firstSeen ? daysBetween(firstSeen, reportDate) : null;
+  const reasons = [];
+  if (ageDays !== null && ageDays > MAX_POSTING_AGE_DAYS) reasons.push(`posting_first_seen ${firstSeen} is ${ageDays} days before the report date ${reportDate} (limit ${MAX_POSTING_AGE_DAYS})`);
+  if (repostCount !== null && repostCount >= REPOST_HARD_STOP_COUNT) reasons.push(`repost_count ${repostCount} reaches ${REPOST_HARD_STOP_COUNT}`);
+  if (reasons.length && !ageEntries.length && !ageOverridden) {
+    findings.push({ kind: 'posting-age-hard-stop-missing', detail: `${reasons.join(' and ')}, yet hard_stops has no evergreen / re-listed requisition entry; paste the hard_stops entry node posting-age.mjs printed (or, after "apply anyway", move it to soft_gaps with the overridden: prefix) and cap final_decision at Consider` });
+  }
+  if (ageEntries.length && decision === 'apply') {
+    findings.push({ kind: 'posting-age-cap', detail: `final_decision is Apply while hard_stops names an evergreen / re-listed requisition ("${String(ageEntries[0]).slice(0, 80)}"); hard stop 4 caps the verdict at Consider` });
+  }
+  if (ageEntries.length && lower(ms.legitimacy_tier) === 'high confidence') {
+    findings.push({ kind: 'posting-age-legitimacy', detail: `legitimacy_tier is High Confidence while hard_stops names an evergreen / re-listed requisition ("${String(ageEntries[0]).slice(0, 80)}"); hard stop 4 caps Block G at Proceed with Caution` });
   }
 
   // 5. "without {noun}" claims in top_strengths and the Verdict.
