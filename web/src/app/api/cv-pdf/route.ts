@@ -53,7 +53,9 @@ export async function GET(req: NextRequest) {
     // A malformed n (typo, tampered query string) must not silently fall
     if (!/^\d+$/.test(n)) return new Response("invalid report number", { status: 400 });
     const exact = await pdfPathStatusForReport(n, kind);
-    if (exact.status === "found") {
+    // A stale CV is still shown here: the viewer is where the user sees what
+    // the receipt no longer vouches for. The apply fill is what refuses it.
+    if (exact.status === "found" || exact.status === "stale") {
       try {
         return servePdf(exact.path);
       } catch {
@@ -72,9 +74,9 @@ export async function GET(req: NextRequest) {
   // own Report cell — the join the apply flow's file-upload uses.
   if (application) {
     const exact = await resolveTailoredCv(undefined, application);
-    if (exact) {
+    if (exact.status === "ready" || exact.status === "stale") {
       try {
-        return servePdf(exact);
+        return servePdf(exact.path);
       } catch {
         return new Response("could not read the PDF", { status: 500 });
       }

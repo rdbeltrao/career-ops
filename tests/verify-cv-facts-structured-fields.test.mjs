@@ -1,5 +1,5 @@
-// tests/verify-cv-facts-structured-fields.test.mjs — the employer, degree and
-// certification a CV builder emits as structure are claims (#5348).
+// tests/verify-cv-facts-structured-fields.test.mjs — the employer, title, degree
+// and certification a CV builder emits as structure are claims (#5348).
 //
 // factClaims() reads an employer only after a prose trigger ("worked at",
 // "joined", "Company:"). A built CV never phrases one that way: the employer is
@@ -98,12 +98,26 @@ test('a swapped employer, degree, institution and certification in built HTML bl
   ]);
 });
 
-test('an unsourced job title in built HTML warns and does not block', () => {
+test('an unsourced job title in built HTML blocks', () => {
   const html = build('build-cv-html.mjs', htmlPayload({ ...TRUE, role: 'Principal Engineer' }), 'html');
   const result = verifyFacts(html, options());
-  assert.equal(result.verdict, 'warn', 'titles warn, as cv-title-check.mjs does');
-  assert.deepEqual(kinds(result.advisoryFacts), ['title=principal engineer']);
-  assert.deepEqual(result.unsupportedFacts, []);
+  assert.equal(result.verdict, 'block', 'an employment title no source carries is a fabricated fact');
+  assert.deepEqual(kinds(result.unsupportedFacts), ['title=principal engineer']);
+  assert.deepEqual(result.advisoryFacts, []);
+});
+
+test('allow_facts clears a job title the user vouched for', () => {
+  const config = join(tmp, 'allow-title.json');
+  writeFileSync(config, JSON.stringify({ allow_facts: ['Principal Engineer'] }));
+  const html = build('build-cv-html.mjs', htmlPayload({ ...TRUE, role: 'Principal Engineer' }), 'html');
+  assert.equal(verifyFacts(html, options({ configPath: config })).verdict, 'pass');
+});
+
+test('a job title recorded in modes/_context.md is a sourced fact', () => {
+  const context = join(tmp, '_context.md');
+  writeFileSync(context, '## Experience\n\nAcme Corp — Principal Engineer (2019 – 2024).\n');
+  const html = build('build-cv-html.mjs', htmlPayload({ ...TRUE, role: 'Principal Engineer' }), 'html');
+  assert.equal(verifyFacts(html, options({ sourcePaths: [source, context] })).verdict, 'pass');
 });
 
 test('allow_facts accepts a verified structured field', () => {
@@ -113,7 +127,7 @@ test('allow_facts accepts a verified structured field', () => {
   assert.equal(verifyFacts(html, options({ configPath: config })).verdict, 'pass');
 });
 
-test('the organization slot of a built LaTeX CV blocks, the title slot warns', () => {
+test('the organization and title slots of a built LaTeX CV both block', () => {
   assert.equal(verifyFacts(build('build-cv-latex.mjs', texPayload(TRUE), 'tex'), options()).verdict, 'pass');
 
   const swapped = verifyFacts(build('build-cv-latex.mjs', texPayload({ ...TRUE, company: 'Google', org: 'MIT' }), 'tex'), options());
@@ -121,8 +135,8 @@ test('the organization slot of a built LaTeX CV blocks, the title slot warns', (
   assert.deepEqual(kinds(swapped.unsupportedFacts), ['organization=google', 'organization=mit']);
 
   const retitled = verifyFacts(build('build-cv-latex.mjs', texPayload({ ...TRUE, role: 'Principal Engineer' }), 'tex'), options());
-  assert.equal(retitled.verdict, 'warn');
-  assert.deepEqual(kinds(retitled.advisoryFacts), ['title=principal engineer']);
+  assert.equal(retitled.verdict, 'block');
+  assert.deepEqual(kinds(retitled.unsupportedFacts), ['title=principal engineer']);
 });
 
 test('a LaTeX escape inside a field is read as the character', () => {

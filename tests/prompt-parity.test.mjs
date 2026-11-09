@@ -46,12 +46,12 @@ try {
     'batch Block A contains a required work-authorization instruction',
   );
   assert(
-    ofertaTiers.length === 4,
-    'canonical Block A exposes exactly four work-authorization tiers',
+    ofertaTiers.length === 5,
+    'canonical Block A exposes exactly five work-authorization tiers',
   );
   assert(
     JSON.stringify(batchTiers) === JSON.stringify(ofertaTiers),
-    'batch Block A uses the canonical four tier names in canonical order',
+    'batch Block A uses the canonical five tier names in canonical order',
   );
 
   const ofertaBlockG = section(oferta, '## Block G — Posting Legitimacy', '### Output format:');

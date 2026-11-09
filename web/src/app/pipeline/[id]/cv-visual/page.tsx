@@ -12,7 +12,8 @@ export default async function VisualCvPage({ params }: { params: Promise<{ id: s
   // EVIDENCE: the shared resolver honors the PDF index, including missing-file tombstones.
   const reportNumber = /^\d+$/.test(id) ? reportNumberFor(id, findApplication(id), readReport(id)?.file ?? null) : null;
   const result = reportNumber !== null ? await pdfPathStatusForReport(String(reportNumber)) : null;
-  if (result?.status === "found" && path.dirname(result.path) === path.resolve(careerOpsRoot(), "output")) {
+  // A stale CV opens in the editor too: regenerating it is the way to make it current.
+  if ((result?.status === "found" || result?.status === "stale") && path.dirname(result.path) === path.resolve(careerOpsRoot(), "output")) {
     redirect(`/documents/${encodeId(path.basename(result.path))}/edit`);
   }
   return <div className="mx-auto max-w-xl space-y-4 p-6">

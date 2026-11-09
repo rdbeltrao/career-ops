@@ -3,7 +3,7 @@
 import { Loader2, Wand2, Asterisk, Paperclip, Sparkles, ArrowUpRight, ShieldCheck, RotateCcw, FileCheck2, AlertTriangle, Terminal, Check, ScanLine, PenLine, CheckCircle2, Info, ExternalLink, MousePointerClick, ArrowLeft, ClipboardCheck } from "lucide-react";
 import { useRouter } from "next/navigation";
 import type { ApplyIssue, DriveStep } from "@/lib/apply/issue";
-import { useApply } from "@/components/apply/apply-provider";
+import { useApply, type ApplyGate } from "@/components/apply/apply-provider";
 import { needsLeaveConfirmation, resolveReturnPath } from "@/lib/apply/exit.mjs";
 import { isResumeLabel } from "@/lib/apply/resume-label.mjs";
 import type { ApplyField } from "@/lib/apply/extract";
@@ -81,6 +81,7 @@ export function ApplyView() {
   const done = a.status === "done";
   const busy = opening || driving;
   const phase = busy ? 0 : prefilling ? 1 : 2;
+  const fillBlocked = gateBlocksFill(a.gate, { overrideReason: a.overrideReason, confirmReport: a.confirmReport, skipCv: a.skipCv });
 
   return (
     <div className="mx-auto max-w-2xl">
@@ -184,10 +185,13 @@ export function ApplyView() {
             ))}
           </div>
 
+          <GatePanel />
+
           <div className="mt-5 flex flex-wrap items-center gap-3">
             <button
               onClick={a.fill}
-              disabled={filling || prefilling}
+              disabled={filling || prefilling || fillBlocked}
+              title={fillBlocked ? "Complete the application gate above first." : undefined}
               className="inline-flex items-center gap-2 rounded-full bg-brand px-5 py-2.5 text-sm font-medium text-brand-foreground shadow-lg shadow-brand/25 transition-all hover:bg-brand-200 hover:shadow-brand/40 disabled:opacity-50"
             >
               {filling ? <Loader2 className="size-4 animate-spin" /> : <ArrowUpRight className="size-4" />}
@@ -412,6 +416,109 @@ function DrivePanel({ steps, filling }: { steps: DriveStep[]; filling?: boolean 
           ))}
         </ol>
       )}
+    </div>
+  );
+}
+
+// ── Application gate: verdict, CV receipt, role identity ────────────────────
+// Mirrors the refusals /api/apply/fill answers 409 with (apply-gates.mjs), so
+// the user supplies the reason or the report number before pressing Fill
+// rather than after a refusal. The server still decides; this only previews.
+function gateBlocksFill(gate: ApplyGate | null, input: { overrideReason: string; confirmReport: string; skipCv: boolean }): boolean {
+  if (!gate) return false; // not read yet, or unavailable: the server answers
+  if (gate.verdict?.requiresOverride && input.overrideReason.trim().length < gate.verdict.minReason) return true;
+  if (input.skipCv) return false;
+  if (gate.cv.status === "stale") return true;
+  if (gate.cv.status === "unverified-role" && !/^\d{1,6}$/.test(input.confirmReport.trim())) return true;
+  return false;
+}
+
+function GatePanel() {
+  const a = useApply();
+  const reasonId = useId();
+  const reportId = useId();
+  const g = a.gate;
+  if (!g) {
+    return a.gateLoading ? <p className="mt-5 text-xs text-faint">Checking the evaluation verdict and the tailored CV…</p> : null;
+  }
+  const verdict = g.verdict;
+  const reasonShort = !!verdict?.requiresOverride && a.overrideReason.trim().length < verdict.minReason;
+  const cv = g.cv;
+  const showConfirm = !a.n && !a.skipCv && (cv.status === "unverified-role" || cv.status === "none" || !!a.confirmReport);
+  return (
+    <div className="mt-5 space-y-3 rounded-xl border border-border bg-surface/70 px-4 py-3 text-sm backdrop-blur-sm" data-testid="apply-gate">
+      {verdict && (
+        <div>
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-xs font-semibold uppercase tracking-[0.14em] text-faint">Evaluation verdict</span>
+            <span className={cn("rounded-full px-2.5 py-0.5 text-xs font-medium", verdict.isApply ? "bg-emerald-500/15 text-emerald-700 dark:text-emerald-400" : "bg-amber-500/15 text-amber-700 dark:text-amber-400")}>
+              {verdict.decision || "missing"}
+            </span>
+            {g.identity?.report && <span className="text-xs text-faint">report {g.identity.report}</span>}
+          </div>
+          {verdict.requiresOverride && (
+            <div className="mt-2">
+              <label htmlFor={reasonId} className="block text-xs text-muted">
+                This role was not rated Apply. Why apply anyway? The reason is recorded in the tracker (at least {verdict.minReason} characters).
+              </label>
+              <textarea
+                id={reasonId}
+                value={a.overrideReason}
+                onChange={(e) => a.setOverrideReason(e.target.value)}
+                rows={2}
+                required
+                aria-invalid={reasonShort}
+                placeholder="e.g. Recruiter reached out after the evaluation and asked for an application"
+                className={cn("mt-1 w-full rounded-lg border bg-background px-3 py-2 text-sm outline-none focus:border-brand/60", reasonShort ? "border-amber-500/50" : "border-border")}
+              />
+              {reasonShort && <p className="mt-1 text-xs text-amber-700 dark:text-amber-400">{a.overrideReason.trim().length} / {verdict.minReason} characters</p>}
+            </div>
+          )}
+        </div>
+      )}
+      <div>
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-xs font-semibold uppercase tracking-[0.14em] text-faint">Tailored CV</span>
+          {cv.status === "ready" && (
+            <span className="inline-flex items-center gap-1 text-xs text-emerald-700 dark:text-emerald-400">
+              <FileCheck2 className="size-3.5" /> {cv.file} · report {cv.report} · review current
+            </span>
+          )}
+          {cv.status === "stale" && (
+            <span className="inline-flex items-center gap-1 text-xs text-amber-700 dark:text-amber-400">
+              <AlertTriangle className="size-3.5" /> {cv.file} is stale ({cv.reason}). Regenerate it before filling; it will not be attached.
+            </span>
+          )}
+          {cv.status === "unverified-role" && (
+            <span className="inline-flex items-center gap-1 text-xs text-amber-700 dark:text-amber-400">
+              <AlertTriangle className="size-3.5" /> {cv.file} matched by company name only — which requisition it targets is unknown.
+            </span>
+          )}
+          {cv.status === "none" && <span className="text-xs text-muted">none found{cv.reason ? ` (${cv.reason})` : ""} — the form is filled without an attachment.</span>}
+        </div>
+        {showConfirm && (
+          <div className="mt-2 flex flex-wrap items-center gap-3">
+            <label htmlFor={reportId} className="text-xs text-muted">
+              Report number of the CV to attach
+            </label>
+            <input
+              id={reportId}
+              inputMode="numeric"
+              value={a.confirmReport}
+              onChange={(e) => a.setConfirmReport(e.target.value)}
+              placeholder="e.g. 386"
+              className="w-28 rounded-lg border border-border bg-background px-3 py-1.5 text-sm outline-none focus:border-brand/60"
+            />
+            {a.gateLoading && <Loader2 className="size-3.5 animate-spin text-brand" />}
+          </div>
+        )}
+        {!a.n && cv.status !== "ready" && (
+          <label className="mt-2 flex items-center gap-2 text-xs text-muted">
+            <input type="checkbox" checked={a.skipCv} onChange={(e) => a.setSkipCv(e.target.checked)} />
+            Fill without attaching a CV
+          </label>
+        )}
+      </div>
     </div>
   );
 }

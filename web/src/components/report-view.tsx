@@ -50,6 +50,7 @@ export function ReportView({
   report,
   canDelete = false,
   pdfReadyFromIndex = false,
+  pdfStaleReason = null,
   coverReady = false,
   backHref = "/pipeline",
   applyHref,
@@ -64,6 +65,10 @@ export function ReportView({
   file?: string | null;
   canDelete?: boolean;
   pdfReadyFromIndex?: boolean;
+  /** Set when the indexed CV exists but its final-review receipt is missing or
+   *  stale (pdfPathStatusForReport "stale"): the PDF is shown, with this reason,
+   *  and the apply fill will refuse to attach it until it is regenerated. */
+  pdfStaleReason?: string | null;
   /** A tailored cover letter for THIS application exists in output/ (resolved by
    *  the page, see resolveTailoredCover). The page drafts letters through the
    *  cover run but does not render them, so this link only finds CLI PDFs. */
@@ -128,6 +133,14 @@ export function ReportView({
             </Link>
           )}
           <MarkPdfReadyButton reportNum={reportNum} ready={pdfReady} />
+          {pdfStaleReason && (
+            <span
+              title={pdfStaleReason}
+              className="inline-flex items-center gap-1 rounded-full border border-amber-500/40 bg-amber-500/10 px-2.5 py-1 text-xs font-medium text-amber-700 dark:text-amber-400"
+            >
+              CV stale — regenerate before applying
+            </span>
+          )}
           {coverReady && (
             <a
               href={`/api/cover-pdf?application=${encodeURIComponent(id)}`}

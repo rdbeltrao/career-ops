@@ -1009,10 +1009,13 @@ export function factClaims(text, sourceNormalized = null) {
 // or a certification rendered and passed the gate, which is the fabrication
 // AGENTS.md treats as most serious.
 //
-// Employer, education and certification fields BLOCK when no source contains
-// them. The job title only WARNS: cv-title-check.mjs is deliberately warn-only
-// about titles, because reframing one is sometimes the candidate's call, and a
-// second check that blocked on the same field would overrule that choice.
+// Employer, title, education and certification fields all BLOCK when no
+// source contains them. The title used to warn, deferring to cv-title-check.mjs
+// (warn-only, because reframing a title is sometimes the candidate's call), but
+// tailored CVs shipped with employment titles no source carried, and a title
+// the record does not hold is a fabricated fact like an employer. A reframed
+// title the candidate stands behind goes into allow_facts in
+// config/cv-facts.json, or into the career record itself.
 // Skills lists are not read here. Rewording a skill into the posting's
 // vocabulary is the reformulation the tailoring is allowed to do.
 //
@@ -1023,14 +1026,13 @@ const STRUCTURED_HTML_FIELDS = [
   ['edu-title', 'education', true],
   ['edu-org', 'education', true],
   ['cert-title', 'certification', true],
-  ['job-role', 'title', false],
+  ['job-role', 'title', true],
 ];
 // One level of nested braces, enough for `\textbf{...}` inside an argument.
 const LATEX_ARG = String.raw`\s*\{((?:[^{}]|\{[^{}]*\})*)\}`;
 // build-cv-latex.mjs writes `\resumeSubheading{organization}{…}{title or degree}{…}`
 // for both experience and education, so the first argument is an employer or
-// an institution and the third a role or a degree. The first blocks; the third
-// is read as a title and warns, for the reason given above.
+// an institution and the third a role or a degree. Both block.
 const LATEX_SUBHEADING_RE = new RegExp(String.raw`\\resumeSubheading${LATEX_ARG}${LATEX_ARG}${LATEX_ARG}${LATEX_ARG}`, 'g');
 
 /**
@@ -1057,7 +1059,7 @@ export function structuredFieldClaims(text) {
   }
   for (const match of raw.matchAll(LATEX_SUBHEADING_RE)) {
     add('organization', match[1], true);
-    add('title', match[3], false);
+    add('title', match[3], true);
   }
   const seen = new Set();
   return claims.filter(({ kind, value }) => !seen.has(`${kind}\n${value}`) && seen.add(`${kind}\n${value}`));
@@ -2105,9 +2107,22 @@ export function verifyFacts(targetText, {
   const forbidden = config.forbidden_phrases
       .filter(Boolean)
       .filter(phrase => stripMarkup(targetText).toLowerCase().includes(String(phrase).toLowerCase()));
+  // A warn phrase inside an allowed metric ("about 20 developers" when
+  // allow_metrics lists exactly that) is the settled wording, not a hedge.
+  const plainTarget = stripMarkup(targetText).toLowerCase();
+  const allowedMetricText = config.allow_metrics.filter(Boolean).map(m => String(m).toLowerCase());
   const warnings = config.warn_phrases
       .filter(Boolean)
-      .filter(phrase => stripMarkup(targetText).toLowerCase().includes(String(phrase).toLowerCase()));
+      .filter(phrase => {
+        const needle = String(phrase).toLowerCase();
+        let from = 0, hit = false;
+        while ((from = plainTarget.indexOf(needle, from)) !== -1) {
+          const window = plainTarget.slice(Math.max(0, from - 40), from + needle.length + 40);
+          if (!allowedMetricText.some(m => m.includes(needle) && window.includes(m))) { hit = true; break; }
+          from += needle.length;
+        }
+        return hit;
+      });
   // Never downgrades a block and never creates one: a document that fails on
   // real evidence still fails on that, and a coverage gap only turns a would-be
   // 'pass' into 'warn' so the caller is told the gate could not read it.

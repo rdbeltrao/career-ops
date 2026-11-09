@@ -24,9 +24,9 @@ export const maxDuration = 320;
 // exit code/signal, parse outcome) so a stuck/empty prefill is observable on the
 // page AND written to <root>/.career-ops-web/apply-prefill.log for debugging.
 export async function POST(req: Request) {
-  const body = await readJsonObject<{ sessionId?: string; cliId?: string; company?: string; application?: string }>(req);
+  const body = await readJsonObject<{ sessionId?: string; cliId?: string; company?: string; application?: string; confirmReport?: string }>(req);
   if (!body) return Response.json({ error: "bad json" }, { status: 400 });
-  const { sessionId, cliId: requestedCliId, company, application } = body;
+  const { sessionId, cliId: requestedCliId, company, application, confirmReport } = body;
   // Same two identifiers the fill route takes, validated the same way: they
   // reach a filesystem resolver, so a non-string is refused before it gets there.
   if (company !== undefined && typeof company !== "string") {
@@ -34,6 +34,9 @@ export async function POST(req: Request) {
   }
   if (application !== undefined && typeof application !== "string") {
     return Response.json({ error: "application must be a string" }, { status: 400 });
+  }
+  if (confirmReport !== undefined && typeof confirmReport !== "string") {
+    return Response.json({ error: "confirmReport must be a string" }, { status: 400 });
   }
   const t0 = Date.now();
   const encoder = new TextEncoder();
@@ -100,8 +103,15 @@ export async function POST(req: Request) {
       // Draft from the SAME tailored CV the fill route uploads to this form,
       // resolved through the one shared call so the answers and the resume
       // stapled to them cannot describe different documents.
-      const cvPath = await resolveSessionCv({ company, application, title: s.title });
+      // Only a READY CV (indexed for this report, final review current) is the
+      // planner's source: the fill route attaches nothing else, so drafting
+      // from a stale file or a company-matched sibling role's CV would put the
+      // answers and the attachment back out of step.
+      const cv = await resolveSessionCv({ company, application, title: s.title, confirmReport });
+      const cvPath = cv.status === "ready" ? cv.path : null;
       const cvSource = cvPath ? applyCvSource(careerOpsRoot(), cvPath) : null;
+      if (cv.status === "stale") log(`Tailored CV is stale (${cv.reason}) — not used as the source; regenerate it before filling`);
+      else if (cv.status === "unverified-role") log("Tailored CV matched by company name only — not used until the report number is confirmed");
       // Answers the user reviewed and sent on earlier applications (answer-bank.mjs,
       // data/application-answers.jsonl), matched to this form's questions. The
       // same file gives the repeat-application check: earlier applications to

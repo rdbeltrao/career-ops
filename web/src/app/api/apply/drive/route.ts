@@ -4,6 +4,9 @@ import { driveSession } from "@/lib/apply/drive";
 import { classifyEmpty } from "@/lib/apply/diagnose";
 import { resolveCliOrFallback } from "@/lib/clis";
 import { readJsonObject } from "@/lib/json-body";
+import { applyGateStatus } from "@/lib/apply/gate";
+import { verdictGate } from "@/lib/apply/apply-gates.mjs";
+import { appendTrackerNote } from "@/lib/apply/tracker-note";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -13,14 +16,35 @@ export const maxDuration = 300;
 // REACH a fillable application form (the user watches each step live), then we
 // extract + finalize. NEVER submits (enforced in driveSession).
 export async function POST(req: Request) {
-  const body = await readJsonObject<{ sessionId?: string; cliId?: string; goal?: "reach" | "full"; answers?: { label: string; value: string }[] }>(req);
+  const body = await readJsonObject<{ sessionId?: string; cliId?: string; goal?: "reach" | "full"; answers?: { label: string; value: string }[]; application?: string; overrideReason?: string }>(req);
   if (!body) return Response.json({ error: "bad json" }, { status: 400 });
-  const { sessionId, goal = "reach", answers } = body;
+  const { sessionId, goal = "reach", answers, application, overrideReason } = body;
+  if (application !== undefined && (typeof application !== "string" || (application && !/^\d{1,6}$/.test(application.trim())))) {
+    return Response.json({ error: "application must be a tracker number" }, { status: 400 });
+  }
+  if (overrideReason !== undefined && typeof overrideReason !== "string") return Response.json({ error: "overrideReason must be a string" }, { status: 400 });
   // Same fallback as the session open that precedes every drive, which is where
   // a substitution is reported (#4607); driveSession() itself needs Claude.
   const cliId = (body.cliId && resolveCliOrFallback(body.cliId)?.spec.id) || body.cliId || "";
   const s = sessionId ? getSession(sessionId) : undefined;
   if (!s) return Response.json({ error: "apply session not found (it may have expired)" }, { status: 404 });
+
+  // The agent fill is a fill: the same verdict gate /api/apply/fill applies
+  // runs here when the page names the tracker row, and an override is
+  // recorded before the agent types anything. (This path attaches no CV, so
+  // the receipt and role gates do not apply.)
+  if (goal === "full" && application?.trim()) {
+    const gate = await applyGateStatus({ application: application.trim() });
+    if (gate.verdict) {
+      const v = verdictGate({ decision: gate.verdict.decision, overrideReason });
+      if (!v.ok) return Response.json({ error: v.error, code: v.code, verdict: gate.verdict.decision }, { status: 409 });
+      if (v.override) {
+        if (!gate.identity?.row) return Response.json({ error: "the override cannot be recorded: this session is not linked to a tracker row", code: "override-not-recordable" }, { status: 409 });
+        const written = await appendTrackerNote({ row: gate.identity.row, status: gate.identity.status, note: v.note });
+        if (!written.ok) return Response.json({ error: `could not record the override in the tracker: ${written.error}`, code: "override-not-recorded" }, { status: 500 });
+      }
+    }
+  }
 
   const encoder = new TextEncoder();
   const stream = new ReadableStream<Uint8Array>({

@@ -89,13 +89,14 @@ Sau bảng Tóm tắt vai trò, đối chiếu quyền làm việc của ứng v
 - ✅ **Sponsors** -- tin chủ động đề nghị bảo lãnh visa hoặc hỗ trợ chuyển nơi ở, và vai trò ở quốc gia **không** nằm trong `authorized_in`.
 - ➖ **Not needed** -- vai trò ở quốc gia trong `authorized_in` (hoặc là remote thật sự, không gắn địa điểm, mà ứng viên làm được từ quốc gia mình có quyền), **hoặc** `needs_sponsorship` là false. Với công dân Việt Nam ứng tuyển vị trí tại Việt Nam, đây là trường hợp thường gặp.
 - ⚠️ **Unstated** -- vai trò nằm ngoài `authorized_in` và tin không nói gì về bảo lãnh. Im lặng nghĩa là không có tín hiệu, không phải từ chối: loại này **TRUNG LẬP**.
+- ⚠️ **Permit needed — ask before applying** -- vai trò yêu cầu cư trú hoặc chuyển đến một quốc gia ngoài `authorized_in` (hoặc chỉ dành cho quốc gia đó), ứng viên có `needs_sponsorship: true`, và tin không đề nghị bảo lãnh visa hay hỗ trợ chuyển nơi ở. Loại này **không trung lập**: ghi câu hỏi cho recruiter vào `confidence_gaps`, đặt `work_auth: "permit_question"` trong Machine Summary, giới hạn `final_decision` tối đa ở Consider và nói trong Verdict rằng hồ sơ chờ câu trả lời đó. Giấy phép quốc gia như EU Blue Card của Đức chỉ cho quyền làm việc ở nước cấp; nó không phải tự do đi lại trong EU và không bao giờ được đọc như vậy.
 - ⛔ **No sponsorship** -- tin nói rõ **sẽ không** bảo lãnh (ví dụ "no visa sponsorship", "must have existing work authorization") **và** vai trò nằm ngoài `authorized_in`.
 
 Quy tắc (cùng kỷ luật với kiểm tra lệch địa điểm):
 - Trích **nguyên văn** từ tin, không diễn giải câu nói về bảo lãnh.
 - Câu chung "must be authorized to work in {nước}" với {nước} **có trong** `authorized_in` là ➖ Not needed, không phải ⛔.
 - Nếu hồ sơ chỉ có `visa_status` dạng văn bản, hiểu thận trọng và gán ⚠️ Unstated, không đoán blocker.
-- **Ảnh hưởng điểm (thống nhất với "Your Location Policy" trong `modes/_profile.md`):** ✅ / ➖ / ⚠️ không ảnh hưởng điểm -- KHÔNG áp phạt vì địa điểm hay chuyển nơi ở. Blocker cứng duy nhất là ⛔ **No sponsorship** cho vai trò mà ứng viên không làm được từ quốc gia mình có quyền. Khi đó chấm địa điểm thấp và ghi là `hard_stop`.
+- **Ảnh hưởng điểm (thống nhất với "Your Location Policy" trong `modes/_profile.md`):** ✅ / ➖ / ⚠️ Unstated không ảnh hưởng điểm -- KHÔNG áp phạt vì địa điểm hay chuyển nơi ở. ⚠️ Permit needed thì không trung lập: `final_decision` tối đa là Consider cho đến khi recruiter trả lời. Blocker cứng duy nhất là ⛔ **No sponsorship** cho vai trò mà ứng viên không làm được từ quốc gia mình có quyền. Khi đó chấm địa điểm thấp và ghi là `hard_stop`.
 
 Khi kết luận ⛔, thêm đúng một dòng cờ ở đầu Block B, trích **nguyên văn**:
 
@@ -681,7 +682,7 @@ Lưu bản đánh giá đầy đủ vào `reports/{###}-{company-slug}-{YYYY-MM-
 **Score:** {X/5}
 **Quyết định:** {Nộp hồ sơ | Cân nhắc | Tìm hiểu trước | Bỏ qua}
 **Legitimacy:** {High Confidence | Proceed with Caution | Suspicious}
-**Work Auth:** {✅ Sponsors | ➖ Not needed | ⚠️ Unstated | ⛔ No sponsorship}
+**Work Auth:** {✅ Sponsors | ➖ Not needed | ⚠️ Unstated | ⚠️ Permit needed | ⛔ No sponsorship}
 **PDF:** {đường dẫn hoặc pending}
 
 {câu của `## Kết luận (lead)`, chép nguyên văn}

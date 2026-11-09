@@ -24,6 +24,10 @@ import { resolvePdfIndexPath } from "@/lib/core/pdf-index";
 // don't drift into two different definitions of "which report does this
 // index row belong to" (#2599, #2008 review).
 import { pdfIndexEntryForReport } from "@/lib/apply/cv-selection.mjs";
+// The final-review receipt check behind the "stale" status below. Kept in its
+// own module with no career-ops import, so the two files do not import each
+// other; the root and the core script path are passed in from here.
+import { cvReviewStatus } from "@/lib/cv-review";
 // The managed-block markers and the profile read live together in one plain
 // module, so rememberFact() (the block's only WRITER) and readMemory() (its
 // reader) cannot drift apart, and so the read rule is testable from web/tests.
@@ -255,13 +259,19 @@ export async function pdfReadyForReport(n: string): Promise<boolean> {
 
 export type PdfPathForReportResult =
   | { status: "found"; path: string }
+  /** The indexed PDF exists but its final-review receipt is missing or no
+   *  longer matches (career evidence, report, payload or the file itself
+   *  changed). The viewer may still show it, with a stale badge; the apply fill
+   *  must not attach it. CV rows only: cover letters carry no receipt. */
+  | { status: "stale"; path: string; reason: string }
   | { status: "not-found" }
   | { status: "invalid" }
   | { status: "rejected" };
 
 /** The exact PDF path indexed for this report number, or null if none exists
- *  (malformed id, no index row, the indexed file is missing on disk, or the
- *  index resolved outside the workspace). Lets the viewer route serve the
+ *  (malformed id, no index row, the indexed file is missing on disk, the
+ *  index resolved outside the workspace, or the CV's final review is stale -
+ *  pdfPathForReport/pdfReadyForReport are strict). Lets the viewer route serve the
  *  SPECIFIC report's PDF instead of guessing the newest file for the company —
  *  two applications at the same company have two different tailored CVs.
  *
@@ -301,6 +311,14 @@ export async function pdfPathStatusForReport(n: string, kind: "cv" | "cover" = "
   // (e.g. reports/) and pass a root-scoped realpath check — serving a file
   // this route was never meant to expose.
   if (!isRegularContainedFile(abs, outputDir)) return { status: "rejected" };
+  // A file the index names is not yet a reviewed CV: the receipt publish-cv.mjs
+  // wrote beside it must still match the PDF, the report and the career
+  // evidence. A stale one reads as "found" nowhere downstream, so the fill
+  // route cannot attach it and the viewer can say why it is out of date.
+  if (kind === "cv") {
+    const review = await cvReviewStatus(abs, String(target), { dataRoot: root, modulePath: rootScript("lib/cv-publication") });
+    if (!review.current) return { status: "stale", path: abs, reason: review.reason };
+  }
   return { status: "found", path: abs };
 }
 

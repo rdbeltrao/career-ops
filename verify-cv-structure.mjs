@@ -36,6 +36,12 @@
  * rather than a false "passed", so a format mismatch warns instead of either
  * silently no-opping or blocking every user whose cv.md looks different.
  *
+ * Also warns when a payload experience entry lacks month-level start and end
+ * dates (`Month YYYY – Month YYYY`, `MM/YYYY`, `YYYY-MM`, or a `Present` end):
+ * tailored CVs shipped with year-only dates on their latest roles, which no
+ * fact check can see because a year is true. publish-cv.mjs blocks on the
+ * same rule; here it stays a warning, and it does not depend on cv.md.
+ *
  * Usage:
  *   node verify-cv-structure.mjs <payload.json> [--source cv.md]
  *   node verify-cv-structure.mjs --self-test
@@ -48,6 +54,7 @@ import { fileURLToPath } from 'url';
 import { isMainModule } from './lib/is-main-module.mjs';
 import { getCareerOpsRoot } from './path-resolver.mjs';
 import { findExperienceSections, parseCompanyHeading, EXPERIENCE_HEADING_NAMES } from './lib/cv-markdown.mjs';
+import { hasMonthLevelDates } from './lib/cv-publication.mjs';
 
 const ROOT = dirname(fileURLToPath(import.meta.url));
 const DEFAULT_SOURCE = 'cv.md';
@@ -188,7 +195,27 @@ export function checkLocationDescriptors(payloadExperience, cvMdExperience) {
 }
 
 /**
- * Run both structural checks against a tailored CV JSON payload.
+ * Experience entries whose `dates` (or `period`) are not month-level, one
+ * message per entry naming the company. Independent of cv.md.
+ *
+ * @param {{company?: string, dates?: string, period?: string}[]} payloadExperience
+ * @returns {string[]}
+ */
+export function checkMonthLevelDates(payloadExperience) {
+  const violations = [];
+  for (const entry of payloadExperience) {
+    const dates = entry.dates ?? entry.period;
+    if (hasMonthLevelDates(dates)) continue;
+    const company = entry.company || '(unnamed company)';
+    violations.push(dates
+      ? `${company}: dates "${dates}" are not month-level — expected "Month YYYY – Month YYYY" or "Month YYYY – Present" (MM/YYYY and YYYY-MM are read too)`
+      : `${company}: no dates given — expected "Month YYYY – Month YYYY" or "Month YYYY – Present"`);
+  }
+  return violations;
+}
+
+/**
+ * Run the structural checks against a tailored CV JSON payload.
  *
  * This gate understands the EXPERIENCE_HEADING_NAMES sections whose
  * `### Company {—|–|--|-} Location[ · descriptor]` headers use an em dash, en
@@ -205,40 +232,38 @@ export function checkLocationDescriptors(payloadExperience, cvMdExperience) {
  *
  * @param {object} payload the parsed JSON payload build-cv-html.mjs consumes
  * @param {string} cvMdText raw cv.md content
- * @returns {{ verdict: 'pass'|'warn'|'unverified', orderViolations: string[], descriptorViolations: string[] }}
+ * The dates check needs no cv.md, so an unverified result (cv.md has no
+ * recognised headers) still carries `dateViolations`; the CLI prints them.
+ *
+ * @returns {{ verdict: 'pass'|'warn'|'unverified', orderViolations: string[], descriptorViolations: string[], dateViolations: string[] }}
  */
 export function verifyStructure(payload, cvMdText) {
-  const cvMdExperience = parseCvMdExperience(cvMdText);
-  if (cvMdExperience.length === 0) {
-    return { verdict: 'unverified', orderViolations: [], descriptorViolations: [] };
-  }
+  const unverified = (dateViolations = []) => ({ verdict: 'unverified', orderViolations: [], descriptorViolations: [], dateViolations });
   // The CLI validates payload shape before ever calling verifyStructure(),
   // but this is an exported function any other caller can reach directly —
   // so it must be safe against malformed input on its own, not just when
   // reached through the CLI's pre-validated path.
-  if (payload === null || typeof payload !== 'object' || Array.isArray(payload)) {
-    return { verdict: 'unverified', orderViolations: [], descriptorViolations: [] };
-  }
+  if (payload === null || typeof payload !== 'object' || Array.isArray(payload)) return unverified();
   // A present, non-array `experience` (null, an object, a string, ...) is a
   // malformed payload, not "no experience" — silently coercing it to []
   // would let checkExperienceOrder/checkLocationDescriptors find nothing to
   // compare and report a false 'pass'.
-  if (payload.experience !== undefined && !Array.isArray(payload.experience)) {
-    return { verdict: 'unverified', orderViolations: [], descriptorViolations: [] };
-  }
+  if (payload.experience !== undefined && !Array.isArray(payload.experience)) return unverified();
   // A null (or otherwise non-object) entry inside an array experience would
   // otherwise reach checkExperienceOrder/checkLocationDescriptors' `e.company`
   // access uncaught.
-  if (Array.isArray(payload.experience) && payload.experience.some((e) => e === null || typeof e !== 'object' || Array.isArray(e))) {
-    return { verdict: 'unverified', orderViolations: [], descriptorViolations: [] };
-  }
+  if (Array.isArray(payload.experience) && payload.experience.some((e) => e === null || typeof e !== 'object' || Array.isArray(e))) return unverified();
   const payloadExperience = Array.isArray(payload.experience) ? payload.experience : [];
+  const dateViolations = checkMonthLevelDates(payloadExperience);
+  const cvMdExperience = parseCvMdExperience(cvMdText);
+  if (cvMdExperience.length === 0) return unverified(dateViolations);
   const orderViolations = checkExperienceOrder(payloadExperience, cvMdExperience);
   const descriptorViolations = checkLocationDescriptors(payloadExperience, cvMdExperience);
   return {
-    verdict: orderViolations.length || descriptorViolations.length ? 'warn' : 'pass',
+    verdict: orderViolations.length || descriptorViolations.length || dateViolations.length ? 'warn' : 'pass',
     orderViolations,
     descriptorViolations,
+    dateViolations,
   };
 }
 
@@ -311,6 +336,14 @@ function runSelfTest() {
     console.error(`  actual:   ${JSON.stringify(actual)}`);
   };
 
+  // The order/descriptor fixtures below predate the month-level dates rule and
+  // carry no dates; the wrapper adds a valid period so they keep testing what
+  // they were written for. The dates rule has its own cases further down and
+  // its own suite in tests/verify-cv-structure-dates.test.mjs.
+  const verifyDated = (payload, cvMdText) => verifyStructure(payload && Array.isArray(payload.experience)
+    ? { ...payload, experience: payload.experience.map((e) => e && typeof e === 'object' && !Array.isArray(e) ? { dates: 'January 2020 – Present', ...e } : e) }
+    : payload, cvMdText);
+
   const cvMd = [
     '## Experience',
     '',
@@ -342,15 +375,15 @@ function runSelfTest() {
     { company: 'Early Career — Globex Inc, Initech, Umbrella Corp', location: 'Columbus, OH / Dayton, OH' },
   ];
   equal('correct order, all descriptors present: no violations',
-    verifyStructure({ experience: correctOrder }, cvMd),
-    { verdict: 'pass', orderViolations: [], descriptorViolations: [] });
+    verifyDated({ experience: correctOrder }, cvMd),
+    { verdict: 'pass', orderViolations: [], descriptorViolations: [], dateViolations: [] });
 
   const swappedOrder = [
     { company: 'Acme Corp', location: 'Austin, TX · Series B fintech' },
     { company: 'Beta Industries', location: 'Chicago, IL · Series A last-mile logistics SaaS' },
     { company: 'Career Break', location: 'Lake Tahoe, CA' },
   ];
-  const swappedResult = verifyStructure({ experience: swappedOrder }, cvMd);
+  const swappedResult = verifyDated({ experience: swappedOrder }, cvMd);
   equal('swapped Career Break/Beta Industries: order violation caught', swappedResult.verdict, 'warn');
   equal('swapped order names both entries',
     swappedResult.orderViolations,
@@ -361,7 +394,7 @@ function runSelfTest() {
     { company: 'Career Break', location: 'Lake Tahoe, CA' },
     { company: 'Beta Industries', location: 'Chicago, IL · Series A last-mile logistics SaaS' },
   ];
-  const missingResult = verifyStructure({ experience: missingDescriptor }, cvMd);
+  const missingResult = verifyDated({ experience: missingDescriptor }, cvMd);
   equal('dropped descriptor: violation caught', missingResult.verdict, 'warn');
   equal('dropped descriptor names the entry and the missing text',
     missingResult.descriptorViolations,
@@ -372,13 +405,13 @@ function runSelfTest() {
     { company: 'Beta Industries', location: 'Chicago, IL · Series A last-mile logistics SaaS' },
   ];
   equal('a legitimately omitted entry (Career Break dropped for space) is not a violation',
-    verifyStructure({ experience: subsetOmitted }, cvMd).verdict, 'pass');
+    verifyDated({ experience: subsetOmitted }, cvMd).verdict, 'pass');
 
   const noDescriptorInSource = [
     { company: 'Career Break', location: 'Lake Tahoe, CA, near the shoreline' }, // reworded, cv.md has no descriptor to lose
   ];
   equal('an entry cv.md never gave a descriptor has nothing to check',
-    verifyStructure({ experience: noDescriptorInSource }, cvMd).verdict, 'pass');
+    verifyDated({ experience: noDescriptorInSource }, cvMd).verdict, 'pass');
 
   // A cv.md that doesn't use a recognized header shape (a different heading
   // level, prose instead of headers, or simply no Experience section at all)
@@ -387,7 +420,7 @@ function runSelfTest() {
   // this must report 'unverified' instead, and never fabricate a violation
   // against entries it never actually saw.
   const unrecognizedCvMd = '## Experience\n\nWorked at a company for a while.\n';
-  const unverifiedResult = verifyStructure({ experience: correctOrder }, unrecognizedCvMd);
+  const unverifiedResult = verifyDated({ experience: correctOrder }, unrecognizedCvMd);
   equal('cv.md with no recognized headers: reports unverified, not a false pass',
     unverifiedResult.verdict, 'unverified');
   equal('unverified result names no violations (nothing was actually checked)',
@@ -401,7 +434,7 @@ function runSelfTest() {
   equal('shipped example parses both Work Experience entries',
     shippedEntries.map((e) => e.company), ['TechFin Corp', 'DataStartup Inc']);
   equal('shipped example format produces a real structural verdict',
-    verifyStructure({ experience: shippedEntries }, shippedCvMd).verdict, 'pass');
+    verifyDated({ experience: shippedEntries }, shippedCvMd).verdict, 'pass');
 
   // Pandoc-flavored cv.md (#4879): bold + span section heading, bold company,
   // Pandoc's `---` em dash. Same entries as the plain form, so the order and
@@ -429,12 +462,12 @@ function runSelfTest() {
       { company: 'Globex Corp.', location: 'Stamford, CT' },
     ]);
   equal('Pandoc cv.md: a swapped pair is caught instead of UNVERIFIED',
-    verifyStructure({ experience: [
+    verifyDated({ experience: [
       { company: 'Globex Corp.', location: 'Stamford, CT' },
       { company: 'Acme Health, Inc.', location: 'New York, NY (Remote) · Series B healthtech' },
     ] }, pandocCvMd).verdict, 'warn');
   equal('Pandoc cv.md: a dropped descriptor is caught instead of UNVERIFIED',
-    verifyStructure({ experience: [
+    verifyDated({ experience: [
       { company: 'Acme Health, Inc.', location: 'New York, NY (Remote)' },
       { company: 'Globex Corp.', location: 'Stamford, CT' },
     ] }, pandocCvMd).descriptorViolations.length, 1);
@@ -455,7 +488,7 @@ function runSelfTest() {
   equal('every recognized Experience section is parsed, in file order (Education skipped)',
     parseCvMdExperience(twoSectionCvMd).map((e) => e.company), ['Acme', 'Beta']);
   equal('a dropped descriptor in the second section is caught',
-    verifyStructure({ experience: [
+    verifyDated({ experience: [
       { company: 'Acme', location: 'Austin, TX · Series B fintech' },
       { company: 'Beta', location: 'Chicago, IL' },
     ] }, twoSectionCvMd).descriptorViolations.length, 1);
@@ -499,7 +532,7 @@ function runSelfTest() {
     { company: 'Acme Corp', location: 'City Two, ST' },
     { company: 'Acme', location: 'City One, ST' },
   ];
-  const prefixCollisionResult = verifyStructure({ experience: prefixCollisionSwapped }, prefixCollisionCvMd);
+  const prefixCollisionResult = verifyDated({ experience: prefixCollisionSwapped }, prefixCollisionCvMd);
   equal('exact match beats fuzzy prefix: swapped "Acme"/"Acme Corp" is still caught',
     prefixCollisionResult.verdict, 'warn');
   equal('prefix-collision order violation names the correct pair',
@@ -524,8 +557,8 @@ function runSelfTest() {
     { company: 'Acme Labs', location: 'City Two, ST · AI tooling' },
   ];
   equal('omitted Acme does not fuzzy-match retained Acme Labs',
-    verifyStructure({ experience: onlyAcmeLabs }, omittedPrefixCvMd),
-    { verdict: 'pass', orderViolations: [], descriptorViolations: [] });
+    verifyDated({ experience: onlyAcmeLabs }, omittedPrefixCvMd),
+    { verdict: 'pass', orderViolations: [], descriptorViolations: [], dateViolations: [] });
 
   // CLI-level regression tests: the null-payload and unreadable-source
   // guards live in runCli(), not verifyStructure(), so exercise them
@@ -591,21 +624,39 @@ function runSelfTest() {
     }
   }
 
+  // Month-level dates: a year alone warns, every accepted month form passes,
+  // and the finding survives an unverified cv.md because it never needed one.
+  const yearOnly = verifyStructure({ experience: [{ ...correctOrder[0], dates: '2023 – Present' }, { ...correctOrder[1], dates: 'July 2021 – February 2023' }] }, cvMd);
+  equal('a year-only period warns and names the company', yearOnly.verdict, 'warn');
+  equal('the date violation names the entry and the period',
+    yearOnly.dateViolations.map((v) => v.split(' — ')[0]),
+    ['Acme Corp: dates "2023 – Present" are not month-level']);
+  equal('a missing period warns too',
+    checkMonthLevelDates([{ company: 'Acme Corp' }]).map((v) => v.split(' — ')[0]),
+    ['Acme Corp: no dates given']);
+  equal('every accepted month-level form passes',
+    checkMonthLevelDates([
+      { company: 'A', dates: 'Feb 2023 – Present' }, { company: 'B', dates: '02/2023 – 11/2025' },
+      { company: 'C', dates: '2023-02 – 2025-11' }, { company: 'D', period: 'February 2023 - present' },
+    ]), []);
+  equal('date violations survive an unrecognised cv.md',
+    verifyStructure({ experience: [{ company: 'Acme Corp', dates: '2023' }] }, unrecognizedCvMd).dateViolations.length, 1);
+
   // verifyStructure() itself must not silently coerce a present, non-array
   // payload.experience into an empty array — that would report a false
   // 'pass' against a recognized cv.md without ever checking the payload.
-  const nonArrayExperienceResult = verifyStructure({ experience: 'not an array' }, cvMd);
+  const nonArrayExperienceResult = verifyDated({ experience: 'not an array' }, cvMd);
   equal('verifyStructure never reports pass for a non-array experience value',
     nonArrayExperienceResult.verdict === 'pass', false);
 
   // verifyStructure() is exported and reachable by any caller, not only the
   // CLI's pre-validated path — it must not throw on malformed input either.
-  equal('verifyStructure(null, cvMd) reports unverified instead of throwing',
-    verifyStructure(null, cvMd),
-    { verdict: 'unverified', orderViolations: [], descriptorViolations: [] });
+  equal('verifyDated(null, cvMd) reports unverified instead of throwing',
+    verifyDated(null, cvMd),
+    { verdict: 'unverified', orderViolations: [], descriptorViolations: [], dateViolations: [] });
   equal('verifyStructure with a null experience entry reports unverified instead of throwing',
-    verifyStructure({ experience: [null, ...correctOrder] }, cvMd),
-    { verdict: 'unverified', orderViolations: [], descriptorViolations: [] });
+    verifyDated({ experience: [null, ...correctOrder] }, cvMd),
+    { verdict: 'unverified', orderViolations: [], descriptorViolations: [], dateViolations: [] });
 
   console.log(`verify-cv-structure self-test: ${passed} passed, ${failed} failed`);
   return failed ? 1 : 0;
@@ -685,10 +736,16 @@ export function runCli(args = process.argv.slice(2)) {
     return 1;
   }
   const result = verifyStructure(payload, cvMdText);
+  const printDateViolations = () => {
+    if (!result.dateViolations.length) return;
+    console.warn('\nExperience entries without month-level dates:');
+    for (const v of result.dateViolations) console.warn(`  - ${v}`);
+  };
   if (result.verdict === 'unverified') {
     console.warn(`⚠️  CV structure check UNVERIFIED: ${basename(targetPath)}`);
-    console.warn(`Could not find supported company/location headers in ${sourcePath} — nothing was checked.`);
+    console.warn(`Could not find supported company/location headers in ${sourcePath} — order and descriptors were not checked.`);
     console.warn(`Expected a ${EXPERIENCE_HEADING_NAMES.map((name) => `"## ${name}"`).join(' / ')} section with "### Company — Location" headers (em dash, en dash, or hyphens); review the tailored CV structure manually.`);
+    printDateViolations();
     return 0;
   }
   if (result.verdict === 'pass') {
@@ -704,6 +761,7 @@ export function runCli(args = process.argv.slice(2)) {
     console.warn('\nMissing company descriptors:');
     for (const v of result.descriptorViolations) console.warn(`  - ${v}`);
   }
+  printDateViolations();
   console.warn('\nThis is a warning, not a blocking gate — review against cv.md and fix the payload if the loss was unintentional, then rebuild the HTML and PDF.');
   return 0;
 }

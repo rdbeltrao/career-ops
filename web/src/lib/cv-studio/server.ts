@@ -45,7 +45,8 @@ function originalOf(htmlPath: string) {
 async function findTailoredHtml(reportNum: string, slug: string): Promise<string | null> {
   const dir = path.join(careerOpsRoot(), "output");
   const indexed = await pdfPathStatusForReport(reportNum);
-  if (indexed.status === "found") {
+  // The studio edits a stale CV as readily as a current one: that is how it gets regenerated.
+  if (indexed.status === "found" || indexed.status === "stale") {
     const sibling = originalOf(indexed.path.replace(/\.pdf$/i, ".html"));
     if (isRegularContainedFile(sibling, dir)) return sibling;
   }
@@ -188,5 +189,5 @@ export async function renderEditedPdf(load: Extract<StudioLoad, { ok: true }>, e
   const mark = await markTrackerReady({ spawnFn: spawn, execPath: process.execPath, root, reportNum: load.reportNum });
   if (!mark.ok) warnings.push(`PDF rendered, but the tracker's PDF column was not updated${mark.data?.error ? `: ${mark.data.error}` : "."}`);
   const index = await pdfPathStatusForReport(load.reportNum);
-  return { ok: true, pdf: path.basename(editedPdf), indexed: index.status === "found" && index.path === path.resolve(editedPdf), warnings };
+  return { ok: true, pdf: path.basename(editedPdf), indexed: (index.status === "found" || index.status === "stale") && index.path === path.resolve(editedPdf), warnings };
 }

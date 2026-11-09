@@ -104,7 +104,7 @@ test('resolveTailoredCv: a multi-word company does NOT match a file whose first 
     // token" fallback would wrongly attach it to a "Meta Platforms"
     // application.
     const result = await resolveTailoredCv('Meta Platforms');
-    assert.equal(result, null);
+    assert.equal(result.status, 'none');
   });
 });
 
@@ -133,7 +133,12 @@ test('generated CV uses the linked report identity when its application number d
     assert.notEqual(first.paths.finalPdf, second.paths.finalPdf);
 
     writeFileSync(first.paths.finalPdf, 'stub-pdf-bytes');
-    assert.equal(await resolveTailoredCv('Acme'), first.paths.finalPdf);
+    // By company name alone the file is found but its requisition is not known:
+    // the resolver says so instead of calling it ready (apply-time gates).
+    const byCompany = await resolveTailoredCv('Acme');
+    assert.equal(byCompany.status, 'unverified-role');
+    assert.equal(byCompany.unverifiedRole, true);
+    assert.equal(byCompany.path, first.paths.finalPdf);
 
     // Supply only this fixture's path endpoints. Web CI installs web dependencies
     // alone; importing the full core here would require its separate packages.
@@ -154,9 +159,18 @@ test('generated CV uses the linked report identity when its application number d
     const prevCodeRoot = process.env.CAREER_OPS_CODE_ROOT;
     process.env.CAREER_OPS_CODE_ROOT = root;
     try {
-      assert.equal(await resolveTailoredCv(undefined, '309'), first.paths.finalPdf);
-      assert.equal(await resolveTailoredCv(undefined, '310'), second.paths.finalPdf);
-      assert.equal(await resolveTailoredCv(undefined, '0309'), first.paths.finalPdf);
+      // No final-review receipt beside either PDF, so the index resolves the
+      // right file for the right row but reports it stale rather than ready.
+      const first309 = await resolveTailoredCv(undefined, '309');
+      const second310 = await resolveTailoredCv(undefined, '310');
+      const padded309 = await resolveTailoredCv(undefined, '0309');
+      assert.equal(first309.status, 'stale');
+      assert.equal(first309.path, first.paths.finalPdf);
+      assert.equal(first309.report, '18');
+      assert.match(first309.reason, /no final-review receipt/);
+      assert.equal(second310.status, 'stale');
+      assert.equal(second310.path, second.paths.finalPdf);
+      assert.equal(padded309.path, first.paths.finalPdf);
     } finally {
       if (prevCodeRoot === undefined) delete process.env.CAREER_OPS_CODE_ROOT;
       else process.env.CAREER_OPS_CODE_ROOT = prevCodeRoot;
@@ -167,14 +181,15 @@ test('generated CV uses the linked report identity when its application number d
 test('resolveTailoredCv: "Meta" does not resolve a file for "Metabase" (token-boundary match)', async () => {
   await withFixture([['cv-jane-doe-metabase-engineer-2026-01-01.pdf']], async () => {
     const result = await resolveTailoredCv('Meta');
-    assert.equal(result, null);
+    assert.equal(result.status, 'none');
   });
 });
 
 test('resolveTailoredCv: a real cv-<slug>-*.pdf matches its company', async () => {
   await withFixture([['cv-jane-doe-acme-engineer-2026-01-01.pdf']], async (outputDir) => {
     const result = await resolveTailoredCv('Acme');
-    assert.equal(result, join(outputDir, 'cv-jane-doe-acme-engineer-2026-01-01.pdf'));
+    assert.equal(result.status, 'unverified-role');
+    assert.equal(result.path, join(outputDir, 'cv-jane-doe-acme-engineer-2026-01-01.pdf'));
   });
 });
 
@@ -186,7 +201,7 @@ test('resolveTailoredCv: newest match wins when multiple CVs exist for the same 
     ],
     async (outputDir) => {
       const result = await resolveTailoredCv('Acme');
-      assert.equal(result, join(outputDir, 'cv-jane-doe-acme-engineer-2026-02-01.pdf'));
+      assert.equal(result.path, join(outputDir, 'cv-jane-doe-acme-engineer-2026-02-01.pdf'));
     }
   );
 });
@@ -199,7 +214,7 @@ test('resolveTailoredCv: a cover-*.pdf is never returned, even if newer than the
     ],
     async (outputDir) => {
       const result = await resolveTailoredCv('Acme');
-      assert.equal(result, join(outputDir, 'cv-jane-doe-acme-engineer-2026-01-01.pdf'));
+      assert.equal(result.path, join(outputDir, 'cv-jane-doe-acme-engineer-2026-01-01.pdf'));
     }
   );
 });

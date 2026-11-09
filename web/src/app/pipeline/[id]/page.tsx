@@ -1,5 +1,5 @@
 import { notFound } from "next/navigation";
-import { readReport, findApplication, pdfReadyForReport, trackerCanDelete } from "@/lib/career-ops";
+import { readReport, findApplication, pdfPathStatusForReport, trackerCanDelete } from "@/lib/career-ops";
 import { resolveTailoredCover } from "@/lib/apply/cover";
 import { ReportView } from "@/components/report-view";
 import { pipelineQuery } from "@/lib/pipeline-navigation.mjs";
@@ -29,6 +29,10 @@ export default async function ReportPage({ params, searchParams }: {
   // A LinkedIn posting's employer form, when the crawl or linkedin-apply.mjs read it.
   const reportUrl = report ? parseReport(report.content).fields.find((f) => f.label === "URL")?.value : undefined;
   const li = await lookupLinkedInApply(resolvePostingUrl(app?.url, reportUrl));
+  // One index read answers both: ready (indexed, final review current) and
+  // stale (indexed, but the receipt no longer matches), so the page can say
+  // the PDF needs regenerating instead of calling it ready.
+  const pdfIndex = await pdfPathStatusForReport(String(reportNum ?? id));
   return (
     <ReportView
       id={id}
@@ -36,7 +40,8 @@ export default async function ReportPage({ params, searchParams }: {
       report={report?.content ?? null}
       file={report?.file ?? null}
       canDelete={trackerCanDelete()}
-      pdfReadyFromIndex={await pdfReadyForReport(String(reportNum ?? id))}
+      pdfReadyFromIndex={pdfIndex.status === "found"}
+      pdfStaleReason={pdfIndex.status === "stale" ? pdfIndex.reason : null}
       coverReady={coverReady}
       backHref={`/pipeline${query ? `?${query}` : ""}`}
       applyHref={`/pipeline/${encodeURIComponent(id)}/apply${query ? `?${query}` : ""}`}

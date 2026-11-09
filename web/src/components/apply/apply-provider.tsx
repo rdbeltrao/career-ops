@@ -14,6 +14,16 @@ export type FillStep = { fieldId: string; label: string; ok: boolean; thumb?: st
 type Meta = { needsConfirmation?: boolean; suggestion?: string; suggestionFrom?: string };
 type Status = "idle" | "opening" | "driving" | "prefilling" | "ready" | "filling" | "done" | "error";
 
+/** GET /api/apply/gate: the verdict this application would be sent against and
+ *  the state of the tailored CV that would be attached. Mirrors the server's
+ *  decision, so the page can ask for the reason or the report number BEFORE the
+ *  fill route refuses. */
+export type ApplyGate = {
+  identity: { row: string | null; report: string | null; company: string; role: string; status: string } | null;
+  verdict: { decision: string; isApply: boolean; requiresOverride: boolean; minReason: number } | null;
+  cv: { status: "ready" | "stale" | "unverified-role" | "none"; file: string | null; report: string | null; reason: string | null; unverifiedRole: boolean };
+};
+
 type ApplyCtx = {
   status: Status;
   url: string;
@@ -32,6 +42,18 @@ type ApplyCtx = {
   issues: ApplyIssue[];
   driveSteps: DriveStep[];
   error: string;
+  /** The application-time gates (verdict, CV receipt, role identity); null until read. */
+  gate: ApplyGate | null;
+  gateLoading: boolean;
+  /** Reason to apply against a verdict other than Apply; sent with the fill. */
+  overrideReason: string;
+  setOverrideReason: (v: string) => void;
+  /** Report number confirmed for a pasted-URL session, naming the CV to attach. */
+  confirmReport: string;
+  setConfirmReport: (v: string) => void;
+  /** Explicit choice to fill without attaching any CV (pasted-URL sessions). */
+  skipCv: boolean;
+  setSkipCv: (v: boolean) => void;
   open: (url: string, opts?: { prefill?: boolean; company?: string; n?: string; from?: string }) => Promise<void>;
   prefill: () => Promise<void>;
   setAnswer: (idOrLabel: string, value: string) => void;
@@ -81,6 +103,11 @@ export function ApplyProvider({ children }: { children: React.ReactNode }) {
   const [issues, setIssues] = useState<ApplyIssue[]>([]);
   const [driveSteps, setDriveSteps] = useState<DriveStep[]>([]);
   const [error, setError] = useState("");
+  const [gate, setGate] = useState<ApplyGate | null>(null);
+  const [gateLoading, setGateLoading] = useState(false);
+  const [overrideReason, setOverrideReason] = useState("");
+  const [confirmReport, setConfirmReportState] = useState("");
+  const [skipCv, setSkipCv] = useState(false);
   const sessionId = useRef<string | null>(null);
   const companyRef = useRef<string>("");
   // Mirrors `n` for the async fetch below, same reason as companyRef: the
@@ -112,6 +139,49 @@ export function ApplyProvider({ children }: { children: React.ReactNode }) {
   // ready — driven by an effect (not a fragile setTimeout) so it can't race the
   // session response or a navigation.
   const pendingPrefill = useRef(false);
+  // The gate is read once per session when the fields are ready, and again when
+  // the user confirms a report number. Mirrors overrideReason/confirmReport for
+  // the fill fetch the way companyRef/nRef do.
+  const gateLoaded = useRef(false);
+  const overrideReasonRef = useRef("");
+  overrideReasonRef.current = overrideReason;
+  const confirmReportRef = useRef("");
+  confirmReportRef.current = confirmReport;
+  const skipCvRef = useRef(false);
+  skipCvRef.current = skipCv;
+
+  const loadGate = useCallback(async (confirm?: string) => {
+    if (!sessionId.current) return;
+    const gen = generation.current;
+    setGateLoading(true);
+    try {
+      const q = new URLSearchParams({ sessionId: sessionId.current, application: nRef.current, company: companyRef.current });
+      const c = (confirm ?? confirmReportRef.current).trim();
+      if (/^\d{1,6}$/.test(c)) q.set("confirmReport", c);
+      const r = await fetch(`/api/apply/gate?${q.toString()}`);
+      const d = await r.json().catch(() => null);
+      if (generation.current !== gen) return;
+      if (!r.ok || !d || d.error) {
+        setIssues((prev) => [...prev.filter((i) => i.code !== "gate-unavailable"), { level: "warn", code: "gate-unavailable", message: `Could not read the application gate: ${d?.error || `HTTP ${r.status}`}. The fill will still check it.` }]);
+        return;
+      }
+      setGate(d as ApplyGate);
+    } catch (e) {
+      if (generation.current !== gen) return;
+      setIssues((prev) => [...prev.filter((i) => i.code !== "gate-unavailable"), { level: "warn", code: "gate-unavailable", message: `Could not read the application gate: ${e instanceof Error ? e.message : "network error"}. The fill will still check it.` }]);
+    } finally {
+      if (generation.current === gen) setGateLoading(false);
+    }
+  }, []);
+
+  const setConfirmReport = useCallback((v: string) => {
+    const digits = v.replace(/\D/g, "").slice(0, 6);
+    setConfirmReportState(digits);
+    confirmReportRef.current = digits;
+    // Re-read the gate on every change, cleared field included, so the CV line
+    // shows what that report's index and receipt say.
+    void loadGate(digits);
+  }, [loadGate]);
 
   // Stream the agentic drive (the AI reaching the form live) and finalize the
   // session when it succeeds → fields ready → auto-prefill fires.
@@ -188,6 +258,12 @@ export function ApplyProvider({ children }: { children: React.ReactNode }) {
     setShots([]);
     setIssues([]);
     setDriveSteps([]);
+    setGate(null);
+    gateLoaded.current = false;
+    setOverrideReason("");
+    setConfirmReportState("");
+    confirmReportRef.current = "";
+    setSkipCv(false);
     setUrl(u);
     setCompany(opts?.company ?? "");
     companyRef.current = opts?.company ?? "";
@@ -254,7 +330,7 @@ export function ApplyProvider({ children }: { children: React.ReactNode }) {
     try {
       // company + application travel with the pre-fill for the same reason they
       // travel with the fill: both halves resolve the one tailored CV from them.
-      const r = await fetch("/api/apply/prefill", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sessionId: sessionId.current, cliId: cliId(), company: companyRef.current, application: nRef.current }) });
+      const r = await fetch("/api/apply/prefill", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sessionId: sessionId.current, cliId: cliId(), company: companyRef.current, application: nRef.current, confirmReport: confirmReportRef.current }) });
       if (generation.current !== gen) return; // left mid-prefill
       if (!r.body) {
         setError("Couldn't pre-fill — no response stream.");
@@ -318,6 +394,15 @@ export function ApplyProvider({ children }: { children: React.ReactNode }) {
     }
   }, [status, prefill]);
 
+  // Read the gates once the form is readable, so the verdict and the CV state
+  // are on screen before the user reaches the Fill button.
+  useEffect(() => {
+    if (status === "ready" && !gateLoaded.current && sessionId.current) {
+      gateLoaded.current = true;
+      void loadGate();
+    }
+  }, [status, loadGate]);
+
   const setAnswer = useCallback((idOrLabel: string, value: string) => {
     const fs = fieldsRef.current;
     const key = idOrLabel.toLowerCase();
@@ -377,14 +462,31 @@ export function ApplyProvider({ children }: { children: React.ReactNode }) {
     setStatus("filling");
     setSteps([]);
     try {
-      const r = await fetch("/api/apply/fill", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sessionId: sessionId.current, answers, fields, handoff: true, company: companyRef.current, application: nRef.current }) });
+      const r = await fetch("/api/apply/fill", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          sessionId: sessionId.current,
+          answers,
+          fields,
+          handoff: true,
+          company: companyRef.current,
+          application: nRef.current,
+          // The gates' inputs (apply-gates.mjs): the server refuses without them.
+          overrideReason: overrideReasonRef.current,
+          confirmReport: confirmReportRef.current,
+          skipCv: skipCvRef.current,
+        }),
+      });
       const d = await r.json();
       // Also stops the escalation below from starting an agent drive on a
       // session the user has already walked away from.
       if (generation.current !== gen) return; // left mid-fill
       if (d.error) {
+        // A gate refusal (409) is not a failed session: the form is intact and
+        // the user fixes the input (a reason, a report number) and fills again.
         setError(d.error);
-        setStatus("error");
+        setStatus(r.status === 409 ? "ready" : "error");
         return;
       }
       setSteps(d.steps ?? []);
@@ -397,8 +499,9 @@ export function ApplyProvider({ children }: { children: React.ReactNode }) {
       }
       if (d.navigated) setError("Heads up: the form's page changed during fill — review it carefully before submitting (career-ops never submits for you).");
       setStatus("done");
-      await saveAnswersRef.current("filled");
-      if (generation.current !== gen) return; // left while saving
+      // The fill route saved the typed answers itself (answers-persist.ts) and
+      // reports it in d.issues, so no second save from here: two records of
+      // one fill would read as two applications in the answer bank.
       // ESCALATION ("si no va, full agente"): if deterministic fill clearly
       // didn't land (most fields failed / mismatched), let the agent fill it.
       const okCount = (d.steps ?? []).filter((s: FillStep) => s.ok).length;
@@ -430,7 +533,7 @@ export function ApplyProvider({ children }: { children: React.ReactNode }) {
     const controller = new AbortController();
     fillAbort.current = controller;
     try {
-      const r = await fetch("/api/apply/drive", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sessionId: sessionId.current, cliId: cliId(), goal: "full", answers: ans }), signal: controller.signal });
+      const r = await fetch("/api/apply/drive", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sessionId: sessionId.current, cliId: cliId(), goal: "full", answers: ans, application: nRef.current, overrideReason: overrideReasonRef.current }), signal: controller.signal });
       if (controller.signal.aborted || generation.current !== gen) return; // left mid-fill
       const result = await readFillResult(r, (step) => setDriveSteps((p) => [...p, step]), () => generation.current === gen, controller.signal);
       if (!result || controller.signal.aborted || generation.current !== gen) return; // left mid-fill
@@ -476,11 +579,17 @@ export function ApplyProvider({ children }: { children: React.ReactNode }) {
     setIssues([]);
     setDriveSteps([]);
     setError("");
+    setGate(null);
+    gateLoaded.current = false;
+    setOverrideReason("");
+    setConfirmReportState("");
+    confirmReportRef.current = "";
+    setSkipCv(false);
   }, []);
 
   const value = useMemo(
-    () => ({ status, url, title, company, n, from, fields, answers, meta, steps, shots, prefillLog, issues, driveSteps, error, open, prefill, setAnswer, fill, agentFill, saveAnswers, reset }),
-    [status, url, title, company, n, from, fields, answers, meta, steps, shots, prefillLog, issues, driveSteps, error, open, prefill, setAnswer, fill, agentFill, saveAnswers, reset],
+    () => ({ status, url, title, company, n, from, fields, answers, meta, steps, shots, prefillLog, issues, driveSteps, error, gate, gateLoading, overrideReason, setOverrideReason, confirmReport, setConfirmReport, skipCv, setSkipCv, open, prefill, setAnswer, fill, agentFill, saveAnswers, reset }),
+    [status, url, title, company, n, from, fields, answers, meta, steps, shots, prefillLog, issues, driveSteps, error, gate, gateLoading, overrideReason, confirmReport, setConfirmReport, skipCv, open, prefill, setAnswer, fill, agentFill, saveAnswers, reset],
   );
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }

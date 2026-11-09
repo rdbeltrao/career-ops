@@ -118,9 +118,9 @@ async function withWorkspace(fn, { html = true, manifest = true, outsideHtml = f
 test("the prefill prompt names the very document the fill route attaches", async () => {
   await withWorkspace(async (root) => {
     const attached = await resolveTailoredCv("Acme Corp");
-    assert.ok(attached, "fixture is wrong: the fill route found no tailored CV to attach");
+    assert.ok(attached.status !== "none", "fixture is wrong: the fill route found no tailored CV to attach");
 
-    const cvSource = applyCvSource(root, attached);
+    const cvSource = applyCvSource(root, attached.path);
     const prompt = buildAnswerPrompt({ title: "Acme Corp — Staff Engineer", fields: FIELDS, cvSource });
 
     assert.ok(
@@ -138,7 +138,7 @@ test("the prefill prompt names the very document the fill route attaches", async
 test("with no tailored CV, the prompt still sends the planner to cv.md", async () => {
   await withWorkspace(async () => {
     const attached = await resolveTailoredCv("Nothing Built Here");
-    assert.equal(attached, null);
+    assert.equal(attached.status, "none");
 
     const prompt = buildAnswerPrompt({ title: "Nothing Built Here — Staff Engineer", fields: FIELDS, cvSource: null });
     assert.match(prompt, /Read cv\.md/);
@@ -183,7 +183,11 @@ test("resolveSessionCv falls back to the company in the page title", async () =>
   // The paste-a-URL flow arrives with no offer context at all, so the form title
   // is the only key either route has.
   await withWorkspace(async (root) => {
-    assert.equal(await resolveSessionCv({ title: "Staff Engineer @ Acme Corp" }), join(root, PDF_REL));
+    const cv = await resolveSessionCv({ title: "Staff Engineer @ Acme Corp" });
+    assert.equal(cv.path, join(root, PDF_REL));
+    // Found by a name in a page title: not known to be THIS requisition's CV,
+    // so the fill route asks for the report number before attaching it.
+    assert.equal(cv.status, "unverified-role");
   });
 });
 
@@ -191,7 +195,7 @@ test("resolveSessionCv stops at an application number that resolved nothing", as
   // THIS role has no tailored CV. Falling through to the title would attach a
   // sibling role's, which is the failure the number was passed to prevent.
   await withWorkspace(async () => {
-    assert.equal(await resolveSessionCv({ application: "999", title: "Staff Engineer @ Acme Corp" }), null);
+    assert.equal((await resolveSessionCv({ application: "999", title: "Staff Engineer @ Acme Corp" })).status, "none");
   });
 });
 
@@ -230,7 +234,7 @@ test("the sensitive-field carve-out survives the tailored-CV wording", async () 
   // answer. It fails silently, so it is pinned on both branches.
   await withWorkspace(async (root) => {
     const attached = await resolveTailoredCv("Acme Corp");
-    for (const cvSource of [applyCvSource(root, attached), null]) {
+    for (const cvSource of [applyCvSource(root, attached.path), null]) {
       const prompt = buildAnswerPrompt({ title: "Acme Corp", fields: FIELDS, cvSource });
       for (const category of ["legal", "visa", "work-authorization", "salary", "demographic"]) {
         assert.ok(prompt.includes(category), `cvSource=${cvSource}: lost the ${category} carve-out`);

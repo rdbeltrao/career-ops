@@ -72,9 +72,10 @@ Comparar autorización de trabajo del candidato (`config/profile.yml` → `locat
 - ✅ **Sponsors** — JD ofrece explícitamente patrocinio y el puesto está fuera de `authorized_in`.
 - ➖ **Not needed** — puesto en país de `authorized_in`, o `needs_sponsorship` es false.
 - ⚠️ **Unstated** — fuera de `authorized_in` y JD silenciosa sobre patrocinio. **NEUTRAL**.
+- ⚠️ **Permit needed — ask before applying** — el puesto exige residir o reubicarse en un país fuera de `authorized_in` (o está restringido a él), `needs_sponsorship` es true y la JD no ofrece patrocinio ni apoyo a la reubicación. **No es neutral**: registrar la pregunta al recruiter en `confidence_gaps`, poner `work_auth: "permit_question"` en el Machine Summary, limitar `final_decision` a Consider como máximo y decir en el Veredicto que la candidatura espera esa respuesta. Un permiso nacional como la Tarjeta Azul UE alemana solo autoriza a trabajar en el Estado que la emitió; nunca es libre circulación en la UE y nunca se lee como tal.
 - ⛔ **No sponsorship** — JD indica explícitamente que no patrocinará y puesto fuera de `authorized_in`.
 
-Citar la JD **textualmente**. ✅/➖/⚠️ son neutrales para el score. Solo ⛔ es bloqueador duro: puntuar ubicación bajo y registrar como `hard_stop`. En caso de ⛔, flag al inicio del Bloque B: `⛔ **No sponsorship:** JD states "{línea textual}" and role is outside your authorized_in`
+Citar la JD **textualmente**. ✅/➖/⚠️ Unstated son neutrales para el score; ⚠️ Permit needed no lo es (veredicto como máximo Consider hasta la respuesta del recruiter). Solo ⛔ es bloqueador duro: puntuar ubicación bajo y registrar como `hard_stop`. En caso de ⛔, flag al inicio del Bloque B: `⛔ **No sponsorship:** JD states "{línea textual}" and role is outside your authorized_in`
 
 ## Bloque B — Match con el CV
 
@@ -385,7 +386,7 @@ Guardar la evaluación completa en `reports/{###}-{company-slug}-{YYYY-MM-DD}.md
 **Score:** {X/5}
 **Decisión:** {Presentarse | Valorar | Investigar primero | Descartar}
 **Legitimacy:** {High Confidence | Proceed with Caution | Suspicious}
-**Work Auth:** {✅ Sponsors | ➖ Not needed | ⚠️ Unstated | ⛔ No sponsorship}
+**Work Auth:** {✅ Sponsors | ➖ Not needed | ⚠️ Unstated | ⚠️ Permit needed | ⛔ No sponsorship}
 **PDF:** {ruta o pendiente}
 
 {la frase de `## Veredicto (lead)`, copiada tal cual}

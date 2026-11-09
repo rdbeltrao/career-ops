@@ -1,11 +1,13 @@
 import test from 'node:test';import assert from 'node:assert/strict';
 import fs from 'node:fs';import path from 'node:path';import os from 'node:os';
-import { parseCareerPeriod, careerChronology, criticalRequirements, validateCvPublication, validateCvChronology, reviewedCvForReport, reviewFinalPdf } from '../lib/cv-publication.mjs';
+import { parseCareerPeriod, careerChronology, criticalRequirements, validateCvPublication, validateCvChronology, reviewedCvForReport, reviewFinalPdf, evidenceAddressesRequirement, missingTechnologyEvidence, technologiesNamed, hasMonthLevelDates, postingRole, headlineLevelError } from '../lib/cv-publication.mjs';
 import { reviewedCvFixture } from './fixtures/reviewed-cv.mjs';
 import { chromium } from 'playwright';
 
 function fixture(t) { const root=fs.mkdtempSync(path.join(os.tmpdir(),'cv-review-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));return root; }
-const source='Led the migration and improved delivery reliability.';
+// Evidence must share content words with the requirement it supports, so the
+// fixture statement names the team, the reliability work and the Product partnership.
+const source='Led an engineering team through the migration, improved production reliability and partnered with Product on priorities.';
 const job='Lead an engineering team. Improve production reliability. Partner with Product on priorities.';
 const quotes=['Lead an engineering team','Improve production reliability','Partner with Product on priorities'];
 const payload={candidate:{name:'Ada Example'},summary:source,experience:[{company:'Example',role:'Manager',dates:'Jan 2020 – Present',bullets:[source]}],tailoring:{requirements:quotes.map(requirement=>({requirement,jdQuote:requirement,match:'supported',evidence:[{source:'facts.md',quote:source}],placements:[{section:'summary',claim:source}]}))}};
@@ -86,8 +88,97 @@ test('actual PDF review detects missing dates/text, page overflow and out-of-bou
   await assert.rejects(reviewFinalPdf(buffer,{...p,experience:[{company:'Missing Company',role:'Manager',dates:'Jan 2022 – Present'}]}),/missing expected text/);
   await assert.rejects(reviewFinalPdf(buffer,{...p,tailoring:{requirements:[{placements:[{section:'skills',claim:'Critical proof missing from the rendered skills section'}]}]}}),/missing expected text/);
   await page.setContent(`<p>${sentence.repeat(4)}</p><div style="break-before:page">${sentence.repeat(4)}</div><div style="break-before:page">${sentence.repeat(4)}</div>`);
-  await assert.rejects(reviewFinalPdf(await page.pdf(),{}),/maximum is 2/);
+  await assert.rejects(reviewFinalPdf(await page.pdf(),{}),/Final PDF has 3 pages; the cap is 2/);
   await page.setContent(`<style>@page {size:8in 11in;margin:0}</style><p>${sentence.repeat(4)}</p><p style="position:absolute;left:-60px">Outside page</p>`);
   await assert.rejects(reviewFinalPdf(await page.pdf({preferCSSPageSize:true}),{}),/outside the page bounds/);
+ }finally{await browser.close();}
+});
+
+const machineReport=(items,role='Engineering Manager')=>`**Role:** ${role}\n## Job Description\n${job}\n## Machine Summary\n\`\`\`yaml\nrole: ${role}\nrequirement_importance:\n${items.map(([requirement,signal,importance])=>`  - requirement: ${requirement}\n    jd_signal: ${signal}\n    importance: ${importance}`).join('\n')}\n\`\`\``;
+
+test('critical requirements return every critical and high requirement in sort order, capped at eight',()=>{
+ const items=[['Low one','Partner with Product on priorities','low'],['High one','Improve production reliability','high'],['Meaningful one','Lead an engineering team','meaningful'],['Critical one','Lead an engineering team','critical'],['High two','Improve production reliability','high'],['Critical two','Partner with Product on priorities','critical']];
+ assert.deepEqual(criticalRequirements(machineReport(items),job).map(x=>x.requirement),['Critical one','Critical two','High one','High two']);
+ const many=Array.from({length:12},(_,i)=>[`Critical ${i}`,'Lead an engineering team','critical']);
+ assert.equal(criticalRequirements(machineReport(many),job).length,8);
+});
+
+test('every supplied critical requirement must be addressed; high requirements are optional but validated when present',()=>{
+ const supplied=[{requirement:quotes[0],jdSignal:quotes[0],jdQuote:quotes[0],importance:'critical'},{requirement:quotes[1],jdSignal:quotes[1],jdQuote:quotes[1],importance:'critical'},{requirement:quotes[2],jdSignal:quotes[2],jdQuote:quotes[2],importance:'high'}];
+ const full={...brief,criticalRequirements:supplied};
+ const report=`## Job Description\n${job}`;
+ assert.doesNotThrow(()=>validateCvPublication(payload,{dataRoot:'unused',report,brief:full}));
+ const twoCritical=structuredClone(payload);twoCritical.tailoring.requirements.pop();
+ assert.doesNotThrow(()=>validateCvPublication(twoCritical,{dataRoot:'unused',report,brief:full}),'the high requirement is optional');
+ const missingCritical=structuredClone(payload);missingCritical.tailoring.requirements.splice(1,1);
+ assert.throws(()=>validateCvPublication(missingCritical,{dataRoot:'unused',report,brief:full}),new RegExp(`Critical requirement not addressed: ${quotes[1]}`));
+ const badHigh=structuredClone(payload);badHigh.tailoring.requirements[2].jdQuote='Not in the posting at all';
+ assert.throws(()=>validateCvPublication(badHigh,{dataRoot:'unused',report,brief:full}),/Requirement 3: quote must occur in the archived job description/);
+ const stranger=structuredClone(payload);stranger.tailoring.requirements.push({...stranger.tailoring.requirements[0],requirement:'Something the brief never listed',jdQuote:quotes[0]});
+ assert.throws(()=>validateCvPublication(stranger,{dataRoot:'unused',report,brief:full}),/Requirement 4: must address the supplied critical requirements/);
+ const five=Array.from({length:5},(_,i)=>({requirement:`Critical ${i}`,jdSignal:quotes[0],jdQuote:quotes[0],importance:'critical'}));
+ assert.throws(()=>validateCvPublication(payload,{dataRoot:'unused',report,brief:{...brief,criticalRequirements:five}}),error=>{
+  for(let i=0;i<5;i++)assert.ok(error.message.includes(`Critical requirement not addressed: Critical ${i}`));return true;
+ });
+});
+
+test('evidence must address the requirement it is quoted for, not merely exist in a source',()=>{
+ assert.equal(evidenceAddressesRequirement('Led an engineering team through the migration','Lead an engineering team'),true);
+ assert.equal(evidenceAddressesRequirement('Improved production reliability','Lead an engineering team','Improve production reliability'),true,'the jd_signal counts');
+ assert.equal(evidenceAddressesRequirement('Managing engineers day to day','Engineering management'),true,'stems fold leading/lead and managing/management');
+ assert.equal(evidenceAddressesRequirement('Experience with years of strong work','5+ years of strong experience with Python'),false,'stop words and requirement boilerplate never count');
+ assert.equal(missingTechnologyEvidence(['PHP, including Laravel and Symfony; server-side application design and REST APIs.'],'5+ years software development, ideally Python'),'evidence names none of the required technologies (python)');
+ assert.equal(missingTechnologyEvidence(['Core technologies: React, React Native, Node.js.'],'Excellent knowledge of Node.js, JavaScript, and TypeScript'),null,'one named technology is enough');
+ assert.equal(missingTechnologyEvidence(['Built an engineering team with clear career paths'],'Grown engineers to the next level through hard conversations'),null,'no technology asked, nothing to block');
+ assert.deepEqual([...technologiesNamed('Strong proficiency in C#/.NET and Golang; k8s a plus')].sort(),['.net','c#','go','kubernetes']);
+ assert.deepEqual([...technologiesNamed('We go to market fast')],[],'the word go in prose is not the language');
+ const weak=structuredClone(payload);weak.tailoring.requirements[0].evidence[0].quote='improved production reliability and partnered with Product';
+ const result=validateCvPublication(weak,{dataRoot:'unused',report:`## Job Description\n${job}`,brief});
+ assert.ok(result.weakEvidence.some(x=>/Requirement 1: evidence shares no wording/.test(x)),'a quote with no shared wording is reported, not blocked');
+ const tech=structuredClone(payload);tech.tailoring.requirements[0].requirement='Lead an engineering team working in Python';
+ assert.throws(()=>validateCvPublication(tech,{dataRoot:'unused',report:`## Job Description\n${job}`,brief}),/Requirement 1: evidence names none of the required technologies \(python\)/);
+ const invented=structuredClone(payload);invented.tailoring.requirements[0].evidence[0].quote='Led an engineering team at an invented employer';
+ assert.throws(()=>validateCvPublication(invented,{dataRoot:'unused',report:`## Job Description\n${job}`,brief}),error=>{
+  assert.match(error.message,/evidence must quote an eligible career source/);assert.doesNotMatch(error.message,/does not address/);return true;
+ });
+});
+
+test('every experience entry needs month-level start and end dates',()=>{
+ for(const ok of['January 2020 – March 2023','Jan 2020 - Present','01/2020 – 03/2023','1/2020 – Present','2020-01 – 2023-03','2020-01 – Present','März 2020 – heute'])assert.equal(hasMonthLevelDates(ok),true,ok);
+ for(const bad of['2020 – 2023','2020 – Present','January 2020 – 2023','2020-13 – Present','13/2020 – Present','January 2020','',undefined])assert.equal(hasMonthLevelDates(bad),false,String(bad));
+ const yearOnly={...brief,chronology:[{company:'Example',dates:'2020 – Present',period:parseCareerPeriod('2020 – Present'),source:'facts.md'}]};
+ const p=structuredClone(payload);p.experience[0].dates='2020 – Present';
+ assert.throws(()=>validateCvPublication(p,{dataRoot:'unused',report:`## Job Description\n${job}`,brief:yearOnly}),/^(?=[^]*Example: dates must name the month and year)(?![^]*must match)/);
+ const period=structuredClone(payload);delete period.experience[0].dates;period.experience[0].period='Jan 2020 – Present';
+ assert.doesNotThrow(()=>validateCvPublication(period,{dataRoot:'unused',report:`## Job Description\n${job}`,brief}));
+});
+
+test('headline level above the posting title is rejected; equal, lower or unreadable levels pass',()=>{
+ assert.equal(postingRole('**Role:** Head of Engineering\n## Machine Summary\n```yaml\nrole: Other\n```'),'Head of Engineering');
+ assert.equal(postingRole('## Machine Summary\n```yaml\ncompany: X\nrole: "Engineering Manager (m/w/d)"\n```'),'Engineering Manager (m/w/d)');
+ assert.equal(postingRole('# Evaluation: nothing to read here'),null);
+ assert.equal(headlineLevelError('Senior Engineering Manager','Engineering Manager'),'Headline level above the posting title: Senior Engineering Manager vs Engineering Manager');
+ assert.equal(headlineLevelError('Head of Engineering','Engineering Manager (Team Lead)'),'Headline level above the posting title: Head of Engineering vs Engineering Manager (Team Lead)');
+ assert.equal(headlineLevelError('VP Engineering','Director of Engineering'),'Headline level above the posting title: VP Engineering vs Director of Engineering');
+ for(const [headline,role] of[['Head of Engineering','Director of Engineering'],['Director of Engineering','Head of Platform'],['Senior Engineering Manager','Senior Engineering Manager'],['Engineering Manager','Team Lead Backend'],['Engineering Manager','Lead Engineer'],['Engineering Manager','Head of Engineering'],['Sr. Engineering Manager','Senior Engineering Manager']])assert.equal(headlineLevelError(headline,role),null,`${headline} vs ${role}`);
+ const p=structuredClone(payload);p.candidate.title='Senior Engineering Manager';
+ assert.throws(()=>validateCvPublication(p,{dataRoot:'unused',report:machineReport([]),brief}),/Headline level above the posting title: Senior Engineering Manager vs Engineering Manager/);
+ assert.doesNotThrow(()=>validateCvPublication(p,{dataRoot:'unused',report:machineReport([],'Senior Engineering Manager'),brief}));
+ assert.doesNotThrow(()=>validateCvPublication(p,{dataRoot:'unused',report:`## Job Description\n${job}`,brief}),'no readable role skips the check');
+});
+
+test('final PDF review asserts contact details, skills and education survived rendering and caps pages at two',async()=>{
+ const browser=await chromium.launch({headless:true});try{
+  const page=await browser.newPage();const sentence='A complete source-backed statement describing engineering leadership and delivery outcomes for this example application.';
+  const p={candidate:{name:'Ada Example',email:'ada@example.com',phone:'+49 162 8505 236'},summary:sentence,skills:[{category:'Core',items:'PHP, Laravel, REST APIs'},{category:'Cloud',items:['AWS','Kubernetes']}],education:[{title:'BSc Computer Science',org:'Example University'}]};
+  await page.setContent(`<p>Ada Example · ada@example.com · +49 162 8505236</p><p>${sentence.repeat(4)}</p><p>Core: PHP, Laravel, REST APIs</p><p>Cloud: AWS, Kubernetes</p><p>BSc Computer Science — Example University</p>`);
+  const buffer=await page.pdf();assert.equal((await reviewFinalPdf(buffer,p)).pages.length,1);
+  await assert.rejects(reviewFinalPdf(buffer,{...p,candidate:{...p.candidate,email:'other@example.com'}}),/missing expected text: other@example.com/);
+  await assert.rejects(reviewFinalPdf(buffer,{...p,candidate:{...p.candidate,phone:'+49 30 1234567'}}),/missing the candidate phone/);
+  await assert.rejects(reviewFinalPdf(buffer,{...p,skills:[...p.skills,{category:'Data',items:'PostgreSQL, Kafka'}]}),/missing expected text: PostgreSQL/);
+  await assert.rejects(reviewFinalPdf(buffer,{...p,education:[{title:'MSc Data Science',org:'Example University'}]}),/missing expected text: MSc Data Science/);
+  await assert.rejects(reviewFinalPdf(buffer,{...p,education:[{title:'BSc Computer Science',org:'Another University'}]}),/missing expected text: Another University/);
+  await page.setContent(`<p>${sentence.repeat(4)}</p><div style="break-before:page">${sentence.repeat(4)}</div><div style="break-before:page">${sentence.repeat(4)}</div>`);
+  await assert.rejects(reviewFinalPdf(await page.pdf(),{}),/^Error: Final PDF review failed:\nFinal PDF has 3 pages; the cap is 2\./);
  }finally{await browser.close();}
 });
