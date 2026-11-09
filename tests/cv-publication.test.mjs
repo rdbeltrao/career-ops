@@ -1,6 +1,6 @@
 import test from 'node:test';import assert from 'node:assert/strict';
 import fs from 'node:fs';import path from 'node:path';import os from 'node:os';
-import { parseCareerPeriod, careerChronology, criticalRequirements, validateCvPublication, validateCvChronology, reviewedCvForReport, reviewFinalPdf, evidenceAddressesRequirement, missingTechnologyEvidence, technologiesNamed, hasMonthLevelDates, postingRole, headlineLevelError, isLogisticsRequirement, reportReviewText } from '../lib/cv-publication.mjs';
+import { parseCareerPeriod, careerChronology, criticalRequirements, validateCvPublication, validateCvChronology, reviewedCvForReport, reviewFinalPdf, evidenceAddressesRequirement, missingTechnologyEvidence, technologiesNamed, hasMonthLevelDates, postingRole, headlineLevelError, isLogisticsRequirement, reportReviewText, currentEvidenceHash, evidenceHashFor, citedEvidenceSources, citedChronologySources } from '../lib/cv-publication.mjs';
 import { reviewedCvFixture } from './fixtures/reviewed-cv.mjs';
 import { chromium } from 'playwright';
 
@@ -239,4 +239,84 @@ test('the review receipt ignores the Application Answers section, which the appl
   assert.equal(reportReviewText(after).includes('Salary: 120000'), false);
   assert.equal(reportReviewText('# R\n## Application Answers\n- a\n'), '# R\n');
   assert.notEqual(reportReviewText(before.replace('Apply', 'Consider')), reportReviewText(before), 'a changed verdict still changes the hash');
+});
+
+// A context library with two facts pages. The CV quotes only `cited`; `other`
+// is a role the CV lists but never quotes from. Both carry a Role record period,
+// so both are in the chronology.
+function libraryFixture(t){
+ const root=fixture(t);fs.mkdirSync(path.join(root,'data/context-workspace/pages'),{recursive:true});fs.mkdirSync(path.join(root,'data'),{recursive:true});
+ const ids={root:'1'.repeat(32),cited:'2'.repeat(32),other:'3'.repeat(32)};
+ const pages=[{id:'root',title:'Career',parentId:null,order:0,usage:'reference'},{id:'cited',title:'Example — Manager',parentId:'root',order:0,usage:'facts'},{id:'other',title:'Elsewhere — Engineer',parentId:'root',order:1,usage:'facts'}];
+ fs.writeFileSync(path.join(root,'data/context-workspace/index.json'),JSON.stringify({version:1,rootId:ids.root,pages:pages.map(p=>({...p,id:ids[p.id],parentId:p.parentId?ids[p.parentId]:null}))}));
+ const body=(period,prose)=>`## Role record\n\n- **Period:** ${period}.\n\n# Work\n\n${prose}\n`;
+ const file=id=>path.join(root,`data/context-workspace/pages/${ids[id]}.md`);
+ fs.writeFileSync(file('cited'),body('January 2020 – Present','Led an engineering team through the migration and improved production reliability.'));
+ fs.writeFileSync(file('other'),body('March 2016 – December 2019','Built billing services in PHP.'));
+ fs.writeFileSync(file('root'),'# Career\n\nIndex.\n');
+ fs.writeFileSync(path.join(root,'data/pdf-index.tsv'),'1\toutput/1.pdf\t\ta4\t2026-11-01\tcv\n');
+ const rel=id=>`data/context-workspace/pages/${ids[id]}.md`;
+ const cvPayload={candidate:{name:'Ada Example'},experience:[{company:'Example',role:'Manager',dates:'Jan 2020 – Present'},{company:'Elsewhere',role:'Engineer',dates:'Mar 2016 – Dec 2019'}],
+  tailoring:{requirements:[{requirement:'Lead an engineering team',jdQuote:'Lead an engineering team',match:'supported',evidence:[{source:rel('cited'),quote:'Led an engineering team through the migration'}],placements:[]}]}};
+ return {root,file,rel,cvPayload,pdf:path.join(root,'output/1.pdf')};
+}
+const appendProse=(file,text)=>fs.appendFileSync(file,`\n${text}\n`);
+
+test('receipt narrowing: an edit to an uncited Context page keeps the receipt current; a cited page or chronology edit stales it',t=>{
+ const {root,file,rel,cvPayload,pdf}=libraryFixture(t);
+ reviewedCvFixture(root,1,pdf,{payload:cvPayload});
+ const receipt=JSON.parse(fs.readFileSync(`${pdf}.review.json`,'utf8'));
+ assert.deepEqual(receipt.evidenceSources,[rel('cited')]);
+ assert.deepEqual(receipt.chronologySources,[rel('cited'),rel('other')],'both employers the CV lists are chronology sources');
+ assert.notEqual(receipt.evidenceSha256,currentEvidenceHash(root),'the narrow hash is not the whole-context hash');
+ assert.doesNotThrow(()=>reviewedCvForReport(root,1));
+ appendProse(file('other'),'Also mentored two juniors.');
+ assert.doesNotThrow(()=>reviewedCvForReport(root,1),'prose on a page the CV never quotes does not stale the CV');
+ appendProse(file('root'),'Reference text changed.');
+ assert.doesNotThrow(()=>reviewedCvForReport(root,1),'a reference page is never evidence');
+ appendProse(file('cited'),'Partnered with Product on priorities.');
+ assert.throws(()=>reviewedCvForReport(root,1),/career evidence changed/);
+ // Re-review after the cited edit, then change only the uncited page's dates.
+ reviewedCvFixture(root,1,pdf,{payload:cvPayload});
+ assert.doesNotThrow(()=>reviewedCvForReport(root,1));
+ fs.writeFileSync(file('other'),fs.readFileSync(file('other'),'utf8').replace('March 2016 – December 2019','March 2016 – June 2019'));
+ assert.throws(()=>reviewedCvForReport(root,1),/career evidence changed/,'a date change anywhere is a chronology change');
+ // Demoting the cited page out of facts stales it too.
+ reviewedCvFixture(root,1,pdf,{payload:cvPayload});
+ const index=JSON.parse(fs.readFileSync(path.join(root,'data/context-workspace/index.json'),'utf8'));
+ index.pages.find(p=>p.id==='2'.repeat(32)).usage='reference';
+ fs.writeFileSync(path.join(root,'data/context-workspace/index.json'),JSON.stringify(index));
+ assert.throws(()=>reviewedCvForReport(root,1),/career evidence changed/);
+});
+
+test('receipt narrowing: a legacy receipt without evidenceSources is judged by the whole-context rule, never passed by default',t=>{
+ const {root,file,cvPayload,pdf}=libraryFixture(t);
+ reviewedCvFixture(root,1,pdf,{payload:cvPayload});
+ const receiptFile=`${pdf}.review.json`;
+ const legacy=JSON.parse(fs.readFileSync(receiptFile,'utf8'));
+ delete legacy.evidenceSources;delete legacy.chronologySources;legacy.evidenceSha256=currentEvidenceHash(root);
+ fs.writeFileSync(receiptFile,JSON.stringify(legacy));
+ assert.doesNotThrow(()=>reviewedCvForReport(root,1),'a legacy receipt whose whole-context hash still matches is current');
+ appendProse(file('other'),'Also mentored two juniors.');
+ assert.throws(()=>reviewedCvForReport(root,1),/career evidence changed/,'under the old rule an uncited page edit stales it');
+ // A legacy receipt with no hash at all, and one with the wrong hash, both fail.
+ for(const sha of[undefined,'0'.repeat(64)]){const broken={...legacy};if(sha===undefined)delete broken.evidenceSha256;else broken.evidenceSha256=sha;fs.writeFileSync(receiptFile,JSON.stringify(broken));assert.throws(()=>reviewedCvForReport(root,1),/career evidence changed/);}
+ // An empty citation list is the whole-context rule as well.
+ reviewedCvFixture(root,1,pdf,{payload:{candidate:{name:'Ada Example'}}});
+ const empty=JSON.parse(fs.readFileSync(receiptFile,'utf8'));
+ assert.deepEqual(empty.evidenceSources,[]);
+ assert.equal(empty.evidenceSha256,currentEvidenceHash(root));
+ assert.equal(evidenceHashFor(root,[]),currentEvidenceHash(root));
+ appendProse(file('other'),'Another line.');
+ assert.throws(()=>reviewedCvForReport(root,1),/career evidence changed/);
+});
+
+test('citedEvidenceSources and citedChronologySources read the payload shape and tolerate missing parts',()=>{
+ assert.deepEqual(citedEvidenceSources(null),[]);
+ assert.deepEqual(citedEvidenceSources({tailoring:{requirements:[{evidence:[{source:'b.md'},{source:' a.md '},{source:''},{quote:'x'}]},{match:'gap'},null]}}),['a.md','b.md']);
+ const chronology=[{company:'Example GmbH',source:'p1.md'},{company:'Elsewhere',source:'p2.md'},{company:'Example',source:'p1.md'}];
+ assert.deepEqual(citedChronologySources({experience:[{company:'Example'}]},chronology),['p1.md']);
+ assert.deepEqual(citedChronologySources({},chronology),[]);
+ assert.equal(evidenceHashFor('unused',['x.md'],null),evidenceHashFor('unused',[' x.md ','x.md'],null),'sources are trimmed and deduplicated before hashing');
+ assert.notEqual(evidenceHashFor('unused',['x.md'],null),evidenceHashFor('unused',['y.md'],null));
 });
