@@ -1,6 +1,6 @@
 import test from 'node:test';import assert from 'node:assert/strict';
 import fs from 'node:fs';import path from 'node:path';import os from 'node:os';
-import { parseCareerPeriod, careerChronology, criticalRequirements, validateCvPublication, validateCvChronology, reviewedCvForReport, reviewFinalPdf, evidenceAddressesRequirement, missingTechnologyEvidence, technologiesNamed, hasMonthLevelDates, postingRole, headlineLevelError } from '../lib/cv-publication.mjs';
+import { parseCareerPeriod, careerChronology, criticalRequirements, validateCvPublication, validateCvChronology, reviewedCvForReport, reviewFinalPdf, evidenceAddressesRequirement, missingTechnologyEvidence, technologiesNamed, hasMonthLevelDates, postingRole, headlineLevelError, isLogisticsRequirement, reportReviewText } from '../lib/cv-publication.mjs';
 import { reviewedCvFixture } from './fixtures/reviewed-cv.mjs';
 import { chromium } from 'playwright';
 
@@ -181,4 +181,62 @@ test('final PDF review asserts contact details, skills and education survived re
   await page.setContent(`<p>${sentence.repeat(4)}</p><div style="break-before:page">${sentence.repeat(4)}</div><div style="break-before:page">${sentence.repeat(4)}</div>`);
   await assert.rejects(reviewFinalPdf(await page.pdf(),{}),/^Error: Final PDF review failed:\nFinal PDF has 3 pages; the cap is 2\./);
  }finally{await browser.close();}
+});
+
+test('technology names that are English words count only as proper names in a technology list', () => {
+  const names = text => [...technologiesNamed(text)].sort();
+  assert.deepEqual(names('Ability to express ideas clearly and react quickly to incidents'), []);
+  assert.deepEqual(names('Spring 2026 start. Swift onboarding. Spark innovation across teams. At the helm of a platform team. We go live weekly.'), []);
+  assert.deepEqual(names('Strong React and TypeScript skills'), ['react', 'typescript']);
+  assert.deepEqual(names('Frontend: React, Next.js'), ['next.js', 'react']);
+  assert.deepEqual(names('ReactJS and Python'), ['python', 'react']);
+  assert.deepEqual(names('Experience with Go, Kubernetes and AWS'), ['aws', 'go', 'kubernetes']);
+  assert.deepEqual(names('Built microservices in Go deployed on Kubernetes'), ['go', 'kubernetes']);
+  assert.deepEqual(names('Golang experience'), ['go']);
+  assert.deepEqual(names('Ran workloads on Amazon Web Services'), ['aws']);
+  assert.equal(missingTechnologyEvidence(['Led incident response, cut MTTR by 40%'], 'Ability to react quickly to incidents'), null);
+  assert.equal(missingTechnologyEvidence(['Ran workloads on Amazon Web Services'], 'AWS experience'), null);
+  assert.match(missingTechnologyEvidence(['Shipped a PHP monolith'], 'Hands-on Python and Django'), /python, django|django, python/);
+});
+
+test('the technology block applies to a claim of full support only; a partial match declares its gap instead', () => {
+  const requirement = '5+ years software development, ideally Python';
+  const proof = 'Ten years building PHP and TypeScript web platforms end to end.';
+  const techBrief = { chronology: brief.chronology, criticalRequirements: [{ requirement, jdSignal: requirement, jdQuote: requirement, importance: 'critical' }], evidence: [{ source: 'facts.md', text: `${source} ${proof}` }] };
+  const report = `## Job Description\nRequirements: ${requirement}.`;
+  const entry = { requirement, jdQuote: requirement, evidence: [{ source: 'facts.md', quote: proof }], placements: [{ section: 'summary', claim: proof }] };
+  const partialPayload = { ...payload, summary: proof, tailoring: { requirements: [{ ...entry, match: 'partial', gap: 'No Python in production; PHP and TypeScript instead.' }] } };
+  const partial = validateCvPublication(partialPayload, { dataRoot: 'unused', report, brief: techBrief });
+  assert.ok(partial.gaps.some(g => /No Python in production/.test(g)), 'the partial match keeps its declared gap and is not blocked');
+  const supportedPayload = { ...payload, summary: proof, tailoring: { requirements: [{ ...entry, match: 'supported' }] } };
+  assert.throws(() => validateCvPublication(supportedPayload, { dataRoot: 'unused', report, brief: techBrief }), /names none of the required technologies \(python\)/);
+});
+
+test('logistics rows never enter the critical brief: a CV cannot answer where, how or for how much', () => {
+  for (const text of ['Location: Berlin, hybrid', 'Full-time, regular employment', 'Applications from the EU only', '100% remote within Spain (residency/relocation requirement)', 'In-person / hub-based work mode', 'German at C1 level', 'Must be authorized to work in Germany', 'Start date: January'])
+    assert.equal(isLogisticsRequirement(text), true, text);
+  for (const text of ['5+ years software development, ideally Python', 'Experience leading distributed teams', 'Hands-on with Kubernetes', 'Owned hiring and performance management']) assert.equal(isLogisticsRequirement(text), false, text);
+  const report = '## Machine Summary\n```yaml\nrequirement_importance:\n  - { requirement: "Location: Berlin, hybrid", jd_signal: "Berlin, hybrid", importance: critical }\n  - { requirement: "Lead distributed teams", jd_signal: "lead distributed teams", importance: critical }\n```\n';
+  assert.deepEqual(criticalRequirements(report, 'lead distributed teams in Berlin, hybrid').map(x => x.requirement), ['Lead distributed teams']);
+});
+
+test('month-level dates accept the forms a CV writes and reject a season or "since" before a year', () => {
+  for (const ok of ['06/2021 – 05/2023', 'Jun 2021 – May 2023', 'January 2020 to March 2023', '01.2020 – 03.2023', 'Feb 2023 − Present', 'Jan 2023 – Present (contract)', 'März 2020 – heute', '2019-03 – 2021-06']) assert.equal(hasMonthLevelDates(ok), true, ok);
+  for (const bad of ['Since 2019 – Present', 'Summer 2021 – Winter 2022', 'Early 2020 – Late 2022', '2021 – 2023', '2021']) assert.equal(hasMonthLevelDates(bad), false, bad);
+});
+
+test('headline level: Senior equals Lead, Staff and Principal; Head equals the German Leiter', () => {
+  assert.equal(headlineLevelError('Senior Engineering Manager', 'Lead Engineer'), null);
+  assert.equal(headlineLevelError('Senior Engineering Manager', 'Staff Engineering Manager'), null);
+  assert.equal(headlineLevelError('Head of Engineering', 'Leiter Softwareentwicklung (m/w/d)'), null);
+  assert.match(headlineLevelError('Head of Engineering', 'Senior Engineering Manager'), /above the posting title/);
+});
+
+test('the review receipt ignores the Application Answers section, which the apply flow appends after the fill', () => {
+  const before = '# Report\n\n## Machine Summary\n```yaml\nfinal_decision: Apply\n```\n\n## Job Description (archived verbatim)\nJD text\n';
+  const after = '# Report\n\n## Machine Summary\n```yaml\nfinal_decision: Apply\n```\n\n## Application Answers\n\n**Date:** 2026-11-09\n- Salary: 120000\n\n## Job Description (archived verbatim)\nJD text\n';
+  assert.equal(reportReviewText(after).replace(/\n{2,}/g, '\n'), reportReviewText(before).replace(/\n{2,}/g, '\n'));
+  assert.equal(reportReviewText(after).includes('Salary: 120000'), false);
+  assert.equal(reportReviewText('# R\n## Application Answers\n- a\n'), '# R\n');
+  assert.notEqual(reportReviewText(before.replace('Apply', 'Consider')), reportReviewText(before), 'a changed verdict still changes the hash');
 });

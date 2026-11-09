@@ -6,6 +6,8 @@ import * as yaml from "js-yaml";
  * @typedef {{ fit: number | null, score: number | null, verdict: string | null, blocking: string[] }} JevSummary
  * @typedef {{
  *   decision: string,
+ *   workAuth: string,
+ *   postingLocation: string,
  *   strengths: string[],
  *   hardStops: string[],
  *   softGaps: string[],
@@ -65,6 +67,8 @@ export function readMachineSummary(report) {
   const evidence = raw.score_evidence && typeof raw.score_evidence === "object" ? raw.score_evidence : {};
   return {
     decision: String(raw.final_decision ?? "").trim(),
+    workAuth: String(raw.work_auth ?? "").trim(),
+    postingLocation: String(raw.posting_location ?? "").trim(),
     strengths: strings(raw.top_strengths),
     hardStops: strings(raw.hard_stops),
     softGaps: strings(raw.soft_gaps),

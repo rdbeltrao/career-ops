@@ -29,8 +29,8 @@ const careerOps = read("src/lib/career-ops.ts");
 const pipelinePage = read("src/app/pipeline/[id]/page.tsx");
 const reportView = read("src/components/report-view.tsx");
 
-test("the fill route runs the verdict gate and refuses with 409 before touching the form", () => {
-  assert.match(fill, /verdictGate\(\{\s*decision:\s*gate\.verdict\.decision,\s*overrideReason\s*\}\)/);
+test("the fill route runs the verdict gate, permit question included, and refuses with 409 before touching the form", () => {
+  assert.match(fill, /verdictGate\(\{\s*decision:\s*gate\.verdict\.decision,\s*overrideReason,\s*permit:\s*gate\.verdict\.permit\s*\}\)/);
   assert.match(fill, /code:\s*v\.code[^\n]*\{\s*status:\s*409\s*\}/);
   const gateAt = fill.indexOf("verdictGate(");
   const fillAt = fill.indexOf("await fillSession(");
@@ -103,15 +103,24 @@ test("the prefill route drafts only from a ready CV and accepts the confirmed re
   assert.match(prefill, /const cvPath = cv\.status === "ready" \? cv\.path : null/);
 });
 
-test("the agent drive applies the verdict gate to a full fill", () => {
-  assert.match(drive, /goal === "full" && application\?\.trim\(\)/);
-  assert.match(drive, /verdictGate\(\{\s*decision:\s*gate\.verdict\.decision,\s*overrideReason\s*\}\)/);
+test("the agent drive applies the verdict gate to every full fill, pasted URL included", () => {
+  assert.match(drive, /if \(goal === "full"\) \{\s*const gate = await applyGateStatus\(\{[^}]*url:\s*s\.url\s*\}\)/);
+  assert.doesNotMatch(drive, /goal === "full" && application/, "the gate no longer depends on the page naming a tracker row");
+  assert.match(drive, /if \(!gate\.verdict\) \{[^}]*code:\s*"report-required"[^\n]*status:\s*409/);
+  assert.match(drive, /verdictGate\(\{\s*decision:\s*gate\.verdict\.decision,\s*overrideReason,\s*permit:\s*gate\.verdict\.permit\s*\}\)/);
   assert.match(drive, /status:\s*409/);
 });
 
-test("the gate route previews through the same applyGateStatus the fill route decides with", () => {
-  assert.match(gateRoute, /applyGateStatus\(\{\s*application,\s*confirmReport,\s*company,\s*title\s*\}\)/);
-  assert.match(fill, /applyGateStatus\(\{\s*application,\s*confirmReport,\s*company,\s*title:\s*session\.title\s*\}\)/);
+test("a session with no report behind it is refused: the fill route answers 409 report-required instead of filling without a verdict", () => {
+  assert.match(fill, /if \(!gate\.verdict\) \{[^}]*code:\s*"report-required"[^\n]*status:\s*409/);
+  const refuseAt = fill.indexOf('code: "report-required"');
+  const fillAt = fill.indexOf("await fillSession(");
+  assert.ok(refuseAt > 0 && refuseAt < fillAt, "the refusal comes before fillSession");
+});
+
+test("the gate route previews through the same applyGateStatus the fill route decides with, session URL included", () => {
+  assert.match(gateRoute, /applyGateStatus\(\{\s*application,\s*confirmReport,\s*company,\s*title,\s*url:\s*session\?\.url\s*\}\)/);
+  assert.match(fill, /applyGateStatus\(\{\s*application,\s*confirmReport,\s*company,\s*title:\s*session\.title,\s*url:\s*session\.url\s*\}\)/);
   assert.match(gateRoute, /publicCv\(status\.cv\)/, "no absolute path leaves the server");
 });
 

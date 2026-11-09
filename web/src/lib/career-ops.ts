@@ -217,7 +217,11 @@ export function readApplications(): Application[] {
   // third argument is the running system checkout, so a data-only root (no
   // tracker-aliases.json of its own) still resolves headers correctly.
   // `as unknown`: the parser returns string cells; `jev` is joined on later by applicationsWithJev.
-  return parseApplications(md, careerOpsRoot(), path.resolve(process.cwd(), "..")) as unknown as Application[];
+  // The column map's fallback is the code checkout, resolved the way rootScript()
+  // resolves it: `cwd/..` was right only when the process started from web/, and
+  // from the repo root it pointed outside the checkout, so a data-only root lost
+  // every alias-only column (URL among them) and the apply gate's URL match found nothing.
+  return parseApplications(md, careerOpsRoot(), careerOpsCodeRoot()) as unknown as Application[];
 }
 
 export type StatusLogRow = {

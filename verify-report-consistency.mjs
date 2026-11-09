@@ -71,6 +71,9 @@ const HEADER_TIERS = [
   [/unstated/i, 'unstated'],
   [/sponsors/i, 'sponsors'],
 ];
+// The tier label sits before any explanation: "➖ Not needed (fully remote; no
+// sponsorship issue raised)" is not_needed, whatever the parenthesis says.
+const headerTierLabel = (text) => String(text ?? '').split(/[(—–;:,]/)[0];
 
 // Countries a posting location can name, with the spellings a JD uses. A
 // location that names none of these (a bare city, "Remote") is left alone:
@@ -146,10 +149,10 @@ const EEA_EXTRA = new Set(['Norway', 'Iceland']);
 // holds the right to work across it (citizenship), which the profile states;
 // a national permit is listed by its country and never expands to this.
 const BLOC_ALIASES = [
-  [/^(?:eu|european union)$/i, (c) => EU_MEMBERS.has(c)],
-  [/^(?:eea|european economic area)$/i, (c) => EU_MEMBERS.has(c) || EEA_EXTRA.has(c)],
-  [/^(?:eu\s*\/\s*eea|eea\s*\/\s*eu)$/i, (c) => EU_MEMBERS.has(c) || EEA_EXTRA.has(c)],
-  [/^(?:eu\s*\+\s*switzerland|eu\/efta|efta)$/i, (c) => EU_MEMBERS.has(c) || EEA_EXTRA.has(c) || c === 'Switzerland'],
+  [/^(?:eu|european union)$/i, (c) => EU_MEMBERS.has(c) || c === 'European Union'],
+  [/^(?:eea|european economic area)$/i, (c) => EU_MEMBERS.has(c) || EEA_EXTRA.has(c) || c === 'European Union' || c === 'European Economic Area'],
+  [/^(?:eu\s*\/\s*eea|eea\s*\/\s*eu)$/i, (c) => EU_MEMBERS.has(c) || EEA_EXTRA.has(c) || c === 'European Union' || c === 'European Economic Area'],
+  [/^(?:eu\s*\+\s*switzerland|eu\/efta|efta)$/i, (c) => EU_MEMBERS.has(c) || EEA_EXTRA.has(c) || c === 'Switzerland' || c === 'European Union' || c === 'European Economic Area'],
 ];
 
 const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -161,9 +164,26 @@ const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
  * @param {unknown} text
  * @returns {string|null}
  */
+// A bloc named as the posting location. "European Union" is exactly the case
+// a national permit does not cover, so it is a country for this check and is
+// authorized only through a bloc entry in `authorized_in`.
+const BLOC_LOCATIONS = [
+  ['European Union', [/(?<![\p{L}])(?:european union|eu)(?![\p{L}])/iu]],
+  ['European Economic Area', [/(?<![\p{L}])(?:european economic area|eea)(?![\p{L}])/iu]],
+];
+
 export function countryOf(text) {
   const s = String(text ?? '').toLowerCase();
   if (!s.trim()) return null;
+  for (const [name, patterns] of BLOC_LOCATIONS) if (patterns.some((re) => re.test(s))) {
+    // A bloc beside a country ("Berlin, Germany (EU)") still names the country.
+    const named = countryNamed(s);
+    return named ?? name;
+  }
+  return countryNamed(s);
+}
+
+function countryNamed(s) {
   let best = null;
   for (const [name, aliases] of COUNTRIES) {
     for (const alias of aliases) {
@@ -224,6 +244,9 @@ export function readProfileLocation(profilePath) {
 export function headerWorkAuth(markdown) {
   const m = /^\*\*Work Auth:\*\*[ \t]*(.+)$/im.exec(String(markdown ?? ''));
   if (!m) return null;
+  const label = headerTierLabel(m[1]);
+  for (const [re, value] of HEADER_TIERS) if (re.test(label)) return value;
+  // A header with no recognisable label before the explanation: read the whole line.
   for (const [re, value] of HEADER_TIERS) if (re.test(m[1])) return value;
   return null;
 }
@@ -289,13 +312,17 @@ export function requiredStackRows(rows) {
 
 // "without adding people": the words between "without" and the noun that
 // carry no claim of their own, and the nouns that are too weak to anchor one.
-const WITHOUT_FILLER = new Set(['adding', 'growing', 'increasing', 'expanding', 'hiring', 'needing', 'requiring', 'taking', 'any', 'the', 'a', 'an', 'more', 'extra', 'additional', 'new', 'further', 'to', 'of', 'in', 'on', 'or', 'and', 'its', 'their', 'our']);
+const WITHOUT_FILLER = new Set(['adding', 'growing', 'increasing', 'expanding', 'hiring', 'needing', 'requiring', 'taking', 'any', 'the', 'a', 'an', 'more', 'extra', 'additional', 'new', 'further', 'to', 'of', 'in', 'on', 'or', 'and', 'its', 'their', 'our',
+  // pronouns, adverbs and manner nouns: "without hesitation once it arrives" claims no resource
+  'it', 'them', 'us', 'him', 'her', 'this', 'that', 'these', 'those', 'once', 'ever', 'first', 'much', 'too', 'yet', 'hesitation', 'delay', 'delays', 'fail', 'failing', 'issue', 'issues', 'problem', 'problems', 'friction', 'drama', 'doubt', 'question', 'fuss']);
 const WITHOUT_WEAK = new Set(['growth', 'increase', 'change', 'changes', 'addition', 'additions', 'expansion', 'loss', 'cost', 'costs', 'drop', 'drops']);
+// Synonyms a Block B Evidence cell may use for the resource named after
+// "without". `people` and `hiring` are deliberately absent: every engineering-
+// manager report mentions people and hiring somewhere, so they evidenced any
+// "without headcount" claim and the check passed against itself (report 583).
 const WITHOUT_SYNONYMS = {
-  headcount: ['headcount', 'head count', 'people', 'hire', 'hires', 'hiring', 'team size', 'engineers added', 'fte'],
-  people: ['people', 'headcount', 'head count', 'hire', 'hires', 'hiring', 'team size', 'fte'],
-  hires: ['hire', 'hires', 'hiring', 'headcount', 'head count', 'people'],
-  hiring: ['hiring', 'hire', 'hires', 'headcount', 'head count', 'people'],
+  headcount: ['headcount', 'head count', 'team size', 'engineers added', 'fte', 'additional engineers', 'more engineers', 'new hires', 'extra hires'],
+  hires: ['hires', 'headcount', 'head count', 'team size', 'new hires'],
   budget: ['budget', 'spend', 'cost'],
   downtime: ['downtime', 'outage', 'outages', 'uptime', 'availability'],
   outages: ['outage', 'outages', 'downtime', 'uptime', 'availability'],
@@ -322,7 +349,7 @@ export function withoutClauses(text) {
     const trimmed = [];
     // The clause ends at the first word that starts a new phrase.
     for (const w of words) {
-      if (/^(?:and|or|but|which|that|so|because|while|as|for|with|from|by|at|on|in|into|after|before|since|then|also|only|still|yet|if|when|though)$/i.test(w) && trimmed.length) break;
+      if (/^(?:and|or|but|which|that|so|because|while|as|for|with|from|by|at|on|in|into|after|before|since|then|also|only|still|yet|if|when|though|once|it|them|us|this|these|those|he|she|we|you|they)$/i.test(w) && trimmed.length) break;
       trimmed.push(w);
     }
     if (!trimmed.length) continue;

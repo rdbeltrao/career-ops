@@ -9,8 +9,8 @@ Optional passes:
 ### Required publication review
 
 Generating HTML or a PDF produces a draft. Mark a CV ready only after the shared
-publication pipeline has checked its source-backed dates, its three critical job
-requirements, and the actual rendered PDF. Never use an ATS score as this review.
+publication pipeline has checked its source-backed dates, every supplied critical job
+requirement, and the actual rendered PDF. Never use an ATS score as this review.
 
 Before drafting, resolve the report and read its archived job description. Read
 the eligible career periods and critical requirements through
@@ -21,8 +21,10 @@ or conflicting period blocks publication; never guess or leave a blank date.
 Build one `tailoring.requirements` entry per supplied critical requirement (every critical one; high ones when you address them) in the render payload:
 `{requirement, jdQuote, match, evidence, placements, gap}`. `match` is `supported`,
 `partial`, or `gap`. Each `jdQuote` must be a contiguous passage from the actual
-archived JD. Use the supplied critical requirements when available; otherwise
-select three essential requirements, excluding benefits and page navigation.
+archived JD. Use the supplied critical requirements when available (location,
+contract type, work mode, permit, pay and language-level rows are not supplied:
+a CV cannot answer them); only when none are supplied select three essential
+requirements from the JD, excluding benefits and page navigation.
 Each supported or partial match quotes eligible career evidence as
 `{source, quote}` and names its actual CV placement as
 `{section: "summary" | "experience" | "skills" | "education", company, bulletIndex, claim}`. `claim` must

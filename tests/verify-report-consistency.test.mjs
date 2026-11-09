@@ -254,8 +254,11 @@ test('without-clause-unsupported: the Requirement cell never evidences the claus
   const strengths = { top_strengths: ['Delivery materially improved without headcount growth'] };
   const evidenced = report({ yaml: strengths, rows: [{ requirement: 'Improved delivery', match: '✅ Strong', evidence: '_context.md: throughput 2.6x through process changes, not headcount growth' }] });
   assert.deepEqual(kinds(checkReport(evidenced)), []);
-  const synonym = report({ yaml: strengths, rows: [{ requirement: 'Improved delivery', match: '✅ Strong', evidence: '_context.md: same team of 9 people throughout, throughput 2.6x' }] });
-  assert.deepEqual(kinds(checkReport(synonym)), [], 'people is a synonym of headcount');
+  const synonym = report({ yaml: strengths, rows: [{ requirement: 'Improved delivery', match: '✅ Strong', evidence: '_context.md: constant team size throughout, throughput 2.6x' }] });
+  assert.deepEqual(kinds(checkReport(synonym)), [], 'team size is a synonym of headcount');
+  // "people" and "hiring" appear in every engineering-manager report, so they never evidence the claim (report 583).
+  const people = report({ yaml: strengths, rows: [{ requirement: 'Improved delivery', match: '✅ Strong', evidence: '_context.md: people round with the CTO, owns hiring' }] });
+  assert.deepEqual(kinds(checkReport(people)), ['without-clause-unsupported']);
   const onlyInRequirement = report({ yaml: strengths, rows: [{ requirement: 'Improved delivery without headcount growth', match: '✅ Strong', evidence: '_context.md: throughput 2.6x' }] });
   assert.deepEqual(kinds(checkReport(onlyInRequirement)), ['without-clause-unsupported']);
 });
@@ -366,4 +369,30 @@ test('CLI never writes: the data root holds only what the fixture wrote', () => 
     assert.deepEqual(readdirSync(root).sort(), ['config', 'reports']);
     assert.deepEqual(readdirSync(join(root, 'reports')).sort(), ['001-spain-2026-11-01.md', '002-berlin-2026-11-01.md', '003-legacy-2026-11-01.md']);
   } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('work-auth-header: the tier label is read before any explanation in parentheses', () => {
+  assert.equal(headerWorkAuth('**Work Auth:** ➖ Not needed (fully remote, EMEA; no sponsorship issue raised)'), 'not_needed');
+  assert.equal(headerWorkAuth('**Work Auth:** ➖ Not needed — no sponsorship question relevant'), 'not_needed');
+  assert.equal(headerWorkAuth('**Work Auth:** ⛔ No sponsorship (JD: "we cannot sponsor")'), 'no_sponsorship');
+  assert.equal(headerWorkAuth('**Work Auth:** ⚠️ Permit needed — ask before applying'), 'permit_question');
+});
+
+test('countryOf: the European Union and the EEA are locations a national permit does not cover', () => {
+  assert.equal(countryOf('European Union'), 'European Union');
+  assert.equal(countryOf('Remote, EU'), 'European Union');
+  assert.equal(countryOf('European Economic Area'), 'European Economic Area');
+  assert.equal(countryOf('Berlin, Germany (EU)'), 'Germany');
+  assert.equal(countryOf('EMEA'), null);
+  assert.equal(isAuthorized('European Union', ['Germany']), false);
+  assert.equal(isAuthorized('European Union', ['EU']), true);
+  assert.equal(isAuthorized('European Economic Area', ['EEA']), true);
+});
+
+test('without-clause: "people" and "hiring" in an Evidence cell no longer evidence a headcount claim; pronoun-led clauses are ignored', () => {
+  assert.deepEqual(withoutClauses('apply without hesitation once it arrives'), []);
+  const table = { cols: { evidence: 2 }, rows: [['Req', 'Strong', 'Led a people round with the CTO; owns hiring']] };
+  assert.equal(clauseEvidenced({ nouns: ['headcount'] }, table), false);
+  const evidenced = { cols: { evidence: 2 }, rows: [['Req', 'Strong', 'Throughput up 2.6x at constant team size (_context.md:12)']] };
+  assert.equal(clauseEvidenced({ nouns: ['headcount'] }, evidenced), true);
 });

@@ -1,6 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
-import { careerOpsRoot, findApplication, findReportFile, readApplications, type Application } from "@/lib/career-ops";
+import { pathToFileURL } from "node:url";
+import { careerOpsRoot, findApplication, findReportFile, readApplications, rootScript, type Application } from "@/lib/career-ops";
+import { getProfilePath } from "@/lib/core/profile-path.mjs";
+import { normalizeUrl } from "@/lib/core/url-key.mjs";
 import { readMachineSummary } from "@/lib/machine-summary.mjs";
 import { isReservedReportFile } from "@/lib/report-files.mjs";
 import { isApplyVerdict } from "./apply-gates.mjs";
@@ -30,7 +33,45 @@ export type Verdict = {
   decision: string;
   isApply: boolean;
   requiresOverride: boolean;
+  /** An open work-permit question (why), or null: `work_auth: permit_question`,
+   *  or a posting location outside `authorized_in` for a candidate who needs
+   *  sponsorship. A German EU Blue Card covers Germany, never the EU. */
+  permit: string | null;
 };
+
+type ConsistencyModule = {
+  countryOf(text: unknown): string | null;
+  isAuthorized(country: string, authorizedIn: unknown[]): boolean;
+  readProfileLocation(profilePath: string): { authorizedIn: string[]; needsSponsorship: boolean | null } | null;
+};
+
+let consistencyModule: Promise<ConsistencyModule | null> | null = null;
+/** The core's country and authorization rules (verify-report-consistency.mjs), loaded once; null when the checkout cannot run them. */
+function loadConsistency(): Promise<ConsistencyModule | null> {
+  consistencyModule ??= import(/* webpackIgnore: true */ pathToFileURL(rootScript("verify-report-consistency")).href).then((m) => m as ConsistencyModule).catch(() => null);
+  return consistencyModule;
+}
+
+/**
+ * Why a work permit is still a question for this role, or null. The report's
+ * own tier wins; when it reads anything but permit_question, the posting
+ * location is checked against the profile, because 4 of the Spain reports in
+ * the 2026-11-09 diagnostic carried `final_decision: Apply` with
+ * `work_auth: not_needed`.
+ */
+export async function permitQuestion(summary: { workAuth?: string; postingLocation?: string } | null): Promise<string | null> {
+  if (!summary) return null;
+  if (summary.workAuth === "permit_question") return "the evaluation marked the work authorization as a permit question";
+  const location = (summary.postingLocation ?? "").trim();
+  if (!location) return null;
+  const core = await loadConsistency();
+  if (!core) return null;
+  const profile = core.readProfileLocation(getProfilePath(careerOpsRoot()));
+  if (!profile || profile.needsSponsorship !== true) return null;
+  const country = core.countryOf(location);
+  if (!country || core.isAuthorized(country, profile.authorizedIn)) return null;
+  return `the posting location "${location}" is outside the countries you are authorized to work in (${profile.authorizedIn.join(", ") || "none listed"})`;
+}
 
 /** The report under reports/ numbered `n`, read without a tracker row. */
 function reportFileByNumber(n: string): string | null {
@@ -74,18 +115,55 @@ export function identityForReport(reportNumber: string): ApplicationIdentity | n
   return { row: null, report: String(target), reportFile, company: "", role: "", status: "" };
 }
 
+/**
+ * Identity for a pasted form URL: the tracker row whose URL cell names the
+ * same posting (url-key.mjs normalization, so tracking params, scheme and a
+ * trailing slash do not matter). An ATS "apply" page is keyed back to its
+ * posting: Lever serves the form at `/{id}/apply`, Greenhouse at
+ * `/{board}/jobs/{id}#app` (a fragment normalizeUrl already drops). Null when
+ * no row matches, so the caller can still ask for the report number.
+ */
+export function identityForUrl(url: string | undefined): ApplicationIdentity | null {
+  const raw = (url ?? "").trim();
+  if (!raw) return null;
+  const candidates = new Set<string>();
+  const spellings = [raw, raw.replace(/\/apply\/?(?=[?#]|$)/i, "")];
+  for (const spelling of spellings) {
+    const key = normalizeUrl(spelling);
+    if (!key) continue;
+    candidates.add(key);
+    // An ATS form link often carries a source param the tracker's posting URL
+    // never had (Lever `lever-source`, Ashby `utm_*` variants not in the
+    // tracking list). The bare path is the same posting when the tracker's own
+    // key is the bare path, and only then does it match.
+    const bare = normalizeUrl(spelling.replace(/[?#].*$/, ""));
+    if (bare) candidates.add(bare);
+  }
+  if (candidates.size === 0) return null;
+  const rows = readApplications().filter((a) => {
+    const k = normalizeUrl(a.url);
+    return !!k && candidates.has(k);
+  });
+  // Two rows on one URL (a re-evaluation that kept both) are ambiguous: the
+  // user confirms the report number instead of the gate guessing.
+  if (rows.length !== 1) return null;
+  return identityFromRow(rows[0], findReportFile(rows[0].n));
+}
+
 /** The verdict gate's input, read from the report's Machine Summary. */
-export function reportVerdict(reportFile: string | null): Verdict {
-  let decision = "";
+export async function reportVerdict(reportFile: string | null): Promise<Verdict> {
+  let summary: ReturnType<typeof readMachineSummary> = null;
   if (reportFile) {
     try {
-      decision = readMachineSummary(fs.readFileSync(/* turbopackIgnore: true */ reportFile, "utf8"))?.decision ?? "";
+      summary = readMachineSummary(fs.readFileSync(/* turbopackIgnore: true */ reportFile, "utf8"));
     } catch {
-      decision = "";
+      summary = null;
     }
   }
+  const decision = summary?.decision ?? "";
   const isApply = isApplyVerdict(decision);
-  return { decision, isApply, requiresOverride: !isApply };
+  const permit = await permitQuestion(summary);
+  return { decision, isApply, requiresOverride: !isApply || permit !== null, permit };
 }
 
 /** What the Apply page shows before the fill, and what the fill route checks. */
@@ -101,11 +179,19 @@ export type ApplyGateStatus = {
  * POST /api/apply/fill (the decision), so the page never previews a different
  * answer than the one the server enforces.
  */
-export async function applyGateStatus(opts: { application?: string; confirmReport?: string; company?: string; title?: string }): Promise<ApplyGateStatus> {
-  const application = opts.application?.trim() || "";
+export async function applyGateStatus(opts: { application?: string; confirmReport?: string; company?: string; title?: string; url?: string }): Promise<ApplyGateStatus> {
+  let application = opts.application?.trim() || "";
   const confirmReport = opts.confirmReport?.trim() || "";
-  const identity = application ? identityForApplication(application) : confirmReport ? identityForReport(confirmReport) : null;
-  const verdict = application || confirmReport ? reportVerdict(identity?.reportFile ?? null) : null;
+  let identity = application ? identityForApplication(application) : confirmReport ? identityForReport(confirmReport) : null;
+  if (!identity && !application && !confirmReport) {
+    // A pasted URL: the tracker row that evaluated this posting, when one did.
+    identity = identityForUrl(opts.url);
+    if (identity?.row) application = identity.row;
+  }
+  // A session with no report behind it has no verdict to read: `verdict` stays
+  // null and the fill route refuses until a report number is confirmed, because
+  // "apply only on an Apply verdict" cannot be checked against nothing.
+  const verdict = identity || application || confirmReport ? await reportVerdict(identity?.reportFile ?? null) : null;
   const cv = await resolveSessionCv({ company: opts.company, application: application || undefined, title: opts.title, confirmReport: confirmReport || undefined });
   return { identity, verdict, cv };
 }

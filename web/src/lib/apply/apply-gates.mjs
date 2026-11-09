@@ -66,32 +66,35 @@ export function trackerNoteText(text, max = MAX_NOTE_LENGTH) {
  * only with an override reason of at least MIN_OVERRIDE_REASON characters,
  * and then carries the tracker note recording it.
  *
- * @param {{ decision?: unknown, overrideReason?: unknown }} input
+ * @param {{ decision?: unknown, overrideReason?: unknown, permit?: string | null }} input
  * @returns {{ ok: true, decision: string, override: false }
  *         | { ok: true, decision: string, override: true, reason: string, note: string }
  *         | { ok: false, decision: string, code: string, error: string }}
  */
-export function verdictGate({ decision, overrideReason } = {}) {
+export function verdictGate({ decision, overrideReason, permit = null } = {}) {
   const verdict = String(decision ?? "").trim();
-  if (isApplyVerdict(verdict)) return { ok: true, decision: verdict, override: false };
+  const permitOpen = typeof permit === "string" && permit.trim() ? permit.trim() : null;
+  if (isApplyVerdict(verdict) && !permitOpen) return { ok: true, decision: verdict, override: false };
   const reason = typeof overrideReason === "string" ? trackerNoteText(overrideReason, MAX_NOTE_LENGTH) : "";
   const shown = verdict || "missing";
   if (reason.length < MIN_OVERRIDE_REASON) {
-    return {
-      ok: false,
-      decision: verdict,
-      code: GATE_CODES.verdict,
-      error: verdict
-        ? `The evaluation verdict is "${shown}", not Apply. Give a reason of at least ${MIN_OVERRIDE_REASON} characters to apply anyway; it is recorded in the tracker.`
-        : `This report has no readable final_decision. Give a reason of at least ${MIN_OVERRIDE_REASON} characters to apply anyway; it is recorded in the tracker.`,
-    };
+    let error;
+    if (permitOpen && isApplyVerdict(verdict)) error = `A work-permit question is open for this role (${permitOpen}). Ask the recruiter first, or give a reason of at least ${MIN_OVERRIDE_REASON} characters to apply anyway; it is recorded in the tracker.`;
+    else if (verdict) error = `The evaluation verdict is "${shown}", not Apply. Give a reason of at least ${MIN_OVERRIDE_REASON} characters to apply anyway; it is recorded in the tracker.`;
+    else error = `This report has no readable final_decision. Give a reason of at least ${MIN_OVERRIDE_REASON} characters to apply anyway; it is recorded in the tracker.`;
+    return { ok: false, decision: verdict, code: GATE_CODES.verdict, error };
   }
-  return { ok: true, decision: verdict, override: true, reason, note: overrideNote(reason, verdict) };
+  return { ok: true, decision: verdict, override: true, reason, note: overrideNote(reason, verdict, permitOpen) };
 }
 
-/** `override: <reason> (verdict <final_decision>)`, the note a later diagnostic parses. */
-export function overrideNote(reason, decision) {
-  return trackerNoteText(`override: ${reason} (verdict ${String(decision ?? "").trim() || "missing"})`, MAX_NOTE_LENGTH + 80);
+/**
+ * `override: <reason> (verdict <final_decision>)`, the note a later diagnostic
+ * parses; `; permit question open` is appended inside the parenthesis when the
+ * override also waives an unanswered work-permit question.
+ */
+export function overrideNote(reason, decision, permit = null) {
+  const tail = typeof permit === "string" && permit.trim() ? "; permit question open" : "";
+  return trackerNoteText(`override: ${reason} (verdict ${String(decision ?? "").trim() || "missing"}${tail})`, MAX_NOTE_LENGTH + 80);
 }
 
 /**
@@ -110,11 +113,22 @@ export function cvProvenanceNote({ file, sha256, report }) {
 /** A parsed `override:` or `cv:` note, for the diagnostic that reads them back. */
 export function parseGateNote(note) {
   const text = String(note ?? "").trim();
-  const override = /^override:\s*(.+?)\s*\(verdict\s+([^)]*)\)$/i.exec(text);
-  if (override) return { kind: "override", reason: override[1], decision: override[2].trim() };
+  const override = /^override:\s*(.+?)\s*\(verdict\s+([^);]*?)\s*(;\s*permit question open)?\)$/i.exec(text);
+  if (override) return { kind: "override", reason: override[1], decision: override[2].trim(), permit: !!override[3] };
   const cv = /^cv:\s*(\S+)\s+sha256:([0-9a-f]{6,64})\s+report:(\S+)$/i.exec(text);
   if (cv) return { kind: "cv", file: cv[1], sha256: cv[2], report: cv[3] === "unknown" ? null : cv[3] };
   return null;
+}
+
+/**
+ * Every `override:` and `cv:` note inside a tracker Notes cell. set-status.mjs
+ * appends notes with "; ", so a real cell reads "job id 123; Re-eval …; cv: …;
+ * override: …" and parseGateNote alone, anchored to the whole string, finds
+ * nothing in it. The override reason itself never contains "; " (trackerNoteText
+ * folds it), so the split is safe.
+ */
+export function parseGateNotes(cell) {
+  return String(cell ?? "").split(/;\s+/).map(parseGateNote).filter(Boolean);
 }
 
 /**
@@ -128,7 +142,14 @@ export function parseGateNote(note) {
  *         | { attach: false, code: string | null, error: string | null }}
  */
 export function attachDecision(cv, { confirmReport } = {}) {
-  if (!cv || cv.status === "none") return { attach: false, code: null, error: null };
+  const confirmed = typeof confirmReport === "string" && /^\d{1,6}$/.test(confirmReport.trim());
+  if (!cv || cv.status === "none") {
+    // The user named the report whose CV to attach and it has none: refuse,
+    // rather than quietly sending the application with no CV. Filling without
+    // one is the explicit `skipCv` choice, which the route resolves before this.
+    if (confirmed) return { attach: false, code: GATE_CODES.noCv, error: `Report ${confirmReport.trim()} has no indexed tailored CV${cv?.reason ? ` (${cv.reason})` : ""}. Generate it, or tick "Fill without attaching a CV".` };
+    return { attach: false, code: null, error: null };
+  }
   if (cv.status === "ready") return { attach: true, path: cv.path, report: cv.report ?? null };
   if (cv.status === "stale") {
     return {
@@ -138,7 +159,6 @@ export function attachDecision(cv, { confirmReport } = {}) {
     };
   }
   if (cv.status === "unverified-role") {
-    const confirmed = typeof confirmReport === "string" && /^\d{1,6}$/.test(confirmReport.trim());
     return {
       attach: false,
       code: GATE_CODES.unverifiedRole,

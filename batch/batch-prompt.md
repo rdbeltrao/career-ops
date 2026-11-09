@@ -217,7 +217,7 @@ Produce a table with: detected archetype, domain, function, seniority, remote/wo
 
 - ✅ **Sponsors** — the JD explicitly offers visa sponsorship or relocation for a role outside `authorized_in`.
 - ➖ **Not needed** — the role is within `authorized_in`, is genuinely location-agnostic remote from an authorized country, or `needs_sponsorship` is false.
-- ⚠️ **Unstated** — the role is outside `authorized_in` and the JD is silent; treat this as neutral, not a blocker.
+- ⚠️ **Unstated** — the role's country binding is itself unclear (a foreign HQ with no stated work location, a "remote" with no country) or the profile lacks `needs_sponsorship`, and the JD is silent; treat this as neutral, not a blocker. A role bound to a named country outside `authorized_in` is never Unstated: it is Permit needed.
 - ⚠️ **Permit needed — ask before applying** — the role requires residence or relocation in, or is restricted to, a country outside `authorized_in`, `needs_sponsorship` is true, and the JD offers neither sponsorship nor relocation support. Not neutral: record the recruiter question in `confidence_gaps`, write `work_auth: "permit_question"`, cap `final_decision` at Consider and say in the Verdict that the application waits for the answer. A national permit such as the German EU Blue Card authorizes work in the issuing state only and is never read as EU free movement.
 - ⛔ **No sponsorship** — the JD explicitly refuses sponsorship or requires existing authorization for a role outside `authorized_in`; this is the only hard-stop tier.
 
@@ -623,7 +623,7 @@ Report header:
 **Scoring note:** {`none` when a `## Runtime pre-screen: jev` block was appended and Block D and G research happened; otherwise the missing parts, comma-separated: `no Jev gate`, `no web research` (docs/JEV.md → Score variance)}
 **Decision:** {Apply | Consider | Research first | Skip}
 **Legitimacy:** {High Confidence | Proceed with Caution | Suspicious}
-**Work Auth:** {✅ Sponsors | ➖ Not needed | ⚠️ Unstated | ⛔ No sponsorship}
+**Work Auth:** {✅ Sponsors | ➖ Not needed | ⚠️ Unstated | ⚠️ Permit needed | ⛔ No sponsorship}
 **URL:** {{URL}}
 **PDF:** {output/cv-candidate-{{REPORT_NUM}}-{company-slug}-{{DATE}}.pdf if score >= resolved auto_pdf_score_threshold, otherwise a localized equivalent of `not generated — run /career-ops pdf {company-slug} to create on demand` in `language.output`}
 **Batch ID:** {{ID}}

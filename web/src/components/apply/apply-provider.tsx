@@ -20,7 +20,7 @@ type Status = "idle" | "opening" | "driving" | "prefilling" | "ready" | "filling
  *  fill route refuses. */
 export type ApplyGate = {
   identity: { row: string | null; report: string | null; company: string; role: string; status: string } | null;
-  verdict: { decision: string; isApply: boolean; requiresOverride: boolean; minReason: number } | null;
+  verdict: { decision: string; isApply: boolean; requiresOverride: boolean; permit: string | null; minReason: number } | null;
   cv: { status: "ready" | "stale" | "unverified-role" | "none"; file: string | null; report: string | null; reason: string | null; unverifiedRole: boolean };
 };
 
@@ -533,7 +533,7 @@ export function ApplyProvider({ children }: { children: React.ReactNode }) {
     const controller = new AbortController();
     fillAbort.current = controller;
     try {
-      const r = await fetch("/api/apply/drive", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sessionId: sessionId.current, cliId: cliId(), goal: "full", answers: ans, application: nRef.current, overrideReason: overrideReasonRef.current }), signal: controller.signal });
+      const r = await fetch("/api/apply/drive", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sessionId: sessionId.current, cliId: cliId(), goal: "full", answers: ans, application: nRef.current, overrideReason: overrideReasonRef.current, confirmReport: confirmReportRef.current }), signal: controller.signal });
       if (controller.signal.aborted || generation.current !== gen) return; // left mid-fill
       const result = await readFillResult(r, (step) => setDriveSteps((p) => [...p, step]), () => generation.current === gen, controller.signal);
       if (!result || controller.signal.aborted || generation.current !== gen) return; // left mid-fill

@@ -39,7 +39,8 @@ test('AGENTS.md and docs/SCRIPTS.md never document a report id as the bare selec
 
 test('the scan sees the apply-mode calls it guards', () => {
   const src = readFileSync(join(ROOT, 'modes', 'apply.md'), 'utf-8');
-  assert.deepEqual([...src.matchAll(CALL)].map((m) => m[1]), ['--report', '--report']);
+  // Step 4c (the override note), Step 9 (Applied with the provenance note) and the two earlier calls.
+  assert.deepEqual([...src.matchAll(CALL)].map((m) => m[1]), ['--report', '--report', '--report']);
 });
 
 test('a bare report placeholder is reported', () => {

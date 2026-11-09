@@ -71,7 +71,7 @@ Comparar autorización de trabajo del candidato (`config/profile.yml` → `locat
 
 - ✅ **Sponsors** — JD ofrece explícitamente patrocinio y el puesto está fuera de `authorized_in`.
 - ➖ **Not needed** — puesto en país de `authorized_in`, o `needs_sponsorship` es false.
-- ⚠️ **Unstated** — fuera de `authorized_in` y JD silenciosa sobre patrocinio. **NEUTRAL**.
+- ⚠️ **Unstated** — el vínculo del puesto con un país no está claro (sede extranjera sin lugar de trabajo declarado, "remoto" sin país) o el perfil no tiene `needs_sponsorship`, y la JD calla sobre patrocinio. **NEUTRAL**. Un puesto ligado a un país concreto fuera de `authorized_in` nunca es Unstated: es Permit needed.
 - ⚠️ **Permit needed — ask before applying** — el puesto exige residir o reubicarse en un país fuera de `authorized_in` (o está restringido a él), `needs_sponsorship` es true y la JD no ofrece patrocinio ni apoyo a la reubicación. **No es neutral**: registrar la pregunta al recruiter en `confidence_gaps`, poner `work_auth: "permit_question"` en el Machine Summary, limitar `final_decision` a Consider como máximo y decir en el Veredicto que la candidatura espera esa respuesta. Un permiso nacional como la Tarjeta Azul UE alemana solo autoriza a trabajar en el Estado que la emitió; nunca es libre circulación en la UE y nunca se lee como tal.
 - ⛔ **No sponsorship** — JD indica explícitamente que no patrocinará y puesto fuera de `authorized_in`.
 

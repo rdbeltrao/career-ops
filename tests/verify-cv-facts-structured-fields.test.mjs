@@ -45,7 +45,9 @@ AWS Certified Developer – Associate
 `;
 const source = join(tmp, 'cv.md');
 writeFileSync(source, CV);
-const options = (extra = {}) => ({ sourcePaths: [source], configPath: join(tmp, 'none.json'), ...extra });
+// dataRoot is the scratch dir: a checkout whose .career-ops-data marker points at a
+// real data root with a context library would otherwise clear allow_facts (#allowedFacts).
+const options = (extra = {}) => ({ sourcePaths: [source], configPath: join(tmp, 'none.json'), dataRoot: tmp, ...extra });
 
 function build(script, payload, ext) {
   const input = join(tmp, `${script}-${Math.random().toString(36).slice(2)}.json`);

@@ -21,12 +21,13 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, copyFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import "../helpers/web-ts-alias-loader.mjs";
 
-const { applyGateStatus, identityForApplication, identityForReport, publicCv, reportVerdict } = await import("../../src/lib/apply/gate.ts");
+const { applyGateStatus, identityForApplication, identityForReport, identityForUrl, publicCv, reportVerdict } = await import("../../src/lib/apply/gate.ts");
 const { resolveTailoredCv, resolveSessionCv, resolveConfirmedCv } = await import("../../src/lib/apply/cv.ts");
 const { pdfPathStatusForReport, pdfPathForReport, pdfReadyForReport } = await import("../../src/lib/career-ops.ts");
 const { cvReviewStatus } = await import("../../src/lib/cv-review.ts");
@@ -62,15 +63,27 @@ async function withFixture(fn) {
   for (const [n, decision] of reports) {
     writeFileSync(join(root, "reports", `${n}-acme-2026-07-01.md`), `# Evaluation: Acme — Engineer ${n}\n\n**URL:** https://jobs.acme.test/${n}\n${machineSummary(decision)}`);
   }
+  // Two Apply verdicts with a permit question: 022 marked by the evaluator, 023
+  // only visible through its posting location (the 2026-11-09 diagnostic shape).
+  writeFileSync(join(root, "reports", "022-acme-2026-07-01.md"), "# Evaluation: Acme — Engineer 022\n\n## Machine Summary\n\n```yaml\nfinal_decision: Apply\nwork_auth: permit_question\nposting_location: \"Madrid, Spain\"\n```\n");
+  writeFileSync(join(root, "reports", "023-acme-2026-07-01.md"), "# Evaluation: Acme — Engineer 023\n\n## Machine Summary\n\n```yaml\nfinal_decision: Apply\nwork_auth: not_needed\nposting_location: \"Barcelona, Spain\"\n```\n");
+  mkdirSync(join(root, "config"), { recursive: true });
+  writeFileSync(join(root, "config", "profile.yml"), "location:\n  authorized_in: [Germany]\n  needs_sponsorship: true\n");
+  // The core's country rules, loaded from the checkout at runtime like cv-publication.
+  writeFileSync(join(codeRoot, "verify-report-consistency.mjs"), [
+    "export function countryOf(text) { const s = String(text ?? '').toLowerCase(); return /spain/.test(s) ? 'Spain' : /germany/.test(s) ? 'Germany' : null; }",
+    "export function isAuthorized(country, authorizedIn) { return (authorizedIn ?? []).includes(country); }",
+    "export function readProfileLocation() { return { authorizedIn: ['Germany'], needsSponsorship: true }; }",
+  ].join("\n"));
   writeFileSync(
     join(root, "data", "applications.md"),
     [
-      "| # | Date | Company | Role | Score | Status | PDF | Report | Notes |",
-      "|---|---|---|---|---|---|---|---|---|",
-      "| 309 | 2026-07-01 | Acme | Engineer | 4.5/5 | Evaluated | ✅ | [018](../reports/018-acme-2026-07-01.md) | |",
-      "| 310 | 2026-07-01 | Acme | Manager | 3.5/5 | Evaluated | ✅ | [019](../reports/019-acme-2026-07-01.md) | |",
-      "| 311 | 2026-07-01 | Acme | Lead | 3.9/5 | Applied | ✅ | [020](../reports/020-acme-2026-07-01.md) | sent |",
-      "| 312 | 2026-07-01 | Acme | Director | 3.2/5 | Evaluated | ❌ | [021](../reports/021-acme-2026-07-01.md) | |",
+      "| # | Date | Company | Role | Score | Status | PDF | Report | Notes | URL |",
+      "|---|---|---|---|---|---|---|---|---|---|",
+      "| 309 | 2026-07-01 | Acme | Engineer | 4.5/5 | Evaluated | ✅ | [018](../reports/018-acme-2026-07-01.md) | | [lever](https://jobs.lever.co/acme/0e1f-engineer) |",
+      "| 310 | 2026-07-01 | Acme | Manager | 3.5/5 | Evaluated | ✅ | [019](../reports/019-acme-2026-07-01.md) | | https://boards.greenhouse.io/acme/jobs/4400?utm_source=linkedin |",
+      "| 311 | 2026-07-01 | Acme | Lead | 3.9/5 | Applied | ✅ | [020](../reports/020-acme-2026-07-01.md) | sent | https://jobs.acme.test/shared |",
+      "| 312 | 2026-07-01 | Acme | Director | 3.2/5 | Evaluated | ❌ | [021](../reports/021-acme-2026-07-01.md) | | https://jobs.acme.test/shared |",
     ].join("\n"),
   );
   const pdfs = { "018": "cv-jane-acme-engineer-2026-07-02.pdf", "019": "cv-jane-acme-manager-2026-07-02.pdf", "020": "cv-jane-acme-lead-2026-07-02.pdf" };
@@ -83,6 +96,10 @@ async function withFixture(fn) {
     MANIFEST_HEADER + Object.entries(pdfs).map(([n, file]) => `${n}\toutput/${file}\t\tletter\t2026-07-02\tcv`).join("\n") + "\n",
   );
 
+  // The tracker column map, so the URL column resolves whatever the cwd is:
+  // tracker-table.mjs reads tracker-aliases.json from the data root or the
+  // code root, and the stub code root has none of its own.
+  copyFileSync(join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "tracker-aliases.json"), join(codeRoot, "tracker-aliases.json"));
   // The two core modules the web loads from the checkout at runtime.
   writeFileSync(join(codeRoot, "tracker-utils.mjs"), [
     `export const resolveTrackerPath = () => ${JSON.stringify(join(root, "data", "applications.md"))};`,
@@ -114,13 +131,13 @@ async function withFixture(fn) {
 }
 
 test("reportVerdict reads final_decision from the Machine Summary; only Apply passes without an override", async () => {
-  await withFixture(({ root }) => {
-    assert.deepEqual(reportVerdict(join(root, "reports", "018-acme-2026-07-01.md")), { decision: "Apply", isApply: true, requiresOverride: false });
-    assert.deepEqual(reportVerdict(join(root, "reports", "019-acme-2026-07-01.md")), { decision: "Consider", isApply: false, requiresOverride: true });
-    assert.deepEqual(reportVerdict(join(root, "reports", "021-acme-2026-07-01.md")), { decision: "Research first", isApply: false, requiresOverride: true });
+  await withFixture(async ({ root }) => {
+    assert.deepEqual(await reportVerdict(join(root, "reports", "018-acme-2026-07-01.md")), { decision: "Apply", isApply: true, requiresOverride: false, permit: null });
+    assert.deepEqual(await reportVerdict(join(root, "reports", "019-acme-2026-07-01.md")), { decision: "Consider", isApply: false, requiresOverride: true, permit: null });
+    assert.deepEqual(await reportVerdict(join(root, "reports", "021-acme-2026-07-01.md")), { decision: "Research first", isApply: false, requiresOverride: true, permit: null });
     // No Machine Summary at all is "missing", which is not Apply.
-    assert.deepEqual(reportVerdict(join(root, "reports", "020-acme-2026-07-01.md")), { decision: "", isApply: false, requiresOverride: true });
-    assert.deepEqual(reportVerdict(null), { decision: "", isApply: false, requiresOverride: true });
+    assert.deepEqual(await reportVerdict(join(root, "reports", "020-acme-2026-07-01.md")), { decision: "", isApply: false, requiresOverride: true, permit: null });
+    assert.deepEqual(await reportVerdict(null), { decision: "", isApply: false, requiresOverride: true, permit: null });
   });
 });
 
@@ -218,8 +235,8 @@ test("applyGateStatus answers the fill route and the page with one resolution", 
     assert.equal(consider.verdict.requiresOverride, true);
     assert.equal(consider.cv.status, "stale");
 
-    // A pasted URL: no verdict to read, CV by company name only.
-    const pasted = await applyGateStatus({ company: "Acme" });
+    // A pasted URL the tracker does not know: no verdict to read, CV by company name only.
+    const pasted = await applyGateStatus({ company: "Acme", url: "https://jobs.acme.test/never-evaluated" });
     assert.equal(pasted.verdict, null);
     assert.equal(pasted.identity, null);
     assert.equal(pasted.cv.status, "unverified-role");
@@ -235,5 +252,50 @@ test("applyGateStatus answers the fill route and the page with one resolution", 
     assert.deepEqual(pub, { status: "ready", file: pdfs["018"], report: "18", reason: null, unverifiedRole: false });
     assert.ok(!JSON.stringify(pub).includes(root));
     assert.deepEqual(publicCv(pasted.cv).unverifiedRole, true);
+  });
+});
+
+test("a pasted URL resolves to the tracker row that evaluated the same posting, and ambiguity stays unresolved", async () => {
+  await withFixture(async ({ pdfs }) => {
+    // Lever serves the form at /apply with a source param; the tracker holds the posting URL as a markdown link.
+    const lever = identityForUrl("https://jobs.lever.co/acme/0e1f-engineer/apply?lever-source=LinkedIn");
+    assert.equal(lever?.row, "309");
+    assert.equal(lever?.report, "18");
+    // Greenhouse: a tracking param on the tracker side and the #app fragment on the form side are the same posting.
+    const gh = identityForUrl("http://boards.greenhouse.io/acme/jobs/4400#app");
+    assert.equal(gh?.row, "310");
+    // Two rows share one URL: no guess, the user confirms the report number.
+    assert.equal(identityForUrl("https://jobs.acme.test/shared"), null);
+    assert.equal(identityForUrl("not a url"), null);
+    assert.equal(identityForUrl(""), null);
+
+    // Through the gate: the URL match brings the verdict and the indexed CV, so the
+    // fill route has a verdict to check, which is what closes the pasted-URL bypass.
+    const viaUrl = await applyGateStatus({ company: "Acme", url: "https://jobs.lever.co/acme/0e1f-engineer/apply" });
+    assert.equal(viaUrl.identity.row, "309");
+    assert.equal(viaUrl.verdict.decision, "Apply");
+    assert.equal(viaUrl.cv.status, "ready");
+    assert.equal(viaUrl.cv.path.endsWith(pdfs["018"]), true);
+    const considerViaUrl = await applyGateStatus({ company: "Acme", url: "https://boards.greenhouse.io/acme/jobs/4400" });
+    assert.equal(considerViaUrl.verdict.requiresOverride, true);
+    // An explicit tracker row or confirmed report still wins over the URL.
+    const explicit = await applyGateStatus({ application: "310", url: "https://jobs.lever.co/acme/0e1f-engineer/apply" });
+    assert.equal(explicit.identity.row, "310");
+  });
+});
+
+test("the permit question makes an Apply verdict require an override: from the evaluator's tier, or from a posting location outside authorized_in", async () => {
+  await withFixture(async ({ root }) => {
+    const marked = await reportVerdict(join(root, "reports", "022-acme-2026-07-01.md"));
+    assert.equal(marked.isApply, true);
+    assert.equal(marked.requiresOverride, true);
+    assert.match(marked.permit, /permit question/);
+    const located = await reportVerdict(join(root, "reports", "023-acme-2026-07-01.md"));
+    assert.equal(located.isApply, true);
+    assert.equal(located.requiresOverride, true);
+    assert.match(located.permit, /"Barcelona, Spain" is outside/);
+    // A German posting for the same candidate is no question.
+    const home = await reportVerdict(join(root, "reports", "018-acme-2026-07-01.md"));
+    assert.equal(home.permit, null);
   });
 });

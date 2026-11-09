@@ -199,8 +199,8 @@ export function ApplyView() {
             </button>
             <button
               onClick={a.agentFill}
-              disabled={filling || prefilling}
-              title="Let the AI drive the real form and fill it field-by-field (for tricky / multi-step forms). It never submits."
+              disabled={filling || prefilling || fillBlocked}
+              title={fillBlocked ? "Complete the application gate above first." : "Let the AI drive the real form and fill it field-by-field (for tricky / multi-step forms). It never submits."}
               className="inline-flex items-center gap-1.5 rounded-full border border-border px-4 py-2.5 text-sm font-medium text-muted transition-colors hover:border-brand/40 hover:text-brand disabled:opacity-50"
             >
               <MousePointerClick className="size-4" /> Let the AI fill it
@@ -426,6 +426,9 @@ function DrivePanel({ steps, filling }: { steps: DriveStep[]; filling?: boolean 
 // rather than after a refusal. The server still decides; this only previews.
 function gateBlocksFill(gate: ApplyGate | null, input: { overrideReason: string; confirmReport: string; skipCv: boolean }): boolean {
   if (!gate) return false; // not read yet, or unavailable: the server answers
+  // No tracker row, no URL match, no confirmed report: the server answers
+  // 409 report-required, so the button waits for the report number.
+  if (!gate.verdict && !/^\d{1,6}$/.test(input.confirmReport.trim())) return true;
   if (gate.verdict?.requiresOverride && input.overrideReason.trim().length < gate.verdict.minReason) return true;
   if (input.skipCv) return false;
   if (gate.cv.status === "stale") return true;
@@ -444,9 +447,17 @@ function GatePanel() {
   const verdict = g.verdict;
   const reasonShort = !!verdict?.requiresOverride && a.overrideReason.trim().length < verdict.minReason;
   const cv = g.cv;
-  const showConfirm = !a.n && !a.skipCv && (cv.status === "unverified-role" || cv.status === "none" || !!a.confirmReport);
+  const showConfirm = !a.n && (!verdict || (!a.skipCv && (cv.status === "unverified-role" || cv.status === "none" || !!a.confirmReport)));
   return (
     <div className="mt-5 space-y-3 rounded-xl border border-border bg-surface/70 px-4 py-3 text-sm backdrop-blur-sm" data-testid="apply-gate">
+      {!verdict && (
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-xs font-semibold uppercase tracking-[0.14em] text-faint">Evaluation verdict</span>
+          <span className="inline-flex items-center gap-1 text-xs text-amber-700 dark:text-amber-400">
+            <AlertTriangle className="size-3.5" /> This form is not linked to an evaluated report. Enter its report number below before filling.
+          </span>
+        </div>
+      )}
       {verdict && (
         <div>
           <div className="flex flex-wrap items-center gap-2">
@@ -455,11 +466,19 @@ function GatePanel() {
               {verdict.decision || "missing"}
             </span>
             {g.identity?.report && <span className="text-xs text-faint">report {g.identity.report}</span>}
+            {verdict.permit && (
+              <span className="inline-flex items-center gap-1 text-xs text-amber-700 dark:text-amber-400">
+                <AlertTriangle className="size-3.5" /> work permit question open
+              </span>
+            )}
           </div>
+          {verdict.permit && <p className="mt-1 text-xs text-muted">Ask the recruiter before applying: {verdict.permit}.</p>}
           {verdict.requiresOverride && (
             <div className="mt-2">
               <label htmlFor={reasonId} className="block text-xs text-muted">
-                This role was not rated Apply. Why apply anyway? The reason is recorded in the tracker (at least {verdict.minReason} characters).
+                {verdict.isApply
+                  ? `Why apply before the permit question is answered? The reason is recorded in the tracker (at least ${verdict.minReason} characters).`
+                  : `This role was not rated Apply. Why apply anyway? The reason is recorded in the tracker (at least ${verdict.minReason} characters).`}
               </label>
               <textarea
                 id={reasonId}
@@ -512,10 +531,10 @@ function GatePanel() {
             {a.gateLoading && <Loader2 className="size-3.5 animate-spin text-brand" />}
           </div>
         )}
-        {!a.n && cv.status !== "ready" && (
+        {cv.status !== "ready" && (!a.n || cv.status === "stale") && (
           <label className="mt-2 flex items-center gap-2 text-xs text-muted">
             <input type="checkbox" checked={a.skipCv} onChange={(e) => a.setSkipCv(e.target.checked)} />
-            Fill without attaching a CV
+            Fill without attaching a CV{a.n && cv.status === "stale" ? " (the stale one is never attached; regenerate it or upload by hand)" : ""}
           </label>
         )}
       </div>

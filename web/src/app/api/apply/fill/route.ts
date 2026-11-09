@@ -63,14 +63,19 @@ export async function POST(req: Request) {
   if (!session) return Response.json({ error: "apply session not found (it may have expired)" }, { status: 404 });
 
   // Resolve identity, verdict and CV server-side (never trust a client path).
-  const gate = await applyGateStatus({ application, confirmReport, company, title: session.title });
+  const gate = await applyGateStatus({ application, confirmReport, company, title: session.title, url: session.url });
   const issues: ApplyIssue[] = [];
 
   // 1. Verdict gate, for any session that names a report (tracker row or
   //    confirmed report number). A pasted URL with neither has no verdict.
   let overrideNote: string | null = null;
-  if (gate.verdict) {
-    const v = verdictGate({ decision: gate.verdict.decision, overrideReason });
+  if (!gate.verdict) {
+    // No tracker row, no confirmed report and no URL match: there is no
+    // verdict to apply against, so the fill cannot honor "apply only on Apply".
+    return Response.json({ error: "This form is not linked to an evaluated report. Enter the report number of its evaluation (or open Apply from the report) before filling.", code: "report-required" }, { status: 409 });
+  }
+  {
+    const v = verdictGate({ decision: gate.verdict.decision, overrideReason, permit: gate.verdict.permit });
     if (!v.ok) return Response.json({ error: v.error, code: v.code, verdict: gate.verdict.decision }, { status: 409 });
     if (v.override) overrideNote = v.note;
   }

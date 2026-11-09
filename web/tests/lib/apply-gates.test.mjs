@@ -16,8 +16,7 @@ import {
   overrideNote,
   parseGateNote,
   trackerNoteText,
-  verdictGate,
-} from "../../src/lib/apply/apply-gates.mjs";
+  verdictGate, parseGateNotes } from "../../src/lib/apply/apply-gates.mjs";
 
 test("isApplyVerdict: only Apply passes, whatever the case", () => {
   for (const v of ["Apply", "apply", " APPLY "]) assert.equal(isApplyVerdict(v), true, v);
@@ -85,7 +84,7 @@ test("trackerNoteText bounds the note and marks the cut", () => {
 
 test("cvProvenanceNote records basename, 12 hex of the hash and the report number", () => {
   const note = cvProvenanceNote({
-    file: "/Users/me/job-hunt/output/cv-candidate-123-sap-2026-10-24.pdf",
+    file: "/home/me/job-hunt/output/cv-candidate-123-sap-2026-10-24.pdf",
     sha256: "247C4837647AA54DF93C3AC8D9E5782BBC40A8D2D09F96A172778C9D1338848D",
     report: "386",
   });
@@ -94,7 +93,8 @@ test("cvProvenanceNote records basename, 12 hex of the hash and the report numbe
 });
 
 test("parseGateNote reads back both notes, and nothing else", () => {
-  assert.deepEqual(parseGateNote(overrideNote("Recruiter asked", "Consider")), { kind: "override", reason: "Recruiter asked", decision: "Consider" });
+  assert.deepEqual(parseGateNote(overrideNote("Recruiter asked", "Consider")), { kind: "override", reason: "Recruiter asked", decision: "Consider", permit: false });
+  assert.deepEqual(parseGateNote(overrideNote("Recruiter confirmed the permit", "Apply", "Spain")), { kind: "override", reason: "Recruiter confirmed the permit", decision: "Apply", permit: true });
   assert.deepEqual(parseGateNote("cv: cv-acme.pdf sha256:247c4837647a report:386"), { kind: "cv", file: "cv-acme.pdf", sha256: "247c4837647a", report: "386" });
   assert.deepEqual(parseGateNote("cv: cv-acme.pdf sha256:247c4837647a report:unknown"), { kind: "cv", file: "cv-acme.pdf", sha256: "247c4837647a", report: null });
   assert.equal(parseGateNote("sent CV"), null);
@@ -119,7 +119,33 @@ test("attachDecision refuses an unverified-role CV until a report number is conf
   assert.equal(r.attach, false);
   assert.equal(r.code, GATE_CODES.unverifiedRole);
   assert.match(r.error, /Confirm the report number/);
-  // A confirmed number that resolved to no CV still cannot attach, and says why.
-  const confirmed = attachDecision({ status: "unverified-role", path: "/out/cv-acme.pdf", unverifiedRole: true }, { confirmReport: "77" });
-  assert.match(confirmed.error, /Report 77 has no indexed tailored CV/);
+  // A confirmed number that resolved to no CV refuses with its own code: the user asked for that CV.
+  const confirmed = attachDecision({ status: "none", reason: "not-found" }, { confirmReport: "77" });
+  assert.equal(confirmed.attach, false);
+  assert.equal(confirmed.code, GATE_CODES.noCv);
+  assert.match(confirmed.error, /Report 77 has no indexed tailored CV \(not-found\)/);
+  assert.match(confirmed.error, /Fill without attaching a CV/);
+});
+
+test("parseGateNotes reads every gate note out of a real Notes cell, which set-status joins with '; '", () => {
+  const cell = "job id 123; Re-eval 2026-10-24 (3.7→3.4); cv: cv-acme.pdf sha256:247c4837647a report:386; override: Recruiter asked (verdict Consider)";
+  assert.deepEqual(parseGateNotes(cell), [
+    { kind: "cv", file: "cv-acme.pdf", sha256: "247c4837647a", report: "386" },
+    { kind: "override", reason: "Recruiter asked", decision: "Consider", permit: false },
+  ]);
+  assert.deepEqual(parseGateNotes("sent CV; thanks"), []);
+  assert.deepEqual(parseGateNotes(""), []);
+});
+
+test("verdictGate: an Apply verdict with an open permit question needs a recorded reason, and the note says so", () => {
+  const refused = verdictGate({ decision: "Apply", permit: "the posting location \"Madrid, Spain\" is outside Germany" });
+  assert.equal(refused.ok, false);
+  assert.equal(refused.code, GATE_CODES.verdict);
+  assert.match(refused.error, /work-permit question is open/);
+  const allowed = verdictGate({ decision: "Apply", permit: "Madrid", overrideReason: "Recruiter confirmed a Spanish permit is arranged" });
+  assert.equal(allowed.ok, true);
+  assert.equal(allowed.override, true);
+  assert.match(allowed.note, /\(verdict Apply; permit question open\)$/);
+  assert.equal(verdictGate({ decision: "Apply", permit: null }).override, false);
+  assert.equal(verdictGate({ decision: "Apply", permit: "" }).override, false);
 });

@@ -31,6 +31,7 @@ Do not submit the form. Stop before Submit, Send, or Apply. Continue only after 
 3. SEARCH      → Match against existing reports in reports/
 4. LOAD        → Read full report + Section H / Application Answers (if they exist)
 4b. TAILORED   → Resolve the tailored CV for that report; it, not cv.md, sources experience fields
+4c. GATES      → Verdict, work-permit, CV-receipt and salary-floor gates; an override is recorded before any field is touched
 5. PREFLIGHT   → Confirm posting liveness + company/role match before drafting
 5b. PRE-SCAN   → Scan page for knock-out questions (degree, experience, work authorization/visa, sponsorship, salary floors)
 5d. STATUS     → Warn if a form question screens for a specific immigration status rather than work authorization (warn-only; candidate decides)
@@ -43,6 +44,15 @@ Do not submit the form. Stop before Submit, Send, or Apply. Continue only after 
 8. PRESENT     → Show formatted responses for copy-paste
 9. PERSIST     → Save the final filled/submitted answers into the report
 ```
+
+## Step 4c — Application gates (verdict, permit, receipt, salary floor)
+
+The web Apply page enforces these through `/api/apply/fill`; this mode enforces the same four by hand, in this order, before Step 5. They exist because a diagnostic of 45 submissions found 41 sent against a non-Apply verdict, 6 into a country the candidate's permit does not cover, 3 with a dateless CV, and none with a record of which file or which salary figure went out.
+
+1. **Verdict.** Read `final_decision` from the matched report's Machine Summary. Only `Apply` passes as it is. For `Consider`, `Research first`, `Skip`, an unreadable verdict or no report at all, stop and ask the candidate for the reason to apply anyway; without one, do not draft. Record the reason before drafting: `node set-status.mjs --report <report#> <current state> --note="override: <reason> (verdict <final_decision>)"` (the current state keeps the row where it is; `--note=` takes a value starting with text). Never invent the reason.
+2. **Work permit.** Read `work_auth` and `posting_location` from the same Machine Summary and `location.authorized_in` / `location.needs_sponsorship` from `config/profile.yml`. `work_auth: permit_question`, or a posting location in a country outside `authorized_in` while `needs_sponsorship` is `true`, is an open question for the recruiter, not a form to fill: stop, offer the recruiter message, and apply only on the candidate's explicit override, recorded with the verdict note as `override: <reason> (verdict <final_decision>; permit question open)`. A German EU Blue Card covers Germany, never another EU state.
+3. **CV receipt and identity.** The CV resolved in Step 4b is attached only when `node --input-type=module -e 'import { assertCurrentCvReview } from "./lib/cv-publication.mjs"; assertCurrentCvReview(process.argv[1], { dataRoot: process.argv[2], reportNum: process.argv[3] })' <pdf> <data root> <report#>` exits 0. A stale receipt ("career evidence changed", "report changed") means regenerate through the `pdf` mode first; never attach the stale file and never attach a file found by company name alone without the report number confirmed.
+4. **Salary floor.** Before any compensation field, read `compensation.target_range` and `compensation.minimum` from `config/profile.yml`. When the posting's figure or the report's Block D band sits below the target, say so and let the candidate choose the figure for this form; type nothing he did not choose.
 
 ## Step 5 — Preflight gate
 
@@ -409,7 +419,7 @@ node application-answers.mjs --report reports/NNN-company-role-date.md --input a
 ## Step 9 — Post-apply (optional)
 
 If the candidate confirms that they submitted the application:
-1. Update status to Applied via the canonical CLI: `node set-status.mjs --report <report#> Applied` (never hand-edit the table). If the candidate submitted on a different day than today, add `--on YYYY-MM-DD` with the actual submission date — the status-log ledger should record when it happened, not when it was typed in.
+1. Update status to Applied via the canonical CLI, recording in the same call which file went out so the diagnostic can later tell: `node set-status.mjs --report <report#> Applied --note="cv: <pdf basename> sha256:<first 12 hex of sha256sum> report:<report#>"` (every typed answer, the salary figure included, reaches `data/application-answers.jsonl` through step 3 below; nothing typed stays unrecorded) (never hand-edit the table). If the candidate submitted on a different day than today, add `--on YYYY-MM-DD` with the actual submission date — the status-log ledger should record when it happened, not when it was typed in.
 2. Seed the follow-up schedule: run `node followup-seed.mjs {num} --json` (where `{num}` is the tracker row number). If the candidate applied on a different day than today, pass `--date YYYY-MM-DD` with the actual submission date. It's idempotent, so re-running is safe. (`--on` and `--date` are the same concept — the real submission date — each under its own script's flag name; pass the same value to both.) Skip this step when `config/profile.yml` sets `follow_ups.enabled: false`.
 3. Refresh the report's `## Application Answers` section with the final field values and `**State:** submitted` (`node application-answers.mjs --report <report> --input <answers.json> --state submitted`). The same command appends those answers to `data/application-answers.jsonl`, the answer bank later applications and the repeat-application check read; do not append to that file by hand
 4. Suggest next step: run the `contacto` mode (`/career-ops contacto` where available) for LinkedIn outreach. This is a first outreach, not a follow-up, so suggest it even when `follow_ups.enabled` is `false`.

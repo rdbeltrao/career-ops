@@ -20,9 +20,10 @@ export async function GET(req: NextRequest) {
   if (application && !/^\d{1,6}$/.test(application)) return Response.json({ error: "application must be a tracker number" }, { status: 400 });
   if (confirmReport && !/^\d{1,6}$/.test(confirmReport)) return Response.json({ error: "confirmReport must be a report number" }, { status: 400 });
   // The session's own title is the company fallback's only key for a pasted URL.
-  const title = sessionId ? getSession(sessionId)?.title : undefined;
+  const session = sessionId ? getSession(sessionId) : undefined;
+  const title = session?.title;
   try {
-    const status = await applyGateStatus({ application, confirmReport, company, title });
+    const status = await applyGateStatus({ application, confirmReport, company, title, url: session?.url });
     return Response.json({
       identity: status.identity ? { row: status.identity.row, report: status.identity.report, company: status.identity.company, role: status.identity.role, status: status.identity.status } : null,
       verdict: status.verdict ? { ...status.verdict, minReason: MIN_OVERRIDE_REASON } : null,
