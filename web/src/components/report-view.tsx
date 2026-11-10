@@ -304,9 +304,22 @@ export function ReportView({
           <ScoreMethodology />
         </>
       ) : (
-        <div className="mt-8 flex items-center gap-3 rounded-2xl border border-dashed border-border bg-surface/30 p-5 text-sm text-muted">
-          <FileText className="size-5 shrink-0 text-faint" />
-          No report file found for #{id} in <code className="text-foreground">reports/</code>.
+        <div className="mt-8 flex items-start gap-3 rounded-2xl border border-dashed border-border bg-surface/30 p-5 text-sm text-muted">
+          <FileText className="mt-0.5 size-5 shrink-0 text-faint" />
+          {app ? (
+            // The tracker row exists but was never evaluated: it was imported
+            // from another tool or added by hand, so no report was ever written.
+            // Saying "no report file found" reads as a lost file; it is a missing
+            // step, and the apply gate refuses the row until it is evaluated.
+            <span>
+              Row #{id} ({app.company}) was added to the tracker without an evaluation, so there is no report to show.
+              Run an evaluation of the posting first; the apply flow refuses a row with no verdict.
+            </span>
+          ) : (
+            <span>
+              No report file found for #{id} in <code className="text-foreground">reports/</code>.
+            </span>
+          )}
         </div>
       )}
     </PageFrame>
