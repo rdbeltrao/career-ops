@@ -127,6 +127,12 @@ It supports multiple saved cadences. Install the 15-minute queue worker from the
 repository root, as your own user and never as root. The worker checks for due
 jobs every 15 minutes and runs at most one queued scan per check.
 
+On macOS a check that fires while the Mac is asleep (a Power Nap or maintenance
+dark wake, or a brief wake under a closed lid) starts nothing: the system sleeps
+again within seconds, and a scan started there would be suspended and recorded
+as a timeout. The due scan stays queued and runs at the first check after the
+Mac is really awake. "Run now" is never held back.
+
 #### Linux — cron
 
 ```sh

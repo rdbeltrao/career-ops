@@ -19,6 +19,7 @@ import { scanFailureMessage } from "../src/lib/scheduled-scan-error.mjs";
 import { scheduledScanResult } from "../src/lib/scheduled-scan-result.mjs";
 import { extractJsonObject } from "../src/lib/extract-json-object.mjs";
 import { runScheduledScanner } from "../src/lib/scheduled-scan-process.mjs";
+import { systemAwakeStatus } from "../src/lib/system-awake.mjs";
 import { sessionStatus, readCrawlStatus } from "../../lib/linkedin-session.mjs";
 import { jevAutoLogPath, startJevPass } from "../../lib/jev-auto.mjs";
 import { evaluateLogPath, startEvaluatePass } from "../../lib/auto-evaluate.mjs";
@@ -460,12 +461,25 @@ function requestedJobId(args) {
   return index >= 0 ? args[index + 1] || null : null;
 }
 
-async function main() {
-  const root = getCareerOpsRoot();
+/*
+ * One scheduler tick: run the requested job, or the next due one.
+ *
+ * A scheduled tick that fires while the Mac is not fully awake does nothing:
+ * the due job stays unclaimed and the next tick after a real wake runs it. A
+ * scan started in a dark wake is suspended within seconds and comes back as a
+ * timeout with nothing read (src/lib/system-awake.mjs). A manual run was asked
+ * for by someone at the machine, so it is never held back.
+ */
+export async function runScheduledTick(options = {}) {
+  const root = options.root ?? getCareerOpsRoot();
+  const manualJobId = requestedJobId(options.argv ?? process.argv.slice(2));
+  if (!manualJobId) {
+    const power = (options.awake ?? systemAwakeStatus)();
+    if (!power.awake) return { status: "deferred", reason: power.reason };
+  }
   healUnscoredRows(root);
   const storePath = scheduledStorePath(root);
   const runnerResource = runnerResourcePath(storePath);
-  const manualJobId = requestedJobId(process.argv.slice(2));
 
   return withResourceLock(
     runnerResource,
@@ -486,7 +500,7 @@ async function main() {
 
       if (!claim) return { status: "idle" };
 
-      const result = await executeJob(root, claim.job);
+      const result = await (options.execute ?? executeJob)(root, claim.job);
       await recordCompletion(storePath, claim, result);
       if (result.state === "failed") throw new Error(result.message);
       return { status: "success", jobId: claim.job.id, ...result };
@@ -496,7 +510,7 @@ async function main() {
 }
 
 if (isMainModule(import.meta.url)) {
-  main()
+  runScheduledTick()
     .then((result) => {
       process.stdout.write(`${JSON.stringify(result)}\n`);
     })
