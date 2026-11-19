@@ -251,6 +251,63 @@ test('parseCards on real markup reads the time tag and leaves promoted cards und
   assert.equal(cards[1].postedDate, '', 'promoted cards carry no date; the detail pane fills it');
 });
 
+test('parseCards reads the /jobs/search-results/ layout, where the id lives only in componentkey', () => {
+  // From 2026-11-04 LinkedIn redirects /jobs/search/ to /jobs/search-results/,
+  // whose cards carry no job link, no data-job-id and no semantic class: every
+  // search read 0 cards for two weeks while the run reported success.
+  const cards = parseCards(fixture('list-search-results.html'), { now: NOW });
+  assert.deepEqual(cards.map((c) => c.id), ['4488000001', '4408000002', '4491000003'],
+    'the role="button" card and its inner div share one componentkey and collapse on the id');
+  assert.deepEqual(cards[0], {
+    id: '4488000001',
+    title: 'Senior Engineering Manager, Product Engineering',
+    company: 'Nordlicht Systems',
+    location: 'Germany (Remote)',
+    postedDate: '',
+    salary: '',
+  }, 'the title drops the screen-reader "Selected, ... (Verified job)" wrapper; "Viewed" is not a date');
+  assert.deepEqual(cards[1], {
+    id: '4408000002',
+    title: 'Engineering Manager - EU',
+    company: 'Kiefernweg Labs',
+    location: 'Berlin (Hybrid)',
+    postedDate: '2026-10-11',
+    salary: '150K EUR/yr - 250K EUR/yr',
+  });
+  assert.equal(cards[2].title, 'Platform Team Lead (m/w/d) & Architecture');
+  assert.equal(cards[2].company, 'Hafenkante GmbH');
+  assert.equal(cards[2].location, 'Hamburg, Germany (Remote)');
+  assert.equal(cards[2].postedDate, '2026-10-16', '14 hours before 18:30 is the same local day');
+  assert.equal(cards[2].salary, '');
+});
+
+test('parseCards skips a search-results card whose componentkey carries no numeric id', () => {
+  const card = (key) => `<div role="button" componentkey="${key}"><p>Engineering Manager</p><p>Acme</p><p>Berlin</p></div>`;
+  const html = `<main>${card('job-card-component-ref-search')}${card('job-card-component-ref-4486000009')}</main>`;
+  assert.deepEqual(parseCards(html).map((c) => c.id), ['4486000009']);
+});
+
+test('walkSearch builds jobs from a /jobs/search-results/ page', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'linkedin-search-results-'));
+  try {
+    const jobs = await walkSearch(searchPage(fixture('list-search-results.html')), {
+      entry: { name: 'search' },
+      searchUrl: 'https://www.linkedin.com/jobs/search/?keywords=Engineering%20Manager',
+      maxPages: 1,
+      seenPath: join(root, 'data', 'linkedin-seen.json'),
+      dryRun: true,
+      applyRoot: root,
+      titleWanted: () => false,
+      pause: async () => {},
+    });
+    assert.deepEqual(jobs.map((job) => job.externalId ?? job.id), ['4488000001', '4408000002', '4491000003']);
+    assert.equal(jobs[1].title, 'Engineering Manager - EU');
+    assert.equal(jobs[1].company, 'Kiefernweg Labs');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('every card selector is still a selector the parser understands', () => {
   for (const sel of CARD_SELECTORS) assert.doesNotThrow(() => selectAll(parseHtml('<li></li>'), sel));
   assert.deepEqual(parseCards(''), []);

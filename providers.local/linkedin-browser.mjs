@@ -84,6 +84,9 @@ export const CARD_SELECTORS = [
   'div.job-card-container[data-job-id]',
   'li.jobs-search-results__list-item',
   'li.scaffold-layout__list-item',
+  // /jobs/search-results/, where LinkedIn redirects /jobs/search/ since
+  // 2026-11-04: generated class names, no job link, the id only in this key.
+  '[componentkey^="job-card-component-ref-"]',
 ];
 const DETAIL_PANE_SELECTORS = [
   '.scaffold-layout__detail',
@@ -111,7 +114,8 @@ const PILL_SELECTORS = [
 ];
 
 const JOB_ID_RE = /\/jobs\/view\/(\d+)/;
-const SALARY_RE = /(€|\$|£|EUR|USD|GBP)\s?\d|\d\s?(€|EUR|USD|GBP|k\/yr|\/yr|\/hr|\/month|\/mo|per year|per month)/i;
+// The second form allows a thousands suffix before the currency: "150K EUR/yr".
+const SALARY_RE = /(€|\$|£|EUR|USD|GBP)\s?\d|\d[km]?\s?(€|EUR|USD|GBP|k\/yr|\/yr|\/hr|\/month|\/mo|per year|per month)/i;
 const WORKPLACE_WORDS = [['remote', 'remote'], ['hybrid', 'hybrid'], ['on-site', 'onsite'], ['onsite', 'onsite'], ['on site', 'onsite']];
 const SENIORITY_WORDS = ['internship', 'entry level', 'associate', 'mid-senior', 'director', 'executive', 'level'];
 const EMPLOYMENT_WORDS = ['full-time', 'part-time', 'contract', 'internship', 'temporary', 'volunteer', 'other'];
@@ -446,6 +450,9 @@ function datetimeFirst(root) {
 // /jobs/view/search/, so every candidate is checked and a card with no numeric
 // id anywhere is skipped.
 const NUMERIC_ID_RE = /^\d+$/;
+// A card of the /jobs/search-results/ layout, and its job id.
+const RESULT_CARD_KEY_RE = /^job-card-component-ref-(\d+)$/;
+const SEPARATOR_RE = /^[·•]$/;
 
 function cardId(node) {
   const candidates = [node.attrs['data-occludable-job-id'], node.attrs['data-job-id'], selectOne(node, '[data-job-id]')?.attrs['data-job-id']];
@@ -453,6 +460,8 @@ function cardId(node) {
     const id = value?.trim();
     if (id && NUMERIC_ID_RE.test(id)) return id;
   }
+  const key = RESULT_CARD_KEY_RE.exec(node.attrs.componentkey ?? '');
+  if (key) return key[1];
   const link = selectOne(node, 'a[href*="/jobs/view/"]');
   const m = link ? JOB_ID_RE.exec(link.attrs.href ?? '') : null;
   return m ? m[1] : '';
@@ -479,12 +488,38 @@ function cardSalary(node) {
 }
 
 /**
+ * The fields of a /jobs/search-results/ card. Its class names are generated, so
+ * the card is read by position: the text rows are <p> elements in the order
+ * title, company, location, then optional salary, insight, "Posted 5 days ago"
+ * and status rows ("Viewed", "Promoted", "Easy Apply").
+ * @param {Element} node
+ * @param {Date} [now]
+ * @returns {Omit<Card, 'id'>}
+ */
+function resultCardFields(node, now) {
+  const rows = selectAll(node, 'p').map((p) => ({ p, text: textOf(p) })).filter((row) => row.text && !SEPARATOR_RE.test(row.text));
+  // The title row repeats itself for screen readers ("Selected, {title}
+  // (Verified job)"); the aria-hidden span holds the title as displayed.
+  const displayed = rows[0] ? selectOne(rows[0].p, 'span[aria-hidden="true"]') : null;
+  const rest = rows.slice(3).map((row) => row.text);
+  const posted = rest.find((text) => RELATIVE_RE.test(text) || /^(re)?posted\b/i.test(text));
+  return {
+    title: (displayed && textOf(displayed)) || rows[0]?.text || '',
+    company: rows[1]?.text ?? '',
+    location: rows[2]?.text ?? '',
+    postedDate: posted ? postedDateFromText(posted, now) : '',
+    salary: rest.find((text) => SALARY_RE.test(text)) ?? '',
+  };
+}
+
+/**
  * The result cards of a search page. Nested matches (an li and its inner div)
  * and re-rendered duplicates collapse on the job id.
  * @param {string} html
+ * @param {{ now?: Date }} [opts] `now` anchors relative posting ages; tests pass it.
  * @returns {Card[]}
  */
-export function parseCards(html) {
+export function parseCards(html, { now } = {}) {
   const root = parseHtml(html);
   /** @type {Card[]} */
   const cards = [];
@@ -493,6 +528,10 @@ export function parseCards(html) {
     const id = cardId(node);
     if (!id || seen.has(id)) continue;
     seen.add(id);
+    if (RESULT_CARD_KEY_RE.test(node.attrs.componentkey ?? '')) {
+      cards.push({ id, ...resultCardFields(node, now) });
+      continue;
+    }
     cards.push({
       id,
       title: cardTitle(node),
