@@ -89,3 +89,47 @@ test("missing rows and fields do not throw", () => {
   const keys = evaluatedAt(["Acme", "Staff Engineer"]);
   assert.equal(isEvaluated(keys, norm, undefined, undefined), false);
 });
+
+// ── Posting-URL suppression ────────────────────────────────────────────────
+// Company+role text alone missed most already-handled postings: the scanner
+// stores the board slug ("crownholdings") while the tracker holds the display
+// name ("Crown Holdings"), titles get reworded ("SW" vs "Software"), and a
+// LinkedIn row with a hidden employer is tracked as "?". The posting URL is
+// the deterministic key the tracker, the reports and pipeline.md all carry.
+
+import { handledPostingKeys, isHandledPosting } from "../../src/lib/whats-new-suppression.mjs";
+
+const GH = "https://job-boards.greenhouse.io/xometryeurope/jobs/5298035007";
+
+test("a tracker row suppresses its posting even when company and role text differ", () => {
+  const keys = handledPostingKeys({
+    applications: [{ company: "Xometry Europe", role: "Senior Engineering Manager", url: `[greenhouse](${GH})` }],
+  });
+  assert.equal(isHandledPosting(keys, GH), true);
+  assert.equal(isHandledPosting(keys, `${GH}?utm_source=linkedin`), true, "a tracking parameter broke the match");
+  assert.equal(isHandledPosting(keys, "https://job-boards.greenhouse.io/xometryeurope/jobs/5298035008"), false, "a sibling posting was hidden");
+});
+
+test("a tracker row with a bare URL cell or a SKIP status still suppresses", () => {
+  const keys = handledPostingKeys({ applications: [{ company: "?", role: "Head of Engineering", url: "https://www.linkedin.com/jobs/view/4484323485/" }] });
+  assert.equal(isHandledPosting(keys, "https://www.linkedin.com/jobs/view/4484323485/"), true);
+});
+
+test("a processed pipeline row suppresses; a pending one does not", () => {
+  // Pending rows are scanned but not evaluated yet: those ARE the new matches.
+  const keys = handledPostingKeys({
+    inbox: [
+      { url: "https://jobs.lever.co/zeneducate/c3a5", done: true },
+      { url: "https://jobs.ashbyhq.com/axmed/123", done: false },
+    ],
+  });
+  assert.equal(isHandledPosting(keys, "https://jobs.lever.co/zeneducate/c3a5"), true);
+  assert.equal(isHandledPosting(keys, "https://jobs.ashbyhq.com/axmed/123"), false);
+});
+
+test("empty and missing URL cells suppress nothing", () => {
+  const keys = handledPostingKeys({ applications: [{ url: "" }, { url: "—" }, {}], inbox: [{ done: true }] });
+  assert.equal(keys.size, 0);
+  assert.equal(isHandledPosting(keys, ""), false);
+  assert.equal(isHandledPosting(handledPostingKeys(), undefined), false);
+});

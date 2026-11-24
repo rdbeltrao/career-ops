@@ -25,6 +25,9 @@
 // so web dedup always matches CLI dedup. A second key helper here is exactly
 // the local reimplementation #2666 removed.
 
+import { inboxKey } from "./inbox-pending.mjs";
+import { postingHref } from "./posting-url.mjs";
+
 /**
  * Suppression key for one company/role pair.
  *
@@ -73,4 +76,56 @@ export function evaluatedKeys(applications, norm) {
 export function isEvaluated(keys, norm, company, title) {
   if (!company || !norm(company, " ")) return false;
   return keys.has(suppressionKey(norm, company, title));
+}
+
+// ── Posting-URL suppression ────────────────────────────────────────────────
+//
+// Company+role text is the fallback, not the main key. It misses most postings
+// the user has already handled, because the three sources spell them
+// differently: scan-history stores the board slug ("crownholdings") while the
+// tracker holds the display name ("Crown Holdings"), titles get reworded
+// ("SW Engineering Lead" vs "Software Engineering Lead"), and a LinkedIn row
+// whose employer was hidden is tracked as "?". Every one of those resurfaced as
+// a "new match" although it had a tracker row and a processed pipeline entry.
+//
+// The posting URL is the key all of them share: the tracker's URL column and
+// pipeline.md (the route adds report **URL:** headers via evaluatedPostingKeys). It is compared through inboxKey(),
+// the same canonical key the pipeline page uses, so tracking parameters and a
+// trailing slash do not break a match, and two postings on one board stay two.
+//
+// Pending pipeline rows do NOT suppress. The scanner writes every match there,
+// so a pending row is exactly a scanned, not-yet-evaluated posting: what this
+// feed exists to show. Only a processed ([x]) row means the user dealt with it.
+
+/**
+ * Canonical keys of every posting the user has already handled.
+ *
+ * @param {{
+ *   applications?: {url?: string}[],
+ *   inbox?: {url?: string, done?: boolean}[],
+ * }} [sources]
+ * @returns {Set<string>}
+ */
+export function handledPostingKeys({ applications = [], inbox = [] } = {}) {
+  const keys = new Set();
+  const add = (url) => {
+    if (url && /^https?:\/\//i.test(url)) keys.add(inboxKey(url));
+  };
+  for (const app of applications ?? []) add(postingHref(app?.url));
+  for (const job of inbox ?? []) if (job?.done) add(String(job?.url ?? "").trim());
+  return keys;
+}
+
+/**
+ * Has the user already handled this posting (tracker row or a processed
+ * pipeline row)?
+ *
+ * @param {Set<string>} keys - From handledPostingKeys().
+ * @param {string} url - Scan-history URL cell.
+ * @returns {boolean}
+ */
+export function isHandledPosting(keys, url) {
+  const value = String(url ?? "").trim();
+  if (!value) return false;
+  return keys.has(inboxKey(value));
 }

@@ -1,8 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
-import { careerOpsRoot, readApplications } from "@/lib/career-ops";
+import { careerOpsRoot, evaluatedPostingKeys, readApplications, readInbox } from "@/lib/career-ops";
 import { getNormalizeTextKey } from "@/lib/core/text-key";
-import { evaluatedKeys, isEvaluated } from "@/lib/whats-new-suppression.mjs";
+import { evaluatedKeys, handledPostingKeys, isEvaluated, isHandledPosting } from "@/lib/whats-new-suppression.mjs";
 import type { DiscoveredOffer } from "@/lib/explore";
 import { collectWhatsNew, resolveOfferLimit } from "@/lib/whats-new.mjs";
 
@@ -11,7 +11,7 @@ export const dynamic = "force-dynamic";
 
 // The SUPPLY loop, ZERO tokens: "new matches this week" = roles surfaced by past
 // free scans (data/scan-history.tsv) in the last N days that the user hasn't
-// evaluated yet. No scan runs here — it reads the history a past scan already
+// evaluated or processed yet. No scan runs here — it reads the history a past scan already
 // wrote, so the home stays instant + free (directly answers the #1 token-cost
 // complaint). cols: url, first_seen, portal, title, company, status, location.
 // Company matching keys come from the CORE (see lib/core/text-key.ts), never a
@@ -50,16 +50,22 @@ export async function GET(req: Request) {
     );
   }
 
-  // Roles already evaluated → don't resurface as "new". Keyed on company AND
-  // role, not company alone: suppressing by employer removed that employer's
-  // entire board after one evaluation (#3131). See lib/whats-new-suppression.
+  // Postings already handled → don't resurface as "new". The posting URL is
+  // the primary key: a tracker row, a report, or a processed pipeline row.
+  // Company AND role text stays as the fallback for rows without a URL; it
+  // never keys on company alone, which removed an employer's entire board
+  // after one evaluation (#3131). See lib/whats-new-suppression.
   const normalizeTextKey = await getNormalizeTextKey();
-  const evaluated = evaluatedKeys(readApplications(), normalizeTextKey);
+  const applications = readApplications();
+  const evaluated = evaluatedKeys(applications, normalizeTextKey);
+  const handled = handledPostingKeys({ applications, inbox: readInbox() });
+  for (const key of evaluatedPostingKeys(applications)) handled.add(key);
 
   const toOffer = (c: string[]): DiscoveredOffer | null => {
     const [url, firstSeen, portal, title, company, status, location] = c;
     if (!url || !/^https?:\/\//i.test(url)) return null;
     if (status && /skipped|expired/i.test(status)) return null;
+    if (isHandledPosting(handled, url)) return null;
     if (isEvaluated(evaluated, normalizeTextKey, company, title)) return null;
     return {
       url,
